@@ -51,6 +51,12 @@ the `pyahocorasick` (BSD-3) C-extension dependency that folio-enrich required.
 | [mypy](https://github.com/python/mypy) | MIT |
 | [ruff](https://github.com/astral-sh/ruff) | MIT |
 
+## Build dependencies
+
+| Package | License | Used for |
+|---|---|---|
+| [hatchling](https://github.com/pypa/hatch) | MIT | PEP 517 build backend (`build-system.requires`) |
+
 ## Ontology data
 
 FOLIO (Federated Open Legal Information Ontology) — CC-BY-4.0, © SALI Alliance. This package does

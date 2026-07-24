@@ -38,7 +38,9 @@ label token (Presumptions → Litigation Burdens of Proof). Those became this li
 | **Alias/homonym blocklist** | `blocklist` | deterministic Action ≠ Auction guard |
 | **Metadata/front-matter exclusion** | `sources` | never tag the copyright page |
 | **Multi-tag domain prior** (auto-suggest + validate/add) | `domain_prior` | Defenses → *Litigation* Defenses; corpus carries many subjects |
+| **Shared label→IRI resolution** (decompose-first, calibrated 0–100 bar, branch-carrying) | `resolve` | every consumer resolves identically; `law`→*Delaware*@90 no longer accepted |
 | **Score calibration** (weak-band recalibration) | `calibration` | verdict-labeled score→P(correct) fit |
+| **Lemma-key index augmentation** (build-time spaCy, cached JSON) | `lemma` | singular *agreement* reaches plural-labelled *Agreements* |
 | LLM judge interface + domain-prior prompts | `judge` | context-aware disambiguation, verdict enforcement |
 | **Annotate primitives** (confidence, per-tag verdicts, notes, reject/restore, insights) | `annotate` | the self-improving feedback loop, as a library |
 | 4-stage pipeline: filter → expand → rank → judge | `pipeline` | the build-once-use-many entry point |
