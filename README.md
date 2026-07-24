@@ -106,6 +106,16 @@ whenever documents refer to concepts in the singular while the ontology labels t
 (FOLIO does, pervasively); skip it for exact-vocabulary corpora. Legal pluralia tantum (*damages*,
 *proceedings*, *wills*, …) are denylisted per-ontology via `OntologySpec.behavior.lemma_denylist`.
 
+### Judge transport hardening (v0.2.1)
+
+`parse_judge_json` now survives everything models actually emit — ```` ```json ```` fences (a new
+exported `strip_markdown_fences` does the stripping), a non-list `judged`, non-dict rows, a
+non-object payload, `None` input, non-string `reasoning`, and an `adjusted_score` that is
+non-numeric (`"high"` → the row is dropped, not an exception) or out of range (clamped to 0-100
+*before* verdict enforcement, so a `"penalized"` verdict cannot escape the scale). Surfaced by the
+folio-mapper migration: mapper is the donor of these verdict rules and had kept a local parse loop
+precisely because the library's was weaker than the code it was lifted from.
+
 ## Bring Your Own Key (BYOK)
 
 `folio-resolve` is **key-agnostic** — it never reads an env var, instantiates a provider SDK, or makes

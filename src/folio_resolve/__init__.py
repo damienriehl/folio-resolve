@@ -18,7 +18,7 @@ Public surface (see module docstrings for provenance):
 * sources       — ``SourceClassifier`` (metadata/front-matter exclusion)
 * domain_prior  — ``DomainPrior``, ``DomainPriorSuggester``, ``TaxonomyNode`` (multi-tag)
 * calibration   — ``ScoreCalibration`` (weak-band recalibration)
-* judge         — ``Judge``, ``build_judge_prompt``, ``parse_judge_json``
+* judge         — ``Judge``, ``build_judge_prompt``, ``parse_judge_json``, ``strip_markdown_fences``
 * lemma         — ``augment_labels`` (lemma-key index augmentation; ``[spacy]`` extra, build-time only)
 * pipeline      — ``MatchPipeline`` (filter -> expand -> rank -> judge)
 * resolve       — ``LabelResolver``, ``ResolvedConcept`` (decompose-first, branch-carrying)
@@ -27,7 +27,7 @@ Public surface (see module docstrings for provenance):
 
 from __future__ import annotations
 
-__version__ = "0.2.0"
+__version__ = "0.2.1"
 
 from .blocklist import AliasBlocklist, BlockedAlias, load_seed_blocklist
 from .calibration import CalibrationSample, ScoreCalibration
@@ -35,7 +35,13 @@ from .decompose import decompose
 from .domain_prior import DomainPrior, DomainPriorSuggester, SubjectTag, TagStatus, TaxonomyNode
 from .entity_ruler import FOLIOEntityRuler
 from .gates import GateDecision, PlaceNameGate, ShortLabelGate
-from .judge import Judge, build_judge_prompt, enforce_verdict, parse_judge_json
+from .judge import (
+    Judge,
+    build_judge_prompt,
+    enforce_verdict,
+    parse_judge_json,
+    strip_markdown_fences,
+)
 from .lemma import (
     LEMMA_VERSION,
     Lemmatizer,
@@ -121,6 +127,7 @@ __all__ = [
     "parse_judge_json",
     "save_lemma_cache",
     "spacy_lemmatizer",
+    "strip_markdown_fences",
     "tokenize",
     "word_overlap",
 ]

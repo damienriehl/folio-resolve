@@ -15,6 +15,7 @@ ships the prompt builders and the deterministic verdict enforcement, both fully 
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -137,14 +138,45 @@ def enforce_verdict(original_score: float, adjusted_score: float, verdict: str) 
     return adjusted_score
 
 
+_FENCE_OPEN_RE = re.compile(r"^`{3,}\s*(?:json)?\s*\n?")
+_FENCE_CLOSE_RE = re.compile(r"\n?`{3,}\s*$")
+
+
+def strip_markdown_fences(text: str) -> str:
+    """Remove ```/```json code fences an LLM wrapped its JSON in.
+
+    Models fence their output constantly despite being told not to. Lifted from folio-mapper's
+    ``stage3_judge._strip_markdown_fences``, which had to exist for exactly that reason.
+    """
+    text = text.strip()
+    text = _FENCE_OPEN_RE.sub("", text)
+    text = _FENCE_CLOSE_RE.sub("", text)
+    return text.strip()
+
+
 def parse_judge_json(raw: str, ranked_by_iri: dict[str, float]) -> list[JudgedCandidate]:
-    """Parse + enforce judge output; drop hallucinated IRIs, clamp scores per verdict."""
+    """Parse + enforce judge output; drop hallucinated IRIs, clamp scores per verdict.
+
+    Defensive against everything a model actually emits: markdown fences, a non-list ``judged``
+    value, non-dict rows, unknown IRIs, non-numeric or out-of-range ``adjusted_score``. Scores
+    are clamped to 0-100 *before* :func:`enforce_verdict` applies the verdict rules, so a
+    ``"penalized"`` verdict carrying ``-20`` or ``150`` cannot escape the scale. Never raises —
+    an unparseable response returns ``[]`` so callers can fall through to their own fallback.
+    """
     try:
-        payload = json.loads(raw)
-    except (json.JSONDecodeError, TypeError):
+        payload = json.loads(strip_markdown_fences(raw))
+    except (json.JSONDecodeError, TypeError, AttributeError):
         return []
+    if not isinstance(payload, dict):
+        return []
+    rows = payload.get("judged", [])
+    if not isinstance(rows, list):
+        return []
+
     out: list[JudgedCandidate] = []
-    for row in payload.get("judged", []):
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
         iri = row.get("iri_hash") or row.get("iri") or ""
         if iri not in ranked_by_iri:
             continue  # hallucinated / unknown candidate
@@ -152,10 +184,17 @@ def parse_judge_json(raw: str, ranked_by_iri: dict[str, float]) -> list[JudgedCa
         if verdict not in VALID_VERDICTS:
             verdict = "confirmed"
         original = ranked_by_iri[iri]
-        adjusted = enforce_verdict(original, float(row.get("adjusted_score", original)), verdict)
+        raw_score = row.get("adjusted_score", original)
+        if isinstance(raw_score, bool) or not isinstance(raw_score, (int, float)):
+            continue  # a model that answered "high" instead of 85 gets dropped, not raised
+        adjusted = enforce_verdict(original, max(0.0, min(100.0, float(raw_score))), verdict)
+        reasoning = row.get("reasoning", "")
         out.append(
             JudgedCandidate(
-                iri=iri, adjusted_score=adjusted, verdict=verdict, reasoning=row.get("reasoning", "")
+                iri=iri,
+                adjusted_score=adjusted,
+                verdict=verdict,
+                reasoning=reasoning if isinstance(reasoning, str) else "",
             )
         )
     return out
