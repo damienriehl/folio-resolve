@@ -65,19 +65,36 @@ As each migration lands, the executing agent posts a one-line reminder naming th
 
 ## Findings from the alea-intake migration (2026-07-24)
 
-- **`compute_relevance_score` is not type-defensive — open.** It passes `preferred_label`
+> **All four findings below are CLOSED in v0.3.0 (unpublished).** See
+> [Adopting `PlaceNameGate` is a per-path decision](#adopting-placenamegate-is-a-per-path-decision)
+> for the fourth. **Release step:** `folio-resolve 0.3.0` is committed but NOT published to PyPI
+> (0.1.0 is still the only published version, so 0.2.0, 0.2.1 and 0.3.0 are all pending one
+> release). Once published, alea-intake can delete its `_as_text` boundary coercion and its
+> `_GEOGRAPHIC_LABEL_EXACT` / `_GEOGRAPHIC_LABEL_MARKERS` backstop (pass them as `extra_tokens`
+> / `extra_markers`), folio-mapper can delete its local judge parse loop, and every consumer
+> can move its pin from `>=0.1.0` to `>=0.3.0`.
+
+- **`compute_relevance_score` is not type-defensive — CLOSED in v0.3.0.** It passed `preferred_label`
   straight into `re.findall`, so a `None` (which folio-python genuinely returns for concepts
   with no preferred label) or a test double's `MagicMock` raises `TypeError` instead of being
   ignored. alea-intake coerces at its own boundary rather than patching the library. Same
   spirit as the v0.2.1 `parse_judge_json` hardening that folio-mapper prompted: the library
-  should tolerate what its real callers actually hand it. Cheap fix — treat non-`str`
-  `preferred_label` / `label` / non-`str` synonym entries as absent.
+  should tolerate what its real callers actually hand it. **v0.3.0:** every text argument is
+  coerced — non-`str` `label` / `query_full` / `definition` / `preferred_label` / synonym
+  entries, and non-`str` members of `query_content`, all read as absent; a non-`str` `label`
+  scores `0.0`. `tokenize` is hardened at the `re.findall` site too, so nothing below it can
+  raise on a test double.
 - **`PlaceNameGate`'s place-token set is private and closed — open.** `_PLACE_NAME_TOKENS` is a
   module-level frozenset with no constructor hook, so a consumer that knows additional
   over-scoring places (alea-intake carries *Macedonia*, *Rize*, the continents, and the
   "City of X" / "Republic of X" phrasings from its BUG-21 incident log) must keep a parallel
-  local backstop — exactly the fork the library exists to prevent. An `extra_tokens` /
-  `extra_markers` argument on `PlaceNameGate.__init__` would retire those backstops.
+  local backstop — exactly the fork the library exists to prevent. **v0.3.0:**
+  `PlaceNameGate(extra_tokens=…, extra_markers=…, extra_branch_markers=…)`. `extra_tokens`
+  matches against the label's tokens *and* the whole normalized label (so multi-word names like
+  *north america* work); `extra_markers` are substrings for productive phrasings (`"city of"`);
+  `extra_branch_markers` extends the governed branch list for non-FOLIO ontologies. A
+  `place_tokens` property exposes the merged vocabulary. Un-parameterized construction is
+  unchanged.
 - **The specificity penalty is calibrated for heading→label matching, not short-name→label.**
   alea-intake's dominant shape is a 1-2 word claim name against a 3-5 word FOLIO label
   ("Habitability" → *Breach of Warranty of Habitability*), which the penalty scores 67.5 — a
@@ -85,12 +102,38 @@ As each migration lands, the executing agent posts a one-line reminder naming th
   whose queries are shorter than their targets by construction, the penalty runs the wrong way.
   Not a defect (folio-mapper maps taxonomy nodes, where an over-specific target IS an error),
   but the asymmetry is worth an option: a `specificity_penalty` weight argument would let a
-  short-query consumer damp it without forking the scorer.
-- **The gate is a consumer-scoped decision, not a repo-scoped one.** folio-enrich adopted
-  `PlaceNameGate` globally, folio-mapper refused it globally — alea-intake is the first
-  consumer that needed it in exactly *one* of its two matching paths (claim fitness yes,
-  general resolution no, because it resolves jurisdictions on purpose). Future migrations
-  should ask "which path?" rather than "yes or no?".
+  short-query consumer damp it without forking the scorer. **v0.3.0:**
+  `compute_relevance_score(..., specificity_penalty=w)` scales the haircut — `1.0` is the
+  historical default (bit-identical, pinned by a golden no-drift table), `0.0` disables it,
+  `> 1.0` sharpens it (clamped so a score can never go negative).
+- **The gate is a consumer-scoped decision, not a repo-scoped one.** Written up as migration
+  guidance below.
+
+## Adopting `PlaceNameGate` is a per-path decision
+
+**Ask "which matching PATH?", never "does this repo want the gate?"** Three migrations have now
+answered it three different ways, and all three were right:
+
+| Precedent | Answer | Why |
+|---|---|---|
+| **folio-enrich** (2026-07-16) | **global yes** — wired into `search.candidate_vetoed`, so every candidate on every path passes the gate | It tags prose. A generic term latching a short place/agency label (`justice` → *U.S. Dept. of Justice*, `tax` → *U.S. Tax Court*) is a false positive on *every* path; the delta report shows 3 place/agency mis-maps → 0 with no named recovery dropped |
+| **folio-mapper** (2026-07-24) | **global no** — deliberately not adopted; a PLACES-PRESERVED canary *enforces* its absence | It maps arbitrary taxonomies onto FOLIO. Places and jurisdictions are legitimate mapping targets, so the gate would delete correct output |
+| **alea-intake** (2026-07-24) | **one path yes, one path no** — `PlaceNameGate` backs `semantic_fit.is_geographic_concept` (claim fitness) but is deliberately absent from `concept_resolver.resolve_concepts` | A legal *claim* is never a place or an agency (BUG-21), but the general resolver resolves jurisdiction and venue on purpose. Two canaries hold both halves: PLACE-REJECTED and PLACES-RESOLVABLE |
+
+The decision procedure for the next migration:
+
+1. **Enumerate the repo's matching paths** — not its repos, not its modules. A path is a
+   question the consumer asks the ontology ("what concept does this heading name?", "does this
+   claim fit this concept?", "which jurisdiction is this?").
+2. **For each path, ask: can a correct answer to this question be a place, a jurisdiction, or a
+   governmental body?** If yes, the gate must NOT govern that path. If no, adopt it there.
+3. **Canary both directions.** A repo that adopts the gate on one path needs a canary that the
+   gate fires there *and* a canary that the un-gated path still resolves places. One-sided
+   canaries are how a global adoption sneaks in.
+4. **Extend, don't fork.** If the path needs place names the library doesn't know, pass them as
+   `extra_tokens` / `extra_markers` (v0.3.0) rather than keeping a local backstop.
+5. **Record the answer in the row** so the next migration inherits the reasoning rather than
+   re-deriving it.
 
 ## Deferred, revisit reminders
 

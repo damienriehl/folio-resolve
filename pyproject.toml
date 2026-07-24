@@ -1,6 +1,6 @@
 [project]
 name = "folio-resolve"
-version = "0.2.1"
+version = "0.3.0"
 description = "Shared FOLIO source-text-to-concept resolution engine: scorer, span decomposition, gates, alias blocklist, domain-prior judge, and annotate primitives."
 readme = "README.md"
 requires-python = ">=3.11"
