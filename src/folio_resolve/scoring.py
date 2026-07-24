@@ -112,13 +112,30 @@ def _no_vector_similarity(_a: str, _b: str) -> float:
 
 
 def tokenize(text: str) -> list[str]:
-    """Split text into lowercase alphabetic tokens (2+ chars)."""
+    """Split text into lowercase alphabetic tokens (2+ chars).
+
+    Type-defensive: anything that is not a ``str`` (``None``, a test double, a float coming
+    out of an untyped ontology row) tokenizes to ``[]`` rather than raising ``TypeError`` from
+    ``re.findall``. Real callers hand this module whatever their ontology handed them.
+    """
+    if not isinstance(text, str):
+        return []
     return [w.lower() for w in re.findall(r"[a-zA-Z]+", text) if len(w) >= 2]
 
 
 def content_words(text: str) -> set[str]:
     """Extract meaningful (non-stopword) words from text."""
     return {w for w in tokenize(text) if w not in SEARCH_STOPWORDS}
+
+
+def _as_text(value: object) -> str:
+    """Coerce a maybe-string to text: non-``str`` values read as absent (``""``)."""
+    return value if isinstance(value, str) else ""
+
+
+# Strength of the specificity penalty at ``specificity_penalty=1.0`` (the historical constant):
+# a candidate whose label is entirely extra words loses 40% of its score.
+SPECIFICITY_PENALTY_WEIGHT = 0.4
 
 
 def word_overlap(
@@ -176,20 +193,41 @@ def word_overlap(
 
 
 def compute_relevance_score(
-    query_content: set[str],
-    query_full: str,
-    label: str,
+    query_content: set[str] | None,
+    query_full: str | None,
+    label: str | None,
     definition: str | None = None,
     synonyms: list[str] | None = None,
     preferred_label: str | None = None,
     *,
     use_vectors: bool = False,
     word_similarity: WordSimilarity = _no_vector_similarity,
+    specificity_penalty: float = 1.0,
 ) -> float:
-    """Score 0-100 based on word overlap between query and a candidate concept."""
+    """Score 0-100 based on word overlap between query and a candidate concept.
+
+    **Type-defensive by contract (v0.3.0).** Every text argument is coerced: anything that is
+    not a ``str`` at runtime — ``None`` (folio-python genuinely returns ``None`` for a concept
+    with no preferred label), a test double, a number — reads as *absent* rather than raising
+    ``TypeError`` out of ``re.findall``. A non-``str`` ``label`` scores 0.0; non-``str``
+    synonym entries are skipped. Callers no longer need a coercion shim at their boundary.
+
+    ``specificity_penalty`` scales the "candidate is more specific than the query" haircut.
+    ``1.0`` (the default) is the historical behavior and must stay bit-identical; ``0.0``
+    disables the penalty entirely. Consumers whose queries are *shorter than their targets by
+    construction* — a 1-2 word claim name against a 3-5 word FOLIO label, e.g. *Habitability*
+    → *Breach of Warranty of Habitability* — can damp it (0.3-0.5) instead of forking the
+    scorer. Consumers that map taxonomy nodes, where an over-specific target IS an error,
+    should leave it at 1.0.
+    """
+    label = _as_text(label)
     if not label:
         return 0.0
-    synonyms = synonyms or []
+    query_full = _as_text(query_full)
+    definition = _as_text(definition) or None
+    preferred_label = _as_text(preferred_label) or None
+    synonyms = [s for s in (synonyms or []) if isinstance(s, str)]
+    query_content = {w for w in (query_content or set()) if isinstance(w, str)}
 
     query_lower = query_full.lower().strip()
     label_lower = label.lower()
@@ -252,12 +290,12 @@ def compute_relevance_score(
     final = primary + min(def_score * 0.12, 8) if primary > 0 else def_score
 
     # Specificity penalty: penalize candidates more specific than the query.
-    if label_content and query_content and final > 0:
+    if label_content and query_content and final > 0 and specificity_penalty > 0:
         extra_words = label_content - query_content
         if extra_words and len(label_content) > len(query_content):
             specificity_ratio = len(extra_words) / len(label_content)
-            penalty = specificity_ratio * 0.4
-            final = final * (1.0 - penalty)
+            penalty = specificity_ratio * SPECIFICITY_PENALTY_WEIGHT * specificity_penalty
+            final = final * (1.0 - min(max(penalty, 0.0), 1.0))
 
     return round(min(final, 99.0), 1)
 

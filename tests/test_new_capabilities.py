@@ -81,6 +81,79 @@ def test_place_name_allowed_with_heading_context() -> None:
     assert not d.demoted
 
 
+# -- place-name gate: consumer-supplied vocabulary (v0.3.0) --------------
+
+
+def test_consumer_place_is_invisible_to_the_default_gate() -> None:
+    # The built-in token set is deliberately small. A consumer's own recorded over-scoring
+    # place (alea-intake's BUG-21 log carries these) is NOT demoted by an un-parameterized gate.
+    gate = PlaceNameGate(min_signals=2)
+    assert not gate.evaluate(
+        query="wrongful termination", label="Macedonia", branch="", score=90.0
+    ).demoted
+
+
+def test_extra_tokens_demote_a_consumer_place() -> None:
+    gate = PlaceNameGate(min_signals=2, extra_tokens={"macedonia", "rize"})
+    for label in ("Macedonia", "Rize"):
+        d = gate.evaluate(query="unauthorized employment", label=label, branch="", score=90.0)
+        assert d.demoted, label
+        assert d.score <= 40.0
+
+
+def test_extra_tokens_match_multi_word_names() -> None:
+    gate = PlaceNameGate(min_signals=2, extra_tokens={"north america", "europe"})
+    assert gate.evaluate(query="patent claim", label="North America", branch="", score=88.0).demoted
+    assert gate.evaluate(query="patent claim", label="Europe", branch="", score=88.0).demoted
+
+
+def test_extra_markers_catch_productive_place_phrasings() -> None:
+    # "City of X" / "Republic of X" arrive with no branch metadata from embedding backends.
+    gate = PlaceNameGate(min_signals=2, extra_markers=("city of", "republic of"))
+    assert gate.evaluate(query="habitability", label="City of Exampleton", branch="", score=90.0).demoted
+    assert gate.evaluate(query="habitability", label="Republic of Example", branch="", score=90.0).demoted
+    assert not gate.evaluate(query="habitability", label="Warranty of Habitability", branch="Objectives", score=90.0).demoted
+
+
+def test_extra_branch_markers_extend_the_governed_branches() -> None:
+    gate = PlaceNameGate(min_signals=2, extra_branch_markers=("municipality",))
+    assert gate.evaluate(query="retaliation", label="Exampleton", branch="Municipality", score=90.0).demoted
+    assert not PlaceNameGate(min_signals=2).evaluate(
+        query="retaliation", label="Exampleton", branch="Municipality", score=90.0
+    ).demoted
+
+
+def test_extra_vocabulary_is_case_insensitive_and_blank_safe() -> None:
+    gate = PlaceNameGate(min_signals=2, extra_tokens=["  MACEDONIA ", "", "  "], extra_markers=["  City Of  "])
+    assert gate.evaluate(query="claim", label="macedonia", branch="", score=90.0).demoted
+    assert gate.evaluate(query="claim", label="CITY OF EXAMPLETON", branch="", score=90.0).demoted
+
+
+def test_extras_do_not_disturb_the_built_in_behavior() -> None:
+    gate = PlaceNameGate(min_signals=2, extra_tokens={"macedonia"})
+    # built-in token still governed
+    assert gate.evaluate(query="Presumptions", label="Slovenia", branch="Location", score=90.0).demoted
+    # non-place still passes through untouched
+    d = gate.evaluate(query="Defenses", label="Litigation Defenses", branch="Objectives", score=90.0)
+    assert not d.demoted and d.reason == "not-a-place" and d.score == 90.0
+    # the exact-name escape hatch still fires for an extra token
+    assert not gate.evaluate(query="Macedonia", label="Macedonia", branch="", score=99.0).demoted
+
+
+def test_claim_fitness_usage_ignores_the_exact_name_escape() -> None:
+    # alea-intake's shape: empty query + zero corroboration answers the pure question
+    # "is this concept in the place class?" — a claim named exactly "Macedonia" is still not a claim.
+    gate = PlaceNameGate(min_signals=2, extra_tokens={"macedonia"})
+    assert gate.evaluate(query="", label="Macedonia", branch="", score=100.0, corroborating_signals=0).demoted
+
+
+def test_place_tokens_property_exposes_the_merged_vocabulary() -> None:
+    gate = PlaceNameGate(extra_tokens={"macedonia"})
+    assert "macedonia" in gate.place_tokens
+    assert "slovenia" in gate.place_tokens
+    assert "macedonia" not in PlaceNameGate().place_tokens
+
+
 # -- short-label gate ----------------------------------------------------
 
 

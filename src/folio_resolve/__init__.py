@@ -8,12 +8,13 @@ domain-prior judge, and the annotate primitives.
 
 Public surface (see module docstrings for provenance):
 
-* scoring       — ``compute_relevance_score``, ``word_overlap``, ``LEGAL_TERM_EXPANSIONS``
+* scoring       — ``compute_relevance_score`` (type-defensive; optional ``specificity_penalty``
+                  weight), ``word_overlap``, ``LEGAL_TERM_EXPANSIONS``
 * ontology      — ``Concept``, ``OntologyProvider``, ``InMemoryOntology``, ``FolioPythonProvider``
 * entity_ruler  — ``FOLIOEntityRuler`` (pure-Python Aho-Corasick)
 * reconciler    — ``Reconciler``, ``ConceptMatch``
 * decompose     — ``decompose`` (conjunction split + shared-head)
-* gates         — ``PlaceNameGate``, ``ShortLabelGate``
+* gates         — ``PlaceNameGate`` (extensible vocabulary), ``ShortLabelGate``
 * blocklist     — ``AliasBlocklist`` (Action != Auction)
 * sources       — ``SourceClassifier`` (metadata/front-matter exclusion)
 * domain_prior  — ``DomainPrior``, ``DomainPriorSuggester``, ``TaxonomyNode`` (multi-tag)
@@ -27,7 +28,7 @@ Public surface (see module docstrings for provenance):
 
 from __future__ import annotations
 
-__version__ = "0.2.1"
+__version__ = "0.3.0"
 
 from .blocklist import AliasBlocklist, BlockedAlias, load_seed_blocklist
 from .calibration import CalibrationSample, ScoreCalibration
@@ -64,6 +65,7 @@ from .resolve import (
 from .scoring import (
     LEGAL_TERM_EXPANSIONS,
     SEARCH_STOPWORDS,
+    SPECIFICITY_PENALTY_WEIGHT,
     compute_relevance_score,
     content_words,
     generate_search_terms,
@@ -81,6 +83,7 @@ __all__ = [
     "LEGAL_TERM_EXPANSIONS",
     "LEMMA_VERSION",
     "SEARCH_STOPWORDS",
+    "SPECIFICITY_PENALTY_WEIGHT",
     "WHOLE_STRING_THRESHOLD",
     "AliasBlocklist",
     "BlockedAlias",

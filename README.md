@@ -116,6 +116,42 @@ non-numeric (`"high"` → the row is dropped, not an exception) or out of range 
 folio-mapper migration: mapper is the donor of these verdict rules and had kept a local parse loop
 precisely because the library's was weaker than the code it was lifted from.
 
+### Consumer-driven API additions (v0.3.0)
+
+Three gaps the **alea-intake** migration recorded (SCHEDULE.md row 4) are closed. All are
+**additive** — default behavior is bit-identical, pinned by a golden no-drift table in
+`tests/test_scoring.py` so folio-mapper's and folio-enrich's committed captures stay valid.
+
+- **`compute_relevance_score` is type-defensive.** Every text argument is coerced: a `None`
+  `preferred_label` (folio-python returns one for concepts with no preferred label), a test
+  double, a number, a non-`str` synonym entry — all read as *absent* instead of raising
+  `TypeError` out of `re.findall`. A non-`str` `label` scores `0.0`. Consumers can drop their
+  boundary coercion shims. Same spirit as the v0.2.1 `parse_judge_json` hardening.
+- **`PlaceNameGate` takes a consumer vocabulary.** `extra_tokens` (place names, matched against
+  label tokens *and* the whole label so multi-word names work), `extra_markers` (substring
+  phrasings — `("city of", "republic of")` catches *City of Exampleton* whatever it's called),
+  and `extra_branch_markers` (extra governed branches). A `place_tokens` property exposes the
+  merged vocabulary. This retires the parallel local backstops consumers had to carry:
+
+  ```python
+  gate = PlaceNameGate(
+      min_signals=2,
+      extra_tokens={"macedonia", "rize", "europe", "north america"},
+      extra_markers=("city of", "republic of", "province of"),
+  )
+  ```
+
+- **The specificity penalty is weightable.** `compute_relevance_score(..., specificity_penalty=w)`
+  scales the "candidate is more specific than the query" haircut: `1.0` is the historical
+  default, `0.0` disables it. Consumers whose queries are *shorter than their targets by
+  construction* (a 1-2 word claim name against a 3-5 word FOLIO label — *Habitability* →
+  *Breach of Warranty of Habitability*, scored 67.5 at full penalty) can damp it rather than
+  fork the scorer. Consumers that map taxonomy nodes, where an over-specific target IS an
+  error, leave it at `1.0`.
+
+Adopting `PlaceNameGate` is a **per-path** decision, not a per-repo one — see
+[docs/migration/SCHEDULE.md](docs/migration/SCHEDULE.md#adopting-placenamegate-is-a-per-path-decision).
+
 ## Bring Your Own Key (BYOK)
 
 `folio-resolve` is **key-agnostic** — it never reads an env var, instantiates a provider SDK, or makes
