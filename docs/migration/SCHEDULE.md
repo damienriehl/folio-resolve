@@ -2,7 +2,7 @@
 
 Damien approved **opportunistic** migration (each repo migrates as it next touches FOLIO matching)
 **plus** this written schedule, and asked to be **reminded which repo is next as each migration
-completes**. Status legend: ✅ done · ▶️ next · ⏳ queued · ➖ excluded.
+completes**. Status legend: ✅ done · 🟡 partial · ▶️ next · ⏳ queued · ➖ excluded.
 
 > **NEXT UP: `clio-skills`.** (alea-intake migrated 2026-07-24 — the heaviest external consumer
 > now takes its Stage-2 label scorer and its claim-fitness place gate from the library; classified
@@ -10,7 +10,7 @@ completes**. Status legend: ✅ done · ▶️ next · ⏳ queued · ➖ exclude
 
 | # | Repo | Status | How it matches FOLIO today | What migration entails | Effort |
 |---|---|---|---|---|---|
-| 1 | **folio-insights** | ✅ this operation | 4-path tagger importing folio-enrich + folio-mapper via `sys.path` bridges (`folio_bridge`, `mapper_bridge`, `ingestion_bridge`); `FourPathReconciler` wraps enrich's `Reconciler`; B9 rapidfuzz verifier | Replace the three bridges with the pinned `folio-resolve` package; keep the tagger/reconciler parity tests green; turn the new gates on | Done |
+| 1 | **folio-insights** | 🟡 partial 2026-07-24 | 4-path tagger. Its **matching** now comes from the pinned library, but three `sys.path` bridges into folio-enrich / folio-mapper survive: `folio_bridge` (FolioService, EmbeddingService, the text normalizer), `mapper_bridge` (tabular Excel/CSV/TSV ingest), `ingestion_bridge` (format detection + multi-format text extraction). `config.folio_enrich_path` still points at `../folio-enrich/backend`, and six modules still import through the bridges (`folio_tagger`, `knowledge_classifier`, `boundary_detection`, `ingestion`, discovery `folio_mapping`, discovery `hierarchy_construction`) | **Done (matching seams):** the resolver, the entity ruler, the reconciler, the gates, and the judge + calibration are all consumed from `folio-resolve`; every `folio_matching` reference is gone (package rename absorbed); suite 992 green. **Not done (service tier):** the three bridges. They carry ontology/service-tier plumbing — a FOLIO/embedding service singleton, a normalizer, format-detection ingest, tabular parsing — not matching, so the library does not cover them today. Retiring them is a separate decision (grow the library's ontology/ingest surface, or vendor the pieces) and is **not** blocked on any matching work | Matching done; bridges open |
 | 2 | **folio-enrich** | ✅ 2026-07-16 | Its `folio/search.py` is literally "ported from folio-mapper"; owns the reconciler, entity ruler, domain-prior judge, feedback/annotate UI | Retire the forked `search.py` and reconciler/ruler; consume the library. Its display code stays as the annotator reference. This closes the copy-paste divergence at its source | Real |
 | 3 | **folio-mapper** | ✅ 2026-07-24 | The canonical scorer + 4-stage pipeline + FAISS index (the donor of most of this library) | Done: scorer/stopwords/expansions/search-term generation + judge verdict rules + calibration prompt now consumed from the library; ontology-shaped code (folio-python gathering, branch logic, FAISS, LLM providers) stays. Golden-baseline harness in `backend/migration/` proves an EMPTY delta. `PlaceNameGate` deliberately NOT adopted — mapper maps jurisdictions on purpose | Real |
 | 4 | **alea-intake** | ✅ 2026-07-24 | Heaviest external consumer: 3-stage cascade in `services/folio/concept_resolver.py` (embedding + hand-rolled word-overlap + LLM), FAISS/pgvector backends, `analysis/semantic_fit.py` LLM judge, `folio/term_expansions.py` ("ported from folio-mapper") | Done: the hand-rolled Stage-2 label scorer is deleted for `compute_relevance_score`, and `semantic_fit.is_geographic_concept` is backed by `PlaceNameGate` — **adopted here** (a claim is never a place *or an agency*) but scoped to claim fitness only, NOT to the general resolver, which resolves jurisdictions on purpose. Consumer seams stay local: lay-language expansions ("fired" → "wrongful termination"), the narrative stopword list, the 3-stage weighted combine, pgvector/FAISS. `semantic_fit` did **not** move into the lib — its LLM tier is a claim-context judge on alea's own structured-output client, not a transport the library covers. Golden-baseline harness in `backend/migration/`; classified delta 15 intended fixes / 0 regressions / 36 neutral | Real (largest surface) |
@@ -25,7 +25,11 @@ completes**. Status legend: ✅ done · ▶️ next · ⏳ queued · ➖ exclude
 
 As each migration lands, the executing agent posts a one-line reminder naming the next repo:
 
-- ✅ **folio-insights migrated → NEXT UP: folio-enrich** (retire its forked `search.py`).
+- 🟡 **folio-insights migrated *for matching* → NEXT UP: folio-enrich** (retire its forked
+  `search.py`). Corrected 2026-07-24 after the folio-insights merge landed: only the matching
+  seams moved. The `folio_bridge` / `mapper_bridge` / `ingestion_bridge` `sys.path` hacks and
+  `config.folio_enrich_path` are still there, so row 1 is **partial**, not done — see the row for
+  exactly what did and did not move.
 - ✅ **folio-enrich migrated (2026-07-16, Stage 1: deterministic core; ruler kept per Damien; fallback kept) → NEXT UP: folio-mapper** (collapse Python backend into the library).
 - ✅ **folio-mapper migrated (2026-07-24, deterministic core + judge verdict policy; PlaceNameGate
   deliberately not adopted; delta empty) → NEXT UP: alea-intake** (biggest rewrite; exercises
