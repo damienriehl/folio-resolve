@@ -1,0 +1,966 @@
+{
+  "calibration": {
+    "chosen": {
+      "f1": 0.209349,
+      "fn": 977,
+      "fp": 1002,
+      "precision": 0.207278,
+      "recall": 0.211461,
+      "threshold": 0.0,
+      "top_k": 2,
+      "tp": 262
+    },
+    "fitted_on": "tune",
+    "frontier": [
+      {
+        "f1": 0.198824,
+        "fn": 1053,
+        "fp": 446,
+        "precision": 0.294304,
+        "recall": 0.150121,
+        "threshold": 0.0,
+        "top_k": 1,
+        "tp": 186
+      },
+      {
+        "f1": 0.209349,
+        "fn": 977,
+        "fp": 1002,
+        "precision": 0.207278,
+        "recall": 0.211461,
+        "threshold": 0.0,
+        "top_k": 2,
+        "tp": 262
+      },
+      {
+        "f1": 0.19072,
+        "fn": 941,
+        "fp": 1588,
+        "precision": 0.158006,
+        "recall": 0.240517,
+        "threshold": 0.0,
+        "top_k": 3,
+        "tp": 298
+      },
+      {
+        "f1": 0.116959,
+        "fn": 1159,
+        "fp": 49,
+        "precision": 0.620155,
+        "recall": 0.064568,
+        "threshold": 0.05,
+        "top_k": 1,
+        "tp": 80
+      },
+      {
+        "f1": 0.128663,
+        "fn": 1149,
+        "fp": 70,
+        "precision": 0.5625,
+        "recall": 0.072639,
+        "threshold": 0.05,
+        "top_k": 2,
+        "tp": 90
+      },
+      {
+        "f1": 0.127389,
+        "fn": 1149,
+        "fp": 84,
+        "precision": 0.517241,
+        "recall": 0.072639,
+        "threshold": 0.05,
+        "top_k": 3,
+        "tp": 90
+      }
+    ],
+    "grid_top10": [
+      {
+        "f1": 0.209349,
+        "fn": 977,
+        "fp": 1002,
+        "precision": 0.207278,
+        "recall": 0.211461,
+        "threshold": 0.0,
+        "top_k": 2,
+        "tp": 262
+      },
+      {
+        "f1": 0.198824,
+        "fn": 1053,
+        "fp": 446,
+        "precision": 0.294304,
+        "recall": 0.150121,
+        "threshold": 0.0,
+        "top_k": 1,
+        "tp": 186
+      },
+      {
+        "f1": 0.19072,
+        "fn": 941,
+        "fp": 1588,
+        "precision": 0.158006,
+        "recall": 0.240517,
+        "threshold": 0.0,
+        "top_k": 3,
+        "tp": 298
+      },
+      {
+        "f1": 0.174658,
+        "fn": 913,
+        "fp": 2168,
+        "precision": 0.130714,
+        "recall": 0.263115,
+        "threshold": 0.0,
+        "top_k": 4,
+        "tp": 326
+      },
+      {
+        "f1": 0.161485,
+        "fn": 891,
+        "fp": 2723,
+        "precision": 0.113318,
+        "recall": 0.280872,
+        "threshold": 0.0,
+        "top_k": 5,
+        "tp": 348
+      },
+      {
+        "f1": 0.149143,
+        "fn": 878,
+        "fp": 3241,
+        "precision": 0.100222,
+        "recall": 0.291364,
+        "threshold": 0.0,
+        "top_k": 6,
+        "tp": 361
+      },
+      {
+        "f1": 0.139035,
+        "fn": 870,
+        "fp": 3700,
+        "precision": 0.090686,
+        "recall": 0.297821,
+        "threshold": 0.0,
+        "top_k": 7,
+        "tp": 369
+      },
+      {
+        "f1": 0.132397,
+        "fn": 862,
+        "fp": 4079,
+        "precision": 0.084605,
+        "recall": 0.304278,
+        "threshold": 0.0,
+        "top_k": 8,
+        "tp": 377
+      },
+      {
+        "f1": 0.130435,
+        "fn": 1146,
+        "fp": 94,
+        "precision": 0.497326,
+        "recall": 0.075061,
+        "threshold": 0.1,
+        "top_k": 5,
+        "tp": 93
+      },
+      {
+        "f1": 0.130435,
+        "fn": 1146,
+        "fp": 94,
+        "precision": 0.497326,
+        "recall": 0.075061,
+        "threshold": 0.05,
+        "top_k": 5,
+        "tp": 93
+      }
+    ],
+    "items": 634,
+    "k_grid": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10
+    ],
+    "positive_samples": 396,
+    "samples": 5095,
+    "steps": 6,
+    "threshold_grid": [
+      0.0,
+      0.05,
+      0.1,
+      0.15,
+      0.2,
+      0.25,
+      0.3,
+      0.35,
+      0.4,
+      0.45,
+      0.5,
+      0.55,
+      0.6,
+      0.65,
+      0.7,
+      0.75,
+      0.8,
+      0.85,
+      0.9
+    ]
+  },
+  "clusters": {
+    "firm2": {
+      "clusters": {
+        "candidate_gap_truncated": 42,
+        "candidate_gap_unreachable": 1,
+        "hierarchy_near_miss": 9,
+        "homonym_or_wrong_sense": 1,
+        "normalization": 0,
+        "ranked_below_cutoff": 12,
+        "synonymy": 71
+      },
+      "clusters_by_firm": {
+        "firm2": {
+          "candidate_gap_truncated": 42,
+          "candidate_gap_unreachable": 1,
+          "hierarchy_near_miss": 9,
+          "homonym_or_wrong_sense": 1,
+          "normalization": 0,
+          "ranked_below_cutoff": 12,
+          "synonymy": 71
+        }
+      },
+      "detail": "eval/data/reports/clusters_v1.jsonl (gitignored, KTD1)",
+      "direct_search": {
+        "cache_unique_queries_total": 689,
+        "limit": 200,
+        "lookups": 86,
+        "new_unique_queries": 81
+      },
+      "false_positives": 197,
+      "fp_clusters": {
+        "fp_near_miss": 10,
+        "fp_unrelated": 187
+      },
+      "items_probed": 86,
+      "misses": 136,
+      "reachability": {
+        "candidate_gap_truncated": 42,
+        "candidate_gap_unreachable": 82,
+        "ranked_below_cutoff": 12
+      },
+      "signals": {
+        "exact_label_match": 1,
+        "hierarchy_neighbor_seen": 16,
+        "homonym_collision": 2,
+        "in_ranked": 12,
+        "reachable_at_limit": 44,
+        "zero_token_overlap": 95
+      },
+      "slice": "firm2"
+    },
+    "tune": {
+      "clusters": {
+        "candidate_gap_truncated": 503,
+        "candidate_gap_unreachable": 105,
+        "hierarchy_near_miss": 19,
+        "homonym_or_wrong_sense": 12,
+        "normalization": 0,
+        "ranked_below_cutoff": 134,
+        "synonymy": 204
+      },
+      "clusters_by_firm": {
+        "firm1": {
+          "candidate_gap_truncated": 503,
+          "candidate_gap_unreachable": 105,
+          "hierarchy_near_miss": 19,
+          "homonym_or_wrong_sense": 12,
+          "normalization": 0,
+          "ranked_below_cutoff": 134,
+          "synonymy": 204
+        }
+      },
+      "detail": "eval/data/reports/clusters_v1.jsonl (gitignored, KTD1)",
+      "direct_search": {
+        "cache_unique_queries_total": 608,
+        "limit": 200,
+        "lookups": 630,
+        "new_unique_queries": 608
+      },
+      "false_positives": 1002,
+      "fp_clusters": {
+        "fp_near_miss": 26,
+        "fp_unrelated": 976
+      },
+      "items_probed": 487,
+      "misses": 977,
+      "reachability": {
+        "candidate_gap_truncated": 503,
+        "candidate_gap_unreachable": 340,
+        "ranked_below_cutoff": 134
+      },
+      "signals": {
+        "exact_label_match": 3,
+        "hierarchy_neighbor_seen": 83,
+        "homonym_collision": 17,
+        "in_ranked": 134,
+        "reachable_at_limit": 578,
+        "zero_token_overlap": 324
+      },
+      "slice": "tune"
+    }
+  },
+  "determinism_selftest": {
+    "deterministic": true,
+    "first_seed": "0",
+    "first_sha256": "72e6ba8bc470e6c682c0a8da89d4af9aa22b6ba0375196b9db0dd9427ddaaf89",
+    "second_seed": "1",
+    "second_sha256": "72e6ba8bc470e6c682c0a8da89d4af9aa22b6ba0375196b9db0dd9427ddaaf89",
+    "target": "folio_eval.selftest:synthetic_scoring_payload"
+  },
+  "folio_python_version": "0.3.6",
+  "gold_content_sha256": "032933710033800d4606ffb8ce1fd322e9014dbbd71989443706d5ee7f0f1a7f",
+  "gold_id": "v2-032933710033",
+  "gold_version": 2,
+  "harness_config": {
+    "calibrated": true,
+    "calibration_steps": [
+      [
+        85.80645161290323,
+        0.017555
+      ],
+      [
+        93.61702127659575,
+        0.132767
+      ],
+      [
+        94.73684210526316,
+        0.333333
+      ],
+      [
+        95.0,
+        0.385714
+      ],
+      [
+        95.45454545454545,
+        0.5
+      ],
+      [
+        100.0,
+        0.542373
+      ]
+    ],
+    "config_version": 1,
+    "rationale": "U4 baseline fit: isotonic ScoreCalibration on the TUNE slice only (634 items, 5095 (score, correct?) pairs, 396 positive, 6 compressed steps); threshold x k grid-searched over [0.0..0.9] x [1..10] maximizing micro-F1, ties to the smaller k then the higher threshold; chosen threshold=0.0 top_k=2 (tune micro-F1=0.209349, P=0.207278, R=0.211461); gold=v2-032933710033; ontology=b6ed82e6d17b. Refitting is a named iteration change under R9.",
+    "threshold": 0.0,
+    "top_k": 2
+  },
+  "harness_config_sha256": "83c96e3d4ca615dfe3b1bff82a9fc6b88c8d346ac7821fb21a77e2f92245595c",
+  "kind": "baseline",
+  "label": "baseline-v2",
+  "ontology_cache_sha256": "b6ed82e6d17b7cb1d468453e4111ec08ca091d72a6849be2b58dd37692cb6ef9",
+  "sampled": false,
+  "slices": {
+    "firm2": {
+      "by_firm": {
+        "firm2": {
+          "empty_prediction_items": 0,
+          "exact_items": 1,
+          "f1": 0.125984,
+          "fn": 136,
+          "fp": 197,
+          "gold": 160,
+          "items": 111,
+          "precision": 0.108597,
+          "predicted": 221,
+          "recall": 0.15,
+          "tp": 24
+        }
+      },
+      "by_stratum": {
+        "2e77fc3b7e48": {
+          "empty_prediction_items": 0,
+          "exact_items": 1,
+          "f1": 0.114943,
+          "fn": 129,
+          "fp": 179,
+          "gold": 149,
+          "items": 100,
+          "precision": 0.100503,
+          "predicted": 199,
+          "recall": 0.134228,
+          "tp": 20
+        },
+        "573897c2ebee": {
+          "empty_prediction_items": 0,
+          "exact_items": 0,
+          "f1": 0.285714,
+          "fn": 4,
+          "fp": 11,
+          "gold": 7,
+          "items": 7,
+          "precision": 0.214286,
+          "predicted": 14,
+          "recall": 0.428571,
+          "tp": 3
+        },
+        "eb6199169333": {
+          "empty_prediction_items": 0,
+          "exact_items": 0,
+          "f1": 0.166667,
+          "fn": 3,
+          "fp": 7,
+          "gold": 4,
+          "items": 4,
+          "precision": 0.125,
+          "predicted": 8,
+          "recall": 0.25,
+          "tp": 1
+        }
+      },
+      "extra": {
+        "determinism_selftest": {
+          "deterministic": true,
+          "first_seed": "0",
+          "first_sha256": "72e6ba8bc470e6c682c0a8da89d4af9aa22b6ba0375196b9db0dd9427ddaaf89",
+          "second_seed": "1",
+          "second_sha256": "72e6ba8bc470e6c682c0a8da89d4af9aa22b6ba0375196b9db0dd9427ddaaf89",
+          "target": "folio_eval.selftest:synthetic_scoring_payload"
+        },
+        "entity_ruler": true,
+        "label_search_limit": 10
+      },
+      "folio_python_version": "0.3.6",
+      "gold_content_sha256": "032933710033800d4606ffb8ce1fd322e9014dbbd71989443706d5ee7f0f1a7f",
+      "gold_id": "v2-032933710033",
+      "gold_version": 2,
+      "harness_config": {
+        "calibrated": true,
+        "calibration_steps": [
+          [
+            85.80645161290323,
+            0.017555
+          ],
+          [
+            93.61702127659575,
+            0.132767
+          ],
+          [
+            94.73684210526316,
+            0.333333
+          ],
+          [
+            95.0,
+            0.385714
+          ],
+          [
+            95.45454545454545,
+            0.5
+          ],
+          [
+            100.0,
+            0.542373
+          ]
+        ],
+        "config_version": 1,
+        "rationale": "U4 baseline fit: isotonic ScoreCalibration on the TUNE slice only (634 items, 5095 (score, correct?) pairs, 396 positive, 6 compressed steps); threshold x k grid-searched over [0.0..0.9] x [1..10] maximizing micro-F1, ties to the smaller k then the higher threshold; chosen threshold=0.0 top_k=2 (tune micro-F1=0.209349, P=0.207278, R=0.211461); gold=v2-032933710033; ontology=b6ed82e6d17b. Refitting is a named iteration change under R9.",
+        "threshold": 0.0,
+        "top_k": 2
+      },
+      "harness_config_sha256": "83c96e3d4ca615dfe3b1bff82a9fc6b88c8d346ac7821fb21a77e2f92245595c",
+      "hits_at_k": {
+        "1": 18,
+        "10": 36,
+        "3": 29,
+        "5": 32
+      },
+      "label": "baseline-v2",
+      "near_miss": {
+        "ancestor_2hop": 0,
+        "child_1hop": 5,
+        "descendant_2hop": 1,
+        "parent_1hop": 5,
+        "sibling": 0,
+        "unrelated": 186
+      },
+      "ontology_cache_sha256": "b6ed82e6d17b7cb1d468453e4111ec08ca091d72a6849be2b58dd37692cb6ef9",
+      "overall": {
+        "empty_prediction_items": 0,
+        "exact_items": 1,
+        "f1": 0.125984,
+        "fn": 136,
+        "fp": 197,
+        "gold": 160,
+        "items": 111,
+        "precision": 0.108597,
+        "predicted": 221,
+        "recall": 0.15,
+        "tp": 24
+      },
+      "recall_at_k": {
+        "1": 0.1125,
+        "10": 0.225,
+        "3": 0.18125,
+        "5": 0.2
+      },
+      "sampled": false,
+      "slice": "firm2",
+      "split_manifest_sha256": "7340aef9b0310ea86812105a62326585051d487d533c1187e46c77fcf358ff18",
+      "split_seed": 20260727,
+      "timing": {
+        "elapsed_s": 0.003,
+        "items": 111,
+        "ms_per_item": 0.03
+      }
+    },
+    "tune": {
+      "by_firm": {
+        "firm1": {
+          "empty_prediction_items": 2,
+          "exact_items": 11,
+          "f1": 0.209349,
+          "fn": 977,
+          "fp": 1002,
+          "gold": 1239,
+          "items": 634,
+          "precision": 0.207278,
+          "predicted": 1264,
+          "recall": 0.211461,
+          "tp": 262
+        }
+      },
+      "by_stratum": {
+        "14f831be43d7": {
+          "empty_prediction_items": 0,
+          "exact_items": 1,
+          "f1": 0.31746,
+          "fn": 27,
+          "fp": 16,
+          "gold": 37,
+          "items": 13,
+          "precision": 0.384615,
+          "predicted": 26,
+          "recall": 0.27027,
+          "tp": 10
+        },
+        "2330f06f4d3c": {
+          "empty_prediction_items": 0,
+          "exact_items": 1,
+          "f1": 0.268551,
+          "fn": 97,
+          "fp": 110,
+          "gold": 135,
+          "items": 74,
+          "precision": 0.256757,
+          "predicted": 148,
+          "recall": 0.281481,
+          "tp": 38
+        },
+        "2f358fbb5cd5": {
+          "empty_prediction_items": 0,
+          "exact_items": 0,
+          "f1": 0.0,
+          "fn": 2,
+          "fp": 4,
+          "gold": 2,
+          "items": 2,
+          "precision": 0.0,
+          "predicted": 4,
+          "recall": 0.0,
+          "tp": 0
+        },
+        "3ce42a173062": {
+          "empty_prediction_items": 0,
+          "exact_items": 0,
+          "f1": 0.0,
+          "fn": 2,
+          "fp": 2,
+          "gold": 2,
+          "items": 1,
+          "precision": 0.0,
+          "predicted": 2,
+          "recall": 0.0,
+          "tp": 0
+        },
+        "440c205abfae": {
+          "empty_prediction_items": 0,
+          "exact_items": 0,
+          "f1": 0.139535,
+          "fn": 14,
+          "fp": 23,
+          "gold": 17,
+          "items": 13,
+          "precision": 0.115385,
+          "predicted": 26,
+          "recall": 0.176471,
+          "tp": 3
+        },
+        "539027ce873c": {
+          "empty_prediction_items": 0,
+          "exact_items": 0,
+          "f1": 0.19697,
+          "fn": 55,
+          "fp": 51,
+          "gold": 68,
+          "items": 32,
+          "precision": 0.203125,
+          "predicted": 64,
+          "recall": 0.191176,
+          "tp": 13
+        },
+        "59cf7a95498c": {
+          "empty_prediction_items": 0,
+          "exact_items": 0,
+          "f1": 0.163462,
+          "fn": 79,
+          "fp": 95,
+          "gold": 96,
+          "items": 56,
+          "precision": 0.151786,
+          "predicted": 112,
+          "recall": 0.177083,
+          "tp": 17
+        },
+        "5cf8b73480f3": {
+          "empty_prediction_items": 0,
+          "exact_items": 0,
+          "f1": 0.178295,
+          "fn": 103,
+          "fp": 109,
+          "gold": 126,
+          "items": 66,
+          "precision": 0.174242,
+          "predicted": 132,
+          "recall": 0.18254,
+          "tp": 23
+        },
+        "5fc439dc2558": {
+          "empty_prediction_items": 0,
+          "exact_items": 0,
+          "f1": 0.318841,
+          "fn": 36,
+          "fp": 58,
+          "gold": 58,
+          "items": 40,
+          "precision": 0.275,
+          "predicted": 80,
+          "recall": 0.37931,
+          "tp": 22
+        },
+        "6f5def6013c2": {
+          "empty_prediction_items": 0,
+          "exact_items": 1,
+          "f1": 0.218009,
+          "fn": 112,
+          "fp": 53,
+          "gold": 135,
+          "items": 38,
+          "precision": 0.302632,
+          "predicted": 76,
+          "recall": 0.17037,
+          "tp": 23
+        },
+        "7ab52f24b7ce": {
+          "empty_prediction_items": 0,
+          "exact_items": 0,
+          "f1": 0.0,
+          "fn": 5,
+          "fp": 6,
+          "gold": 5,
+          "items": 3,
+          "precision": 0.0,
+          "predicted": 6,
+          "recall": 0.0,
+          "tp": 0
+        },
+        "7b0d229acad3": {
+          "empty_prediction_items": 0,
+          "exact_items": 0,
+          "f1": 0.181818,
+          "fn": 8,
+          "fp": 10,
+          "gold": 10,
+          "items": 6,
+          "precision": 0.166667,
+          "predicted": 12,
+          "recall": 0.2,
+          "tp": 2
+        },
+        "83e79fe605dc": {
+          "empty_prediction_items": 0,
+          "exact_items": 1,
+          "f1": 0.227273,
+          "fn": 17,
+          "fp": 17,
+          "gold": 22,
+          "items": 11,
+          "precision": 0.227273,
+          "predicted": 22,
+          "recall": 0.227273,
+          "tp": 5
+        },
+        "940ec56b0677": {
+          "empty_prediction_items": 0,
+          "exact_items": 1,
+          "f1": 0.12,
+          "fn": 92,
+          "fp": 84,
+          "gold": 104,
+          "items": 48,
+          "precision": 0.125,
+          "predicted": 96,
+          "recall": 0.115385,
+          "tp": 12
+        },
+        "a4028b3eb41c": {
+          "empty_prediction_items": 0,
+          "exact_items": 0,
+          "f1": 0.081871,
+          "fn": 74,
+          "fp": 83,
+          "gold": 81,
+          "items": 45,
+          "precision": 0.077778,
+          "predicted": 90,
+          "recall": 0.08642,
+          "tp": 7
+        },
+        "aaf23c83f37d": {
+          "empty_prediction_items": 0,
+          "exact_items": 0,
+          "f1": 0.146341,
+          "fn": 16,
+          "fp": 19,
+          "gold": 19,
+          "items": 11,
+          "precision": 0.136364,
+          "predicted": 22,
+          "recall": 0.157895,
+          "tp": 3
+        },
+        "bc678e049abd": {
+          "empty_prediction_items": 1,
+          "exact_items": 4,
+          "f1": 0.289963,
+          "fn": 94,
+          "fp": 97,
+          "gold": 133,
+          "items": 69,
+          "precision": 0.286765,
+          "predicted": 136,
+          "recall": 0.293233,
+          "tp": 39
+        },
+        "c822fb0e1741": {
+          "empty_prediction_items": 0,
+          "exact_items": 0,
+          "f1": 0.086957,
+          "fn": 12,
+          "fp": 9,
+          "gold": 13,
+          "items": 5,
+          "precision": 0.1,
+          "predicted": 10,
+          "recall": 0.076923,
+          "tp": 1
+        },
+        "cc222504f82b": {
+          "empty_prediction_items": 0,
+          "exact_items": 1,
+          "f1": 0.241758,
+          "fn": 36,
+          "fp": 33,
+          "gold": 47,
+          "items": 22,
+          "precision": 0.25,
+          "predicted": 44,
+          "recall": 0.234043,
+          "tp": 11
+        },
+        "d1875c5d4aa8": {
+          "empty_prediction_items": 0,
+          "exact_items": 1,
+          "f1": 0.307692,
+          "fn": 24,
+          "fp": 30,
+          "gold": 36,
+          "items": 21,
+          "precision": 0.285714,
+          "predicted": 42,
+          "recall": 0.333333,
+          "tp": 12
+        },
+        "d8f01560a045": {
+          "empty_prediction_items": 1,
+          "exact_items": 0,
+          "f1": 0.213333,
+          "fn": 27,
+          "fp": 32,
+          "gold": 35,
+          "items": 21,
+          "precision": 0.2,
+          "predicted": 40,
+          "recall": 0.228571,
+          "tp": 8
+        },
+        "daf817d6ea1f": {
+          "empty_prediction_items": 0,
+          "exact_items": 0,
+          "f1": 0.4,
+          "fn": 4,
+          "fp": 5,
+          "gold": 7,
+          "items": 4,
+          "precision": 0.375,
+          "predicted": 8,
+          "recall": 0.428571,
+          "tp": 3
+        },
+        "ddbbf336e91b": {
+          "empty_prediction_items": 0,
+          "exact_items": 0,
+          "f1": 0.129032,
+          "fn": 11,
+          "fp": 16,
+          "gold": 13,
+          "items": 9,
+          "precision": 0.111111,
+          "predicted": 18,
+          "recall": 0.153846,
+          "tp": 2
+        },
+        "e61e5e72130e": {
+          "empty_prediction_items": 0,
+          "exact_items": 0,
+          "f1": 0.285714,
+          "fn": 6,
+          "fp": 9,
+          "gold": 9,
+          "items": 6,
+          "precision": 0.25,
+          "predicted": 12,
+          "recall": 0.333333,
+          "tp": 3
+        },
+        "e62a3679461b": {
+          "empty_prediction_items": 0,
+          "exact_items": 0,
+          "f1": 0.153846,
+          "fn": 24,
+          "fp": 31,
+          "gold": 29,
+          "items": 18,
+          "precision": 0.138889,
+          "predicted": 36,
+          "recall": 0.172414,
+          "tp": 5
+        }
+      },
+      "extra": {
+        "determinism_selftest": {
+          "deterministic": true,
+          "first_seed": "0",
+          "first_sha256": "72e6ba8bc470e6c682c0a8da89d4af9aa22b6ba0375196b9db0dd9427ddaaf89",
+          "second_seed": "1",
+          "second_sha256": "72e6ba8bc470e6c682c0a8da89d4af9aa22b6ba0375196b9db0dd9427ddaaf89",
+          "target": "folio_eval.selftest:synthetic_scoring_payload"
+        },
+        "entity_ruler": true,
+        "label_search_limit": 10
+      },
+      "folio_python_version": "0.3.6",
+      "gold_content_sha256": "032933710033800d4606ffb8ce1fd322e9014dbbd71989443706d5ee7f0f1a7f",
+      "gold_id": "v2-032933710033",
+      "gold_version": 2,
+      "harness_config": {
+        "calibrated": true,
+        "calibration_steps": [
+          [
+            85.80645161290323,
+            0.017555
+          ],
+          [
+            93.61702127659575,
+            0.132767
+          ],
+          [
+            94.73684210526316,
+            0.333333
+          ],
+          [
+            95.0,
+            0.385714
+          ],
+          [
+            95.45454545454545,
+            0.5
+          ],
+          [
+            100.0,
+            0.542373
+          ]
+        ],
+        "config_version": 1,
+        "rationale": "U4 baseline fit: isotonic ScoreCalibration on the TUNE slice only (634 items, 5095 (score, correct?) pairs, 396 positive, 6 compressed steps); threshold x k grid-searched over [0.0..0.9] x [1..10] maximizing micro-F1, ties to the smaller k then the higher threshold; chosen threshold=0.0 top_k=2 (tune micro-F1=0.209349, P=0.207278, R=0.211461); gold=v2-032933710033; ontology=b6ed82e6d17b. Refitting is a named iteration change under R9.",
+        "threshold": 0.0,
+        "top_k": 2
+      },
+      "harness_config_sha256": "83c96e3d4ca615dfe3b1bff82a9fc6b88c8d346ac7821fb21a77e2f92245595c",
+      "hits_at_k": {
+        "1": 186,
+        "10": 389,
+        "3": 298,
+        "5": 348
+      },
+      "label": "baseline-v2",
+      "near_miss": {
+        "ancestor_2hop": 0,
+        "child_1hop": 16,
+        "descendant_2hop": 8,
+        "parent_1hop": 10,
+        "sibling": 18,
+        "unrelated": 950
+      },
+      "ontology_cache_sha256": "b6ed82e6d17b7cb1d468453e4111ec08ca091d72a6849be2b58dd37692cb6ef9",
+      "overall": {
+        "empty_prediction_items": 2,
+        "exact_items": 11,
+        "f1": 0.209349,
+        "fn": 977,
+        "fp": 1002,
+        "gold": 1239,
+        "items": 634,
+        "precision": 0.207278,
+        "predicted": 1264,
+        "recall": 0.211461,
+        "tp": 262
+      },
+      "recall_at_k": {
+        "1": 0.150121,
+        "10": 0.313963,
+        "3": 0.240517,
+        "5": 0.280872
+      },
+      "sampled": false,
+      "slice": "tune",
+      "split_manifest_sha256": "7340aef9b0310ea86812105a62326585051d487d533c1187e46c77fcf358ff18",
+      "split_seed": 20260727,
+      "timing": {
+        "elapsed_s": 0.017,
+        "items": 634,
+        "ms_per_item": 0.03
+      }
+    }
+  },
+  "split_manifest_sha256": "7340aef9b0310ea86812105a62326585051d487d533c1187e46c77fcf358ff18",
+  "split_seed": 20260727,
+  "timing": {
+    "elapsed_s": 240.28,
+    "items": 745
+  }
+}

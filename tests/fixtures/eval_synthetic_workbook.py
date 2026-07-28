@@ -135,6 +135,59 @@ FIRM1_ROWS: list[list[str | None]] = [
 ]
 
 
+# --- Synthetic cascade sheet for the per-cell derivation (gold v2, KTD6 v2) ------------------
+#
+# The v2 reading needs shapes v1 never distinguished: a heading cell that is itself an item, a
+# shared row whose input and output counts do not line up, and the same cell text appearing twice
+# with different answers. Kept as its own sheet so the v1 fixture's expectations never move.
+
+FIRM1_V2_ROWS: list[list[str | None]] = [
+    FIRM1_HEADER,
+    # L1 heading cell carrying its own mapping -> its own item, nothing cascades from it.
+    _f1(level1="Widget Practice", sali={0: "Widget Manufacturing Law"}),
+    # L2 heading cell, one input and two output blocks -> both belong to that one input.
+    _f1(level2="Widget Advice", sali={0: "Gadget Advisory Service", 3: "Trinket Industry"}),
+    # L3 cell with its own mapping -> exactly its own, no inheritance from the headings above.
+    _f1(level3="Enforcement matters", code="1.0", sali={2: "Doohickey Regulatory Enforcement"}),
+    # L3 cell with nothing of its own -> blank (coverage, KD7), no longer rescued by a cascade.
+    _f1(level3="General advice", code="2.0"),
+    # Shared row, two inputs and two output blocks -> positional 1:1 pairing, unambiguous.
+    _f1(
+        level2="Shared Category",
+        level3="First attribute",
+        code="3.0",
+        sali={0: "Widget Law", 1: "Bauble Agreements"},
+    ),
+    # Shared row, two inputs and THREE output blocks -> heuristic + pairing_ambiguous flag.
+    _f1(
+        level2="Uneven Category",
+        level3="Odd attribute",
+        code="4.0",
+        sali={
+            0: "Sprocket Litigation Practice",
+            1: "Thingamajig Arbitration",
+            2: "Gadget Advisory Service",
+        },
+    ),
+    _f1(level1="Second Practice"),
+    _f1(level2="Other Category"),
+    # Same cell text as above, different answer -> one deduped item flagged gold_inconsistent.
+    _f1(level3="Enforcement matters", code="5.0", sali={4: "Whatsit Purchase and Sale"}),
+    # Same cell text as above, both unanswered -> deduped, and *not* an inconsistency.
+    _f1(level3="General advice", code="6.0"),
+    # Answered in one place, unanswered in another -> deduped, and *not* an inconsistency either
+    # (KD7: a blank cell is 'not yet mapped', never a contradiction of a cell that is mapped).
+    _f1(level3="First attribute", code="7.0"),
+    # SALI NOTES flag words -> a low-confidence pre-flag, i.e. a section-C suspect.
+    _f1(
+        level3="Unsettled matters",
+        code="8.0",
+        sali={1: "Sprocket Litigation Practice"},
+        notes="discuss with the team",
+    ),
+]
+
+
 # --- Synthetic term-set sheets (firm-2 shape) -----------------------------------------------
 
 FIRM2_WORKTYPE_HEADER: list[str | None] = [

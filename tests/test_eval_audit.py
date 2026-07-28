@@ -12,19 +12,33 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from fixtures.eval_synthetic_workbook import (
+    FIRM1_V2_ROWS,
+    W_ADVISORY,
+    W_ARBITRATION,
+    W_ENFORCEMENT,
+    W_LITIGATION,
+    W_PURCHASE,
+    synthetic_index,
+)
 from folio_eval.answer_rule import RankedCandidate
 from folio_eval.audit import (
     GOLD_VARIANTS,
     NEW_GOLD_CAP,
+    SECTIONS_V2,
     SUSPECT_ROW_CAP,
     DecisionRecord,
     LabelProposal,
     SplitFacts,
     append_decisions,
     build_packet,
+    build_packet_v2,
     fold_decisions,
+    fold_granular_decisions,
+    gold_row_v2_from_json,
     load_decisions,
     load_gold_rows,
+    packet_v2_from_json,
     propose_for_label,
     rejection_key,
     rejection_memory,
@@ -33,7 +47,13 @@ from folio_eval.audit import (
     variant_stats,
     variant_table,
 )
-from folio_eval.packet_render import render_sheet, write_packet
+from folio_eval.gold import build_gold_v2, parse_firm1_v2
+from folio_eval.packet_render import (
+    render_sheet,
+    render_sheet_v2,
+    write_packet,
+    write_packet_v2,
+)
 from folio_eval.resolve_labels import IndexedConcept, LabelIndex
 from folio_eval.splits import sha256_text
 
@@ -906,3 +926,332 @@ def test_decision_ids_are_stable_across_regeneration(rows: list[Any]) -> None:
     first = base_packet(rows)
     second = base_packet(rows)
     assert [row.decision_id for row in first.rows] == [row.decision_id for row in second.rows]
+
+
+# --------------------------------------------------------------------------------------
+# Gold v2 — the per-cell packet and the granular fold
+# --------------------------------------------------------------------------------------
+
+
+@pytest.fixture
+def v2_gold() -> tuple[Any, list[Any]]:
+    """The synthetic per-cell build, plus its rows as the packet reads them back."""
+    build = build_gold_v2([parse_firm1_v2(FIRM1_V2_ROWS, firm="firm1")], synthetic_index())
+    return build, [gold_row_v2_from_json(item.to_json()) for item in build.items]
+
+
+def _row_by_text(rows: list[Any], text: str) -> Any:
+    return next(row for row in rows if row.input_text == text)
+
+
+def v2_packet(
+    build: Any,
+    rows: list[Any],
+    *,
+    predictions: dict[str, Any] | None = None,
+    prefill_rulings: dict[str, str] | None = None,
+    **kwargs: Any,
+) -> Any:
+    return build_packet_v2(
+        gold_rows=rows,
+        pairing_rows=build.pairing_rows,
+        inconsistent_groups=build.inconsistent_groups,
+        suspects=build.suspects,
+        predictions=predictions or {},
+        definitions=DEFINITIONS,
+        value_iris={value.raw: value.iri for row in rows for value in row.values},
+        prefill_rulings=prefill_rulings,
+        ontology_sha256=ONTOLOGY_SHA,
+        gold_id="v2-test",
+        gold_version=2,
+        parent_gold_id="v1-test",
+        generated_at="2026-07-28T00:00:00Z",
+        **kwargs,
+    )
+
+
+def test_v2_packet_carries_the_pairing_and_consistency_sections(v2_gold: tuple[Any, list[Any]]) -> None:
+    """Sections A and B exist because the per-cell derivation cannot decide them alone."""
+    build, rows = v2_gold
+    packet = v2_packet(build, rows)
+    assert packet.meta["sections"] == list(SECTIONS_V2)
+
+    pairing = packet.section("pairing")
+    assert len(pairing) == 1
+    assignments = pairing[0].extra["assignments"]
+    heuristic = {entry["input"]: entry["iris"] for entry in assignments["heuristic"]}
+    alternative = {entry["input"]: entry["iris"] for entry in assignments["alternative"]}
+    assert heuristic["Uneven Category"] == [W_LITIGATION]
+    assert sorted(heuristic["Odd attribute"]) == sorted([W_ARBITRATION, W_ADVISORY])
+    assert alternative["Uneven Category"] == []
+    assert sorted(alternative["Odd attribute"]) == sorted(
+        [W_LITIGATION, W_ARBITRATION, W_ADVISORY]
+    )
+
+    consistency = packet.section("consistency")
+    assert len(consistency) == 1
+    assert consistency[0].surface_label == "Enforcement matters"
+    assert {str(entry["iri"]) for entry in consistency[0].gold} == {W_ENFORCEMENT, W_PURCHASE}
+    assert len(consistency[0].extra["instances"]) == 2
+
+
+def test_v2_packet_grades_every_concept_individually(v2_gold: tuple[Any, list[Any]]) -> None:
+    """Damien's format: one radio pair per gold concept and per pipeline candidate."""
+    build, rows = v2_gold
+    target = _row_by_text(rows, "Enforcement matters")
+    packet = v2_packet(
+        build,
+        rows,
+        predictions={
+            target.item_id: ranked(
+                ("R-pipe", "Enforcement Practice", 100.0, 0.9),
+                ("R-junk", "Office of Water", 90.0, 0.1),
+            )
+        },
+    )
+    row = packet.section("consistency")[0]
+    assert len(row.gold) == 2
+    assert [entry["iri"] for entry in row.pipeline] == ["R-pipe", "R-junk"]
+    # every pipeline candidate carries its own definition snippet, not just the leader
+    assert row.pipeline[0]["definition"]
+    html = render_sheet_v2(packet)
+    assert 'value="keep"' in html and 'value="remove"' in html
+    assert 'value="elevate"' in html and 'value="not_gold"' in html
+    assert 'class="note gold-note"' in html and 'class="note pipeline-note"' in html
+
+
+def test_v2_sheet_is_self_contained_and_renders_the_hierarchy(v2_gold: tuple[Any, list[Any]]) -> None:
+    build, rows = v2_gold
+    packet = v2_packet(build, rows)
+    html = render_sheet_v2(packet)
+    for marker in SECTIONS_V2:
+        assert f'data-section="{marker}"' in html
+    assert "lvl-2" in html and "lvl-3" in html
+    assert "prefers-color-scheme" in html
+    # Nothing is fetched: no external script, stylesheet, font, image, or CSS import. (Gold IRIs
+    # appear as inert ``data-iri`` attributes, which the browser never resolves.)
+    for forbidden in ("<script src=", "<link ", "@import", "url(http", "src=", "href="):
+        assert forbidden not in html
+    assert "Copy decisions" in html and '<textarea id="out" readonly' in html
+
+
+def test_v2_prefilled_ruling_is_carried_forward(v2_gold: tuple[Any, list[Any]]) -> None:
+    """A ruling Damien already made shows up pre-checked instead of being asked again."""
+    build, rows = v2_gold
+    target = _row_by_text(rows, "Unsettled matters")
+    packet = v2_packet(
+        build,
+        rows,
+        predictions={target.item_id: ranked(("R-junk", "Office of Water", 90.0, 0.1))},
+        prefill_rulings={"unsettled matters": "already ruled: gold stands"},
+    )
+    assert packet.section("consistency")[0].extra["prefill"] == {}
+    suspect = next(
+        entry for entry in packet.section("suspect") if entry.item_id == target.item_id
+    )
+    assert suspect.extra["prefill"]["gold"] == {W_LITIGATION: "keep"}
+    assert suspect.extra["prefill"]["pipeline"] == {"R-junk": "not_gold"}
+    assert packet.counts["prefilled_rulings"] == 1
+    html = render_sheet_v2(packet)
+    assert 'value="keep" checked' in html and 'value="not_gold" checked' in html
+
+
+def test_granular_fold_keeps_removes_and_elevates(v2_gold: tuple[Any, list[Any]]) -> None:
+    """The three per-concept verdicts, each landing in gold v3 with its provenance."""
+    build, rows = v2_gold
+    suspect_row = _row_by_text(rows, "Unsettled matters")
+    blank_row = _row_by_text(rows, "General advice")
+    packet = v2_packet(
+        build,
+        rows,
+        eligible_strata={suspect_row.stratum_id, blank_row.stratum_id},
+        predictions={
+            suspect_row.item_id: ranked(
+                ("R-pipe", "Enforcement Practice", 100.0, 0.9),
+                ("R-junk", "Office of Water", 90.0, 0.1),
+            ),
+            blank_row.item_id: ranked(("R-new", "General Advisory", 100.0, 0.9)),
+        },
+    )
+    suspect = next(
+        entry for entry in packet.section("suspect") if entry.item_id == suspect_row.item_id
+    )
+    new_gold = next(
+        entry for entry in packet.section("new_gold") if entry.item_id == blank_row.item_id
+    )
+    result = fold_granular_decisions(
+        rows,
+        {
+            suspect.decision_id: {
+                "gold": {W_LITIGATION: "remove"},
+                "pipeline": {"R-pipe": "elevate", "R-junk": "not_gold"},
+                "gold_note": "the litigation mapping belongs to a sibling cell",
+            },
+            new_gold.decision_id: {"pipeline": {"R-new": "elevate"}},
+        },
+        packet=packet,
+        ontology_sha256=ONTOLOGY_SHA,
+        now="2026-07-28T00:00:00Z",
+    )
+    by_id = {row["item_id"]: row for row in result.rows}
+    assert by_id[suspect_row.item_id]["gold_iris"] == ["R-pipe"]
+    assert by_id[suspect_row.item_id]["provenance"] == "damien_corrected"
+    assert by_id[blank_row.item_id]["gold_iris"] == ["R-new"]
+    assert by_id[blank_row.item_id]["blank"] is False
+    assert by_id[blank_row.item_id]["provenance"] == "pipeline_suggested"
+    assert "pipeline_suggested" in by_id[blank_row.item_id]["flags"]
+    assert result.manifest["gold_version"] == 3
+    assert result.manifest["parent_gold_id"] == "v2-test"
+    assert result.counts["gold_removed"] == 1
+    assert result.counts["pipeline_elevated"] == 2
+    assert result.counts["changed_items"] == 2
+    assert result.manifest["sensitivity_excluded_items"] == 1
+
+
+def test_granular_fold_leaves_unmentioned_gold_alone(v2_gold: tuple[Any, list[Any]]) -> None:
+    """Silence never deletes curated gold — an omitted IRI is kept."""
+    build, rows = v2_gold
+    target = _row_by_text(rows, "Enforcement matters")
+    packet = v2_packet(build, rows)
+    consistency = packet.section("consistency")[0]
+    assert consistency.item_id == target.item_id
+    result = fold_granular_decisions(
+        rows,
+        {consistency.decision_id: {"gold": {W_ENFORCEMENT: "keep"}}},
+        packet=packet,
+        ontology_sha256=ONTOLOGY_SHA,
+    )
+    by_id = {row["item_id"]: row for row in result.rows}
+    assert by_id[target.item_id]["gold_iris"] == sorted([W_ENFORCEMENT, W_PURCHASE])
+    assert result.counts["changed_items"] == 0
+
+
+def test_granular_fold_applies_the_pairing_alternative(v2_gold: tuple[Any, list[Any]]) -> None:
+    """Picking the alternative reading moves the shared row's outputs to the deepest input."""
+    build, rows = v2_gold
+    packet = v2_packet(build, rows)
+    pairing = packet.section("pairing")[0]
+    result = fold_granular_decisions(
+        rows,
+        {pairing.decision_id: {"pairing": "alternative"}},
+        packet=packet,
+        ontology_sha256=ONTOLOGY_SHA,
+    )
+    by_id = {row["item_id"]: row for row in result.rows}
+    heading = _row_by_text(rows, "Uneven Category")
+    leaf = _row_by_text(rows, "Odd attribute")
+    assert by_id[heading.item_id]["gold_iris"] == []
+    assert by_id[heading.item_id]["blank"] is True
+    assert by_id[leaf.item_id]["gold_iris"] == sorted([W_LITIGATION, W_ARBITRATION, W_ADVISORY])
+    assert result.counts["pairing_alternative"] == 1
+
+
+def test_granular_fold_records_per_candidate_rejections(v2_gold: tuple[Any, list[Any]]) -> None:
+    """A 'not gold' verdict becomes rejection memory, so the same proposal never resurfaces."""
+    build, rows = v2_gold
+    target = _row_by_text(rows, "Unsettled matters")
+    packet = v2_packet(
+        build,
+        rows,
+        predictions={target.item_id: ranked(("R-junk", "Office of Water", 90.0, 0.1))},
+    )
+    suspect = next(
+        entry for entry in packet.section("suspect") if entry.item_id == target.item_id
+    )
+    result = fold_granular_decisions(
+        rows,
+        {suspect.decision_id: {"pipeline": {"R-junk": "not_gold"}}},
+        packet=packet,
+        ontology_sha256=ONTOLOGY_SHA,
+    )
+    memory = rejection_memory(result.records, ontology_sha256=ONTOLOGY_SHA)
+    assert rejection_key(target.item_id, ["R-junk"]) in memory
+    reraised = v2_packet(
+        build,
+        rows,
+        predictions={target.item_id: ranked(("R-junk", "Office of Water", 90.0, 0.1))},
+        rejected=memory,
+    )
+    assert all(entry.item_id != target.item_id for entry in reraised.section("suspect"))
+    assert reraised.counts["suppressed_by_rejection_memory"] == 1
+
+
+def test_granular_fold_rejects_unknown_verdicts(v2_gold: tuple[Any, list[Any]]) -> None:
+    build, rows = v2_gold
+    packet = v2_packet(build, rows)
+    suspect = packet.section("suspect")[0]
+    with pytest.raises(ValueError, match="unknown gold verdict"):
+        fold_granular_decisions(
+            rows,
+            {suspect.decision_id: {"gold": {W_LITIGATION: "delete"}}},
+            packet=packet,
+            ontology_sha256=ONTOLOGY_SHA,
+        )
+    with pytest.raises(KeyError):
+        fold_granular_decisions(
+            rows, {"nope": {}}, packet=packet, ontology_sha256=ONTOLOGY_SHA
+        )
+
+
+def test_v2_packet_round_trips_through_json(v2_gold: tuple[Any, list[Any]], tmp_path: Path) -> None:
+    """The fold grades the packet it was rendered from, so gold/pipeline must survive the file."""
+    build, rows = v2_gold
+    target = _row_by_text(rows, "Enforcement matters")
+    packet = v2_packet(
+        build,
+        rows,
+        predictions={target.item_id: ranked(("R-pipe", "Enforcement Practice", 100.0, 0.9))},
+    )
+    paths = write_packet_v2(packet, tmp_path)
+    reloaded = packet_v2_from_json(json.loads(paths["packet"].read_text(encoding="utf-8")))
+    original = {row.decision_id: row for row in packet.rows}
+    for row in reloaded.rows:
+        assert [entry["iri"] for entry in row.gold] == [
+            entry["iri"] for entry in original[row.decision_id].gold
+        ]
+        assert [entry["iri"] for entry in row.pipeline] == [
+            entry["iri"] for entry in original[row.decision_id].pipeline
+        ]
+    assert reloaded.section("pairing")[0].extra["assignments"]
+
+
+def test_a_pipeline_candidate_that_is_already_gold_says_so(v2_gold: tuple[Any, list[Any]]) -> None:
+    """Grading it 'not gold' in the pipeline block must not read as removing curated gold."""
+    build, rows = v2_gold
+    target = _row_by_text(rows, "Unsettled matters")
+    packet = v2_packet(
+        build,
+        rows,
+        predictions={
+            target.item_id: ranked(
+                (W_LITIGATION, "Sprocket Litigation Practice", 100.0, 0.9),
+                ("R-junk", "Office of Water", 90.0, 0.1),
+            )
+        },
+        prefill_rulings={"unsettled matters": "already ruled"},
+    )
+    suspect = next(
+        entry for entry in packet.section("suspect") if entry.item_id == target.item_id
+    )
+    assert suspect.pipeline[0]["already_gold"] is True
+    assert suspect.pipeline[1]["already_gold"] is False
+    # the carried-forward ruling rejects the junk tail only, never the concept gold already names
+    assert suspect.extra["prefill"]["pipeline"] == {"R-junk": "not_gold"}
+    assert "already gold" in render_sheet_v2(packet)
+
+
+def test_confirming_the_pairing_heuristic_changes_nothing(v2_gold: tuple[Any, list[Any]]) -> None:
+    """The sheet ships with the applied reading pre-checked, so an untouched sheet is a no-op."""
+    build, rows = v2_gold
+    packet = v2_packet(build, rows)
+    pairing = packet.section("pairing")[0]
+    result = fold_granular_decisions(
+        rows,
+        {pairing.decision_id: {"pairing": "heuristic"}},
+        packet=packet,
+        ontology_sha256=ONTOLOGY_SHA,
+    )
+    assert result.counts["changed_items"] == 0
+    assert result.counts["pairing_alternative"] == 0
+    before = {row.item_id: sorted(row.gold_iris) for row in rows}
+    assert {row["item_id"]: sorted(row["gold_iris"]) for row in result.rows} == before

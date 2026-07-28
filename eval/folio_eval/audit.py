@@ -129,6 +129,11 @@ def _as_float(value: object) -> float:
     return float(value) if isinstance(value, (int, float)) else 0.0
 
 
+def _as_int(value: object, default: int = 0) -> int:
+    """A JSON integer field read defensively: anything non-numeric reads as ``default``."""
+    return int(value) if isinstance(value, (int, float, str)) and str(value).strip() else default
+
+
 def _items(value: object) -> list[object]:
     """A JSON list field read defensively: anything that is not a list reads as empty."""
     return list(value) if isinstance(value, (list, tuple)) else []
@@ -956,6 +961,9 @@ def build_packet(
         )
 
     counts["suspects_total"] = len(candidates)
+    counts["deferred_to_consistency"] = sum(
+        1 for row in rows if row.section == "consistency" and row.item_id
+    )
     kept, suppressed = _suppress(candidates, memory)
     counts["suppressed_by_rejection_memory"] += suppressed
     kept.sort(key=_suspect_sort_key)
@@ -1094,6 +1102,660 @@ def build_packet(
         overflow=overflow,
         meta=meta,
     )
+
+
+# --------------------------------------------------------------------------------------
+# Gold v2 — the per-cell packet (sections A-E, per-concept granular grading)
+# --------------------------------------------------------------------------------------
+
+#: The v2 sheet's sections, in the order Damien meets them.
+SECTIONS_V2 = ("pairing", "consistency", "suspect", "resolution", "new_gold")
+
+#: The gitignored v2 packet directory.
+DEFAULT_PACKET_DIR_V2 = DEFAULT_DATA_DIR / "reports" / "audit_packet_v2"
+
+#: Per-concept verdicts the v2 sheet emits.
+GOLD_VERDICTS = frozenset({"keep", "remove"})
+PIPELINE_VERDICTS = frozenset({"elevate", "not_gold"})
+PAIRING_CHOICES = frozenset({"heuristic", "alternative"})
+
+#: Rulings Damien already made on the v1 sheet, carried forward into v2 pre-checked (ask
+#: ``folio-resolve-2026-07-28-gold-audit-gate``, q4: "both gold concepts stand; the pipeline junk
+#: tail is a precision defect, not gold"). Keyed by the *normalized input cell text*, because the
+#: re-derivation gave every row a new decision id. The keys are firm surface strings, so the map
+#: lives in a gitignored file (KTD1) and is empty unless that file is present.
+DEFAULT_PREFILL_PATH = DEFAULT_DATA_DIR / "gold" / "prefill_rulings_v2.json"
+
+
+def load_prefill_rulings(path: Path = DEFAULT_PREFILL_PATH) -> dict[str, str]:
+    """``{normalized input text: why it is pre-filled}``. Missing file = no pre-fills."""
+    if not path.exists():
+        return {}
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, Mapping):
+        raise ValueError(f"prefill rulings file is not a JSON object: {path}")
+    return {label_key(str(key)): str(value) for key, value in payload.items()}
+
+
+@dataclass(frozen=True, slots=True)
+class GoldRowV2:
+    """A gold v2 row: a deduped input cell with its instances and its family id."""
+
+    item_id: str
+    firm: str
+    stratum: str
+    stratum_id: str
+    family_id: str
+    level: int
+    levels: tuple[int, ...]
+    leaf: str
+    input_text: str
+    gold_iris: tuple[str, ...]
+    values: tuple[GoldValue, ...]
+    flags: tuple[str, ...]
+    rules: tuple[str, ...]
+    blank: bool
+    notes: str | None
+    instances: tuple[Mapping[str, object], ...]
+    payload: Mapping[str, object]
+
+    @property
+    def first_path(self) -> tuple[str, ...]:
+        if not self.instances:
+            return ()
+        raw = self.instances[0].get("ancestor_path")
+        return tuple(str(part) for part in _items(raw))
+
+
+def gold_row_v2_from_json(payload: Mapping[str, object]) -> GoldRowV2:
+    """Read one ``gold_v2.jsonl`` line. Shares :func:`gold_row_from_json`'s value parsing."""
+    base = gold_row_from_json(payload)
+    instances_raw = payload.get("instances") or []
+    instances = tuple(
+        dict(entry) for entry in _items(instances_raw) if isinstance(entry, Mapping)
+    )
+    levels_raw = payload.get("levels") or []
+    return GoldRowV2(
+        item_id=base.item_id,
+        firm=base.firm,
+        stratum=base.stratum,
+        stratum_id=base.stratum_id,
+        family_id=str(payload.get("family_id", "")),
+        level=_as_int(payload.get("level")),
+        levels=tuple(_as_int(value) for value in _items(levels_raw)),
+        leaf=base.leaf,
+        input_text=base.input_text,
+        gold_iris=base.gold_iris,
+        values=base.values,
+        flags=base.flags,
+        rules=base.rules,
+        blank=base.blank,
+        notes=base.notes,
+        instances=instances,
+        payload=base.payload,
+    )
+
+
+def load_gold_rows_v2(path: Path) -> list[GoldRowV2]:
+    rows: list[GoldRowV2] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if line.strip():
+            rows.append(gold_row_v2_from_json(json.loads(line)))
+    return rows
+
+
+def _gold_block(
+    row: GoldRowV2 | None, iris: Sequence[str], definitions: Mapping[str, str]
+) -> tuple[Mapping[str, object], ...]:
+    """Every gold concept as its own gradeable entry (label, IRI, definition snippet)."""
+    by_iri = {value.iri: value for value in row.values} if row is not None else {}
+    out: list[Mapping[str, object]] = []
+    for iri in sorted(iris):
+        value = by_iri.get(iri)
+        out.append(
+            {
+                "iri": iri,
+                "label": value.raw if value else "",
+                "column": value.column if value else "",
+                "branch": value.branch if value else "",
+                "definition": definition_snippet(definitions.get(iri)),
+            }
+        )
+    return tuple(out)
+
+
+def _pipeline_block(
+    candidates: Sequence[RankedCandidate],
+    definitions: Mapping[str, str],
+    *,
+    shown: int = PIPELINE_CANDIDATES_SHOWN,
+    gold_iris: Iterable[str] = (),
+) -> tuple[Mapping[str, object], ...]:
+    """Every pipeline candidate as its own gradeable entry — definitions on **all** of them.
+
+    A candidate the workbook already names as gold is marked ``already_gold`` so the sheet can say
+    so: grading it "not gold" in the pipeline block must never read as removing it from gold (the
+    gold block above is the only place a curated concept can be removed).
+    """
+    gold = frozenset(gold_iris)
+    return tuple(
+        {
+            "iri": candidate.iri,
+            "label": candidate.label,
+            "score": candidate.score,
+            "probability": round(candidate.probability, 6),
+            "rank": candidate.rank,
+            "extraction_path": candidate.extraction_path,
+            "definition": definition_snippet(definitions.get(candidate.iri)),
+            "already_gold": candidate.iri in gold,
+        }
+        for candidate in candidates[:shown]
+    )
+
+
+def _instances_json(row: GoldRowV2) -> list[Mapping[str, object]]:
+    return [
+        {
+            "path": [str(part) for part in _items(instance.get("ancestor_path"))],
+            "level": _as_int(instance.get("level")),
+            "row": _as_int(instance.get("row")),
+            "stratum": str(instance.get("stratum", "")),
+            "gold_iris": [str(iri) for iri in _items(instance.get("gold_iris"))],
+            "gold_labels_raw": [str(label) for label in _items(instance.get("gold_labels_raw"))],
+        }
+        for instance in row.instances
+    ]
+
+
+def _prefill_for(
+    row: GoldRowV2,
+    gold: Sequence[Mapping[str, object]],
+    pipeline: Sequence[Mapping[str, object]],
+    rulings: Mapping[str, str],
+) -> dict[str, object]:
+    """Damien's carried-forward rulings, as per-concept verdicts the sheet renders pre-checked."""
+    note = rulings.get(label_key(row.input_text))
+    if not note:
+        return {}
+    return {
+        "gold": {str(entry["iri"]): "keep" for entry in gold},
+        "pipeline": {
+            str(entry["iri"]): "not_gold" for entry in pipeline if not entry.get("already_gold")
+        },
+        "note": note,
+    }
+
+
+def _hierarchy_key(row: GoldRowV2) -> tuple[str, tuple[str, ...], int, str]:
+    """Sort key that renders a section as the taxonomy reads: group, then path, then level."""
+    return (row.stratum, row.first_path, row.level, label_key(row.input_text))
+
+
+def build_packet_v2(
+    *,
+    gold_rows: Sequence[GoldRowV2],
+    pairing_rows: Sequence[Mapping[str, object]] = (),
+    inconsistent_groups: Sequence[Mapping[str, object]] = (),
+    suspects: Sequence[Mapping[str, object]] = (),
+    resolution_batch: Sequence[Mapping[str, object]] = (),
+    cluster_rows: Sequence[Mapping[str, object]] = (),
+    predictions: Mapping[str, Sequence[RankedCandidate]] | None = None,
+    definitions: Mapping[str, str] | None = None,
+    label_proposals: Mapping[str, Sequence[LabelProposal]] | None = None,
+    value_iris: Mapping[str, str] | None = None,
+    frozen_ids: Iterable[str] = (),
+    rejected: Iterable[str] = (),
+    eligible_strata: Iterable[str] | None = None,
+    slice_by_item: Mapping[str, str] | None = None,
+    split: SplitFacts | None = None,
+    metrics: Mapping[str, object] | None = None,
+    prefill_rulings: Mapping[str, str] | None = None,
+    ontology_sha256: str = "",
+    gold_version: int = 2,
+    gold_id: str = "",
+    parent_gold_id: str = "",
+    harness_config_sha256: str = "",
+    generated_at: str | None = None,
+    suspect_cap: int = SUSPECT_ROW_CAP,
+    new_gold_cap: int = NEW_GOLD_CAP,
+    extra_meta: Mapping[str, object] | None = None,
+) -> Packet:
+    """Assemble the v2 gate: five sections, every concept individually gradeable."""
+    predictions = predictions or {}
+    definitions = definitions or {}
+    label_proposals = label_proposals or {}
+    value_iris = value_iris or {}
+    slice_by_item = slice_by_item or {}
+    rulings = prefill_rulings or {}
+    frozen = frozenset(frozen_ids)
+    memory = frozenset(rejected)
+    by_id = {row.item_id: row for row in gold_rows}
+    by_text = {label_key(row.input_text): row for row in gold_rows}
+    eligible = (
+        frozenset(eligible_strata)
+        if eligible_strata is not None
+        else frozenset(row.stratum_id for row in gold_rows if not row.blank and row.gold_iris)
+    )
+
+    counts: dict[str, int] = {
+        "pairing_rows": 0,
+        "consistency_groups": 0,
+        "suspects_total": 0,
+        "suspects_shown": 0,
+        "score_driven_suspects": 0,
+        "frozen_suspects_barred": 0,
+        "suppressed_by_rejection_memory": 0,
+        "resolution_total": 0,
+        "resolution_with_candidates": 0,
+        "resolution_coverage_gaps": 0,
+        "new_gold_pool": 0,
+        "new_gold_shown": 0,
+        "prefilled_rulings": 0,
+    }
+    overflow: dict[str, int] = {}
+    rows: list[PacketRow] = []
+
+    # -- [A] shared-row pairing adjudications -------------------------------------------
+    for entry in sorted(
+        pairing_rows, key=lambda record: (str(record.get("stratum", "")), _as_int(record.get("row")))
+    ):
+        inputs = [dict(value) for value in _items(entry.get("inputs")) if isinstance(value, Mapping)]
+        heuristic = [[str(text) for text in _items(block)] for block in _items(entry.get("heuristic"))]
+        alternative = [
+            [str(text) for text in _items(block)] for block in _items(entry.get("alternative"))
+        ]
+        targets = [by_text.get(label_key(str(value.get("text", "")))) for value in inputs]
+        assignments = {
+            "heuristic": [
+                {
+                    "item_id": target.item_id if target else "",
+                    "input": str(inputs[position].get("text", "")),
+                    "level": _as_int(inputs[position].get("level")),
+                    "labels": labels,
+                    "iris": sorted({value_iris[text] for text in labels if text in value_iris}),
+                }
+                for position, labels in enumerate(heuristic)
+                for target in (targets[position],)
+            ],
+            "alternative": [
+                {
+                    "item_id": target.item_id if target else "",
+                    "input": str(inputs[position].get("text", "")),
+                    "level": _as_int(inputs[position].get("level")),
+                    "labels": labels,
+                    "iris": sorted({value_iris[text] for text in labels if text in value_iris}),
+                }
+                for position, labels in enumerate(alternative)
+                for target in (targets[position],)
+            ],
+        }
+        counts["pairing_rows"] += 1
+        rows.append(
+            PacketRow(
+                decision_id=f"pairing:{_digest(str(entry.get('firm', '')), str(entry.get('row', '')))}",
+                section="pairing",
+                item_id="",
+                firm=str(entry.get("firm", "")),
+                stratum=str(entry.get("stratum", "")),
+                stratum_id="",
+                ancestor_path=tuple(str(value.get("text", "")) for value in inputs),
+                surface_label=" + ".join(str(value.get("text", "")) for value in inputs),
+                input_text="",
+                slice_name="",
+                reason_class="pairing_ambiguous",
+                suggested_action=(
+                    "The row's input cells and output cells do not line up 1:1. Pick the reading: "
+                    "heuristic (first output block to the first input, the rest to the deepest "
+                    "input) or alternative (every output belongs to the deepest input)."
+                ),
+                extra={
+                    "row": _as_int(entry.get("row")),
+                    "inputs": inputs,
+                    "blocks": [
+                        dict(block) for block in _items(entry.get("blocks")) if isinstance(block, Mapping)
+                    ],
+                    "assignments": assignments,
+                },
+            )
+        )
+
+    # -- [B] duplicate-consistency adjudications ----------------------------------------
+    for entry in sorted(inconsistent_groups, key=lambda record: str(record.get("input_text", ""))):
+        item_id = str(entry.get("item_id", ""))
+        row = by_id.get(item_id)
+        if row is None:
+            continue
+        counts["consistency_groups"] += 1
+        ranked = list(predictions.get(item_id, ()))
+        gold_entries = _gold_block(row, row.gold_iris, definitions)
+        pipeline_entries = _pipeline_block(ranked, definitions, gold_iris=row.gold_iris)
+        prefill = _prefill_for(row, gold_entries, pipeline_entries, rulings)
+        if prefill:
+            counts["prefilled_rulings"] += 1
+        rows.append(
+            PacketRow(
+                decision_id=f"consistency:{item_id}",
+                section="consistency",
+                item_id=item_id,
+                firm=row.firm,
+                stratum=row.stratum,
+                stratum_id=row.stratum_id,
+                ancestor_path=row.first_path,
+                surface_label=row.input_text,
+                input_text=row.input_text,
+                slice_name=slice_by_item.get(item_id, ""),
+                reason_class="gold_inconsistent",
+                suggested_action=(
+                    "The same input cell was answered differently in different places. Gold is the "
+                    "union today — keep the concepts that belong to this input and remove the rest."
+                ),
+                gold=gold_entries,
+                pipeline=pipeline_entries,
+                proposed_iris=tuple(candidate.iri for candidate in ranked[:1]),
+                notes_text=row.notes,
+                extra={
+                    "level": row.level,
+                    "levels": list(row.levels),
+                    "instances": _instances_json(row),
+                    "union_gold_iris": [str(iri) for iri in _items(entry.get("union_gold_iris"))],
+                    "hierarchy": list(_hierarchy_key(row)[1]),
+                    "prefill": prefill,
+                },
+            )
+        )
+
+    # -- [C] suspects, regraded per concept ---------------------------------------------
+    # An item already adjudicated in section B is not asked again here: one item, one decision,
+    # so the fold can never receive two conflicting verdicts for the same gold set.
+    candidates: list[PacketRow] = []
+    seen_suspects: set[str] = {row.item_id for row in rows if row.section == "consistency"}
+    for entry in suspects:
+        item_id = str(entry.get("item_id", ""))
+        row = by_id.get(item_id)
+        if row is None or item_id in seen_suspects:
+            continue
+        seen_suspects.add(item_id)
+        reasons = [str(reason) for reason in _items(entry.get("reasons"))]
+        reason_class = reasons[0].split(":", 1)[0] if reasons else "gold_suspect"
+        ranked = list(predictions.get(item_id, ()))
+        gold_entries = _gold_block(row, row.gold_iris, definitions)
+        pipeline_entries = _pipeline_block(ranked, definitions, gold_iris=row.gold_iris)
+        prefill = _prefill_for(row, gold_entries, pipeline_entries, rulings)
+        if prefill:
+            counts["prefilled_rulings"] += 1
+        confidence = ranked[0].probability if ranked else 0.0
+        candidates.append(
+            PacketRow(
+                decision_id=f"suspect:{item_id}:{_digest(reason_class)}",
+                section="suspect",
+                item_id=item_id,
+                firm=row.firm,
+                stratum=row.stratum,
+                stratum_id=row.stratum_id,
+                ancestor_path=row.first_path,
+                surface_label=row.input_text,
+                input_text=row.input_text,
+                slice_name=slice_by_item.get(item_id, ""),
+                reason_class=reason_class,
+                suggested_action=(
+                    "Grade each concept on its own: keep the gold that belongs to this input cell, "
+                    "remove what does not, and elevate any pipeline candidate that should be gold."
+                ),
+                gold=gold_entries,
+                pipeline=pipeline_entries,
+                proposed_iris=tuple(candidate.iri for candidate in ranked[:1]),
+                notes_text=row.notes,
+                confidence=confidence,
+                label_frequency=len(row.instances),
+                sort_score=confidence * max(len(row.instances), 1),
+                extra={
+                    "level": row.level,
+                    "levels": list(row.levels),
+                    "instances": _instances_json(row),
+                    "reasons": reasons,
+                    "source": "gold_builder",
+                    "prefill": prefill,
+                },
+            )
+        )
+
+    for entry in _score_driven_suspects_v2(cluster_rows, by_id):
+        item_id = str(entry["item_id"])
+        if item_id in seen_suspects:
+            continue
+        if item_id in frozen:
+            counts["frozen_suspects_barred"] += 1
+            continue
+        row = by_id.get(item_id)
+        if row is None:
+            continue
+        seen_suspects.add(item_id)
+        counts["score_driven_suspects"] += 1
+        ranked = list(predictions.get(item_id, ()))
+        gold_entries = _gold_block(row, row.gold_iris, definitions)
+        pipeline_entries = _pipeline_block(ranked, definitions, gold_iris=row.gold_iris)
+        prefill = _prefill_for(row, gold_entries, pipeline_entries, rulings)
+        if prefill:
+            counts["prefilled_rulings"] += 1
+        confidence = ranked[0].probability if ranked else 0.0
+        candidates.append(
+            PacketRow(
+                decision_id=f"suspect:{item_id}:{_digest('own_cell_synonymy')}",
+                section="suspect",
+                item_id=item_id,
+                firm=row.firm,
+                stratum=row.stratum,
+                stratum_id=row.stratum_id,
+                ancestor_path=row.first_path,
+                surface_label=row.input_text,
+                input_text=row.input_text,
+                slice_name=slice_by_item.get(item_id, str(entry.get("slice", ""))),
+                reason_class="own_cell_synonymy",
+                suggested_action=(
+                    "This cell's gold shares no word with the cell text. Keep it if the mapping is "
+                    "a genuine synonym; remove it if the workbook is wrong."
+                ),
+                gold=gold_entries,
+                pipeline=pipeline_entries,
+                proposed_iris=tuple(candidate.iri for candidate in ranked[:1]),
+                notes_text=row.notes,
+                confidence=confidence,
+                label_frequency=len(row.instances),
+                sort_score=confidence * max(len(row.instances), 1),
+                extra={
+                    "level": row.level,
+                    "levels": list(row.levels),
+                    "instances": _instances_json(row),
+                    "source": "cluster_triage",
+                    "prefill": prefill,
+                },
+            )
+        )
+
+    counts["suspects_total"] = len(candidates)
+    kept, suppressed = _suppress(candidates, memory)
+    counts["suppressed_by_rejection_memory"] += suppressed
+    kept.sort(key=_suspect_sort_key)
+    shown, spilled = kept[:suspect_cap], kept[suspect_cap:]
+    for spill in spilled:
+        overflow[spill.reason_class] = overflow.get(spill.reason_class, 0) + 1
+    counts["suspects_shown"] = len(shown)
+    # Rendered in taxonomy order, chosen by confidence x instance count.
+    shown.sort(key=lambda entry: (entry.stratum, entry.ancestor_path, entry.extra.get("level", 0), entry.input_text))
+    rows.extend(shown)
+
+    # -- [D] the R2 resolution batch ----------------------------------------------------
+    seen_resolution: set[str] = set()
+    by_label: dict[str, list[str]] = {}
+    for entry in resolution_batch:
+        key_label = str(entry.get("normalized") or entry.get("raw") or "")
+        holder = by_label.setdefault(key_label, [])
+        holder_id = str(entry.get("item_id", ""))
+        if holder_id and holder_id not in holder:
+            holder.append(holder_id)
+    for entry in resolution_batch:
+        normalized = str(entry.get("normalized") or entry.get("raw") or "")
+        item_id = str(entry.get("item_id", ""))
+        key = f"{normalized}|{entry.get('reason', '')}"
+        if key in seen_resolution:
+            continue
+        seen_resolution.add(key)
+        counts["resolution_total"] += 1
+        proposals = tuple(label_proposals.get(normalized, ()))
+        reason_class = str(entry.get("reason", "unresolved"))
+        if proposals:
+            counts["resolution_with_candidates"] += 1
+        else:
+            counts["resolution_coverage_gaps"] += 1
+            reason_class = "folio_coverage_gap"
+        gold_row = by_id.get(item_id)
+        rows.append(
+            PacketRow(
+                decision_id=f"resolution:{_digest(normalized, str(entry.get('reason', '')))}",
+                section="resolution",
+                item_id=item_id,
+                firm=str(entry.get("firm", "")),
+                stratum=str(entry.get("stratum", "")),
+                stratum_id=gold_row.stratum_id if gold_row else "",
+                ancestor_path=tuple(str(part) for part in _items(entry.get("ancestor_path"))),
+                surface_label=normalized,
+                input_text=gold_row.input_text if gold_row else str(entry.get("leaf", "")),
+                slice_name=slice_by_item.get(item_id, ""),
+                reason_class=reason_class,
+                suggested_action=(
+                    "Elevate the FOLIO concept this gold label meant; leave every proposal at "
+                    "'not gold' when FOLIO has no concept for it (recorded as a coverage gap)."
+                ),
+                pipeline=tuple(
+                    {
+                        "iri": proposal.iri,
+                        "label": proposal.label,
+                        "score": proposal.score,
+                        "probability": round(proposal.score / 100.0, 6),
+                        "rank": position + 1,
+                        "extraction_path": proposal.method,
+                        "definition": definition_snippet(definitions.get(proposal.iri)),
+                    }
+                    for position, proposal in enumerate(proposals)
+                ),
+                proposed_iris=tuple(proposal.iri for proposal in proposals[:1]),
+                confidence=proposals[0].score / 100 if proposals else 0.0,
+                extra={
+                    "raw": str(entry.get("raw", "")),
+                    "column": str(entry.get("column", "")),
+                    "parse_branch": str(entry.get("parse_branch", "")),
+                    "occurrences": len(by_label.get(normalized, ())),
+                    "item_ids": list(by_label.get(normalized, ())),
+                    "level": gold_row.level if gold_row else 0,
+                },
+            )
+        )
+
+    # -- [E] new-gold candidates (KTD5) -------------------------------------------------
+    pool: list[PacketRow] = []
+    for row in gold_rows:
+        if not row.blank or row.stratum_id not in eligible:
+            continue
+        ranked = list(predictions.get(row.item_id, ()))
+        if not ranked:
+            continue
+        counts["new_gold_pool"] += 1
+        exact_label = label_key(row.input_text) == label_key(ranked[0].label)
+        pool.append(
+            PacketRow(
+                decision_id=f"new_gold:{row.item_id}",
+                section="new_gold",
+                item_id=row.item_id,
+                firm=row.firm,
+                stratum=row.stratum,
+                stratum_id=row.stratum_id,
+                ancestor_path=row.first_path,
+                surface_label=row.input_text,
+                input_text=row.input_text,
+                slice_name=slice_by_item.get(row.item_id, ""),
+                reason_class="new_gold_candidate",
+                suggested_action=(
+                    "This input cell has no curated mapping. Elevate any candidate that should be "
+                    "gold (tagged provenance=pipeline_suggested); leave the rest at 'not gold'."
+                ),
+                pipeline=_pipeline_block(ranked, definitions, gold_iris=row.gold_iris),
+                proposed_iris=tuple(candidate.iri for candidate in ranked[:1]),
+                notes_text=row.notes,
+                confidence=ranked[0].probability,
+                label_frequency=len(row.instances),
+                sort_score=ranked[0].probability,
+                extra={
+                    "level": row.level,
+                    "levels": list(row.levels),
+                    "instances": _instances_json(row),
+                    "source": "blank_cell",
+                    "exact_label_match": exact_label,
+                    "top_score": ranked[0].score,
+                    "candidates_ranked": len(ranked),
+                },
+            )
+        )
+    pool, suppressed_new = _suppress(pool, memory)
+    counts["suppressed_by_rejection_memory"] += suppressed_new
+    pool.sort(key=_new_gold_sort_key)
+    counts["new_gold_shown"] = min(len(pool), new_gold_cap)
+    chosen_new = pool[:new_gold_cap]
+    chosen_new.sort(key=lambda entry: (entry.stratum, entry.ancestor_path, entry.input_text))
+    rows.extend(chosen_new)
+
+    meta: dict[str, object] = {
+        "gold_id": gold_id,
+        "gold_version": gold_version,
+        "parent_gold_id": parent_gold_id,
+        "derivation": "per_cell_v2",
+        "ontology_cache_sha256": ontology_sha256,
+        "harness_config_sha256": harness_config_sha256,
+        "generated_at": generated_at or _now(),
+        "suspect_cap": suspect_cap,
+        "new_gold_cap": new_gold_cap,
+        "sections": list(SECTIONS_V2),
+        "metrics": dict(metrics or {}),
+        "split": split.to_json() if split else {},
+    }
+    meta.update(extra_meta or {})
+    return Packet(
+        rows=tuple(rows),
+        variants=(),
+        replay={},
+        split=split,
+        counts=counts,
+        overflow=overflow,
+        meta=meta,
+    )
+
+
+def _score_driven_suspects_v2(
+    cluster_rows: Sequence[Mapping[str, object]], by_id: Mapping[str, GoldRowV2]
+) -> list[dict[str, object]]:
+    """v2 has no inherited gold, so every zero-overlap synonymy miss is an own-cell suspect."""
+    grouped: dict[str, dict[str, object]] = {}
+    for entry in cluster_rows:
+        if str(entry.get("kind", "")) != "fn" or str(entry.get("cluster", "")) != "synonymy":
+            continue
+        signals = entry.get("signals")
+        jaccard = 0.0
+        if isinstance(signals, Mapping):
+            jaccard = float(signals.get("max_token_jaccard", 0.0) or 0.0)
+        if jaccard > 0.0:
+            continue
+        item_id = str(entry.get("item_id", ""))
+        if item_id not in by_id:
+            continue
+        gold_iri = str(entry.get("gold_iri", ""))
+        bucket = grouped.setdefault(
+            item_id,
+            {"item_id": item_id, "gold_iris": [], "slice": str(entry.get("slice", ""))},
+        )
+        iris = bucket["gold_iris"]
+        assert isinstance(iris, list)
+        if gold_iri and gold_iri not in iris:
+            iris.append(gold_iri)
+    return [grouped[item_id] for item_id in sorted(grouped)]
 
 
 def _suspect_action(reason_class: str, proposed: Sequence[str]) -> str:
@@ -1337,6 +1999,215 @@ def fold_decisions(
     )
 
 
+# --------------------------------------------------------------------------------------
+# The granular fold: gold v3 from per-concept verdicts (KTD6 v2 sheet)
+# --------------------------------------------------------------------------------------
+
+
+def _verdicts(decision: Mapping[str, object], key: str, allowed: frozenset[str]) -> dict[str, str]:
+    raw = decision.get(key) or {}
+    if not isinstance(raw, Mapping):
+        raise ValueError(f"{key} must be an object of {{iri: verdict}}, got {type(raw).__name__}")
+    out: dict[str, str] = {}
+    for iri, verdict in raw.items():
+        text = str(verdict)
+        if text not in allowed:
+            raise ValueError(f"unknown {key} verdict {text!r} (expected one of {sorted(allowed)})")
+        out[str(iri)] = text
+    return out
+
+
+def fold_granular_decisions(
+    gold_rows: Sequence[GoldRowV2],
+    decisions: Mapping[str, Mapping[str, object]],
+    *,
+    packet: Packet,
+    ontology_sha256: str,
+    now: str | None = None,
+    parent_gold_id: str | None = None,
+) -> FoldResult:
+    """Apply the v2 sheet's per-concept verdicts and emit gold v3 + manifest + decision records.
+
+    Each decision is ``{gold: {iri: keep|remove}, pipeline: {iri: elevate|not_gold},
+    pairing?: heuristic|alternative, gold_note?, pipeline_note?}``. A gold IRI the sheet did not
+    mention is **kept** — silence never deletes curated gold. A ``not_gold`` verdict becomes a
+    rejection record so the same proposal is suppressed on the next triage (KTD9).
+    """
+    stamp = now or _now()
+    rows_by_decision = {row.decision_id: row for row in packet.rows}
+    parent = parent_gold_id or str(packet.meta.get("gold_id", ""))
+    base_version = _as_version(packet.meta.get("gold_version", 2))
+    next_version = base_version + 1
+
+    current_by_item = {row.item_id: set(row.gold_iris) for row in gold_rows}
+    replacements: dict[str, tuple[tuple[str, ...], str]] = {}
+    additions: dict[str, set[str]] = {}
+    records: list[DecisionRecord] = []
+    counts: dict[str, int] = {
+        "accepted": 0,
+        "rejected": 0,
+        "edited": 0,
+        "policy_decisions": 0,
+        "carried_forward": 0,
+        "changed_items": 0,
+        "gold_kept": 0,
+        "gold_removed": 0,
+        "pipeline_elevated": 0,
+        "pipeline_rejected": 0,
+        "pairing_alternative": 0,
+    }
+
+    for decision_id in sorted(decisions):
+        decision = decisions[decision_id]
+        row = rows_by_decision.get(decision_id)
+        if row is None:
+            raise KeyError(f"no packet row for decision id {decision_id!r}")
+        gold_verdicts = _verdicts(decision, "gold", GOLD_VERDICTS)
+        pipeline_verdicts = _verdicts(decision, "pipeline", PIPELINE_VERDICTS)
+        counts["gold_removed"] += sum(1 for v in gold_verdicts.values() if v == "remove")
+        counts["gold_kept"] += sum(1 for v in gold_verdicts.values() if v == "keep")
+        counts["pipeline_elevated"] += sum(1 for v in pipeline_verdicts.values() if v == "elevate")
+        counts["pipeline_rejected"] += sum(1 for v in pipeline_verdicts.values() if v == "not_gold")
+        elevated = {iri for iri, verdict in pipeline_verdicts.items() if verdict == "elevate"}
+        offered = tuple(sorted(str(entry["iri"]) for entry in row.pipeline))
+        resulting: tuple[str, ...] = ()
+        action = "accept"
+
+        if row.section == "pairing":
+            choice = str(decision.get("pairing", "heuristic"))
+            if choice not in PAIRING_CHOICES:
+                raise ValueError(
+                    f"decision {decision_id}: pairing must be one of {sorted(PAIRING_CHOICES)}"
+                )
+            counts["policy_decisions"] += 1
+            if choice == "alternative":
+                counts["pairing_alternative"] += 1
+                action = "edit"
+            assignments = row.extra.get("assignments")
+            picked = (
+                assignments.get(choice, []) if isinstance(assignments, Mapping) else []
+            )
+            for entry in _items(picked):
+                if not isinstance(entry, Mapping):
+                    continue
+                target = str(entry.get("item_id", ""))
+                if not target:
+                    continue
+                iris = tuple(sorted(str(iri) for iri in _items(entry.get("iris"))))
+                resulting = tuple(sorted({*resulting, *iris}))
+                if set(iris) == current_by_item.get(target, set()):
+                    continue  # this reading is the one already applied: nothing to rewrite
+                replacements[target] = (iris, PROVENANCE_CORRECTED)
+        elif row.section == "resolution":
+            if elevated:
+                action = "edit"
+                for target in _resolution_targets(row):
+                    additions.setdefault(target, set()).update(elevated)
+            else:
+                action = "reject"
+            resulting = tuple(sorted(elevated))
+        else:
+            current = {str(entry["iri"]) for entry in row.gold}
+            kept = {iri for iri in current if gold_verdicts.get(iri, "keep") == "keep"}
+            resulting = tuple(sorted(kept | elevated))
+            if set(resulting) != current:
+                action = "edit"
+                provenance = (
+                    PROVENANCE_PIPELINE if not current and elevated else PROVENANCE_CORRECTED
+                )
+                if row.item_id:
+                    replacements[row.item_id] = (resulting, provenance)
+
+        counts[{"accept": "accepted", "reject": "rejected", "edit": "edited"}[action]] += 1
+        records.append(
+            DecisionRecord(
+                decision_id=decision_id,
+                item_id=row.item_id,
+                section=row.section,
+                action=action,
+                reason_class=row.reason_class,
+                gold_version=base_version,
+                ontology_sha256=ontology_sha256,
+                proposed_iris=offered,
+                resulting_iris=resulting,
+                recorded_at=stamp,
+            )
+        )
+        # Per-candidate rejection memory: a concept graded 'not gold' never resurfaces unchanged.
+        for iri in sorted(iri for iri, verdict in pipeline_verdicts.items() if verdict == "not_gold"):
+            records.append(
+                DecisionRecord(
+                    decision_id=f"{decision_id}#not_gold:{iri.rsplit('/', 1)[-1]}",
+                    item_id=row.item_id,
+                    section=row.section,
+                    action="reject",
+                    reason_class=row.reason_class,
+                    gold_version=base_version,
+                    ontology_sha256=ontology_sha256,
+                    proposed_iris=(iri,),
+                    resulting_iris=(),
+                    recorded_at=stamp,
+                )
+            )
+
+    out_rows: list[Mapping[str, object]] = []
+    provenance_counts: dict[str, int] = {}
+    sensitivity = 0
+    for gold in gold_rows:
+        payload = dict(gold.payload)
+        payload["gold_version"] = next_version
+        replaced = replacements.get(gold.item_id)
+        added = additions.get(gold.item_id)
+        if replaced is None and not added:
+            provenance = str(payload.get("provenance", PROVENANCE_CURATOR))
+            counts["carried_forward"] += 1
+        else:
+            base = set(replaced[0]) if replaced is not None else set(gold.gold_iris)
+            provenance = replaced[1] if replaced is not None else PROVENANCE_CORRECTED
+            iris = tuple(sorted(base | (added or set())))
+            payload["gold_iris"] = list(iris)
+            payload["blank"] = not iris
+            flags = [str(flag) for flag in _items(payload.get("flags"))]
+            if provenance == PROVENANCE_PIPELINE and PROVENANCE_PIPELINE not in flags:
+                flags.append(PROVENANCE_PIPELINE)
+            payload["flags"] = flags
+            counts["changed_items"] += 1
+        payload["provenance"] = provenance
+        provenance_counts[provenance] = provenance_counts.get(provenance, 0) + 1
+        if provenance == PROVENANCE_PIPELINE:
+            sensitivity += 1
+        out_rows.append(payload)
+
+    text = "".join(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n" for payload in out_rows
+    )
+    content_sha256 = sha256_text(text)
+    scored = [payload for payload in out_rows if payload.get("gold_iris")]
+    manifest: dict[str, object] = {
+        "gold_version": next_version,
+        "gold_id": f"v{next_version}-{content_sha256[:12]}",
+        "parent_gold_id": parent,
+        "derivation": str(packet.meta.get("derivation", "per_cell_v2")),
+        "content_sha256": content_sha256,
+        "ontology_cache_sha256": ontology_sha256,
+        "generated_at": stamp,
+        "items_total": len(out_rows),
+        "items_scored": len(scored),
+        "items_blank": len(out_rows) - len(scored),
+        "gold_iris_total": sum(_iri_count(payload) for payload in scored),
+        "provenance_counts": dict(sorted(provenance_counts.items())),
+        "decision_counts": dict(sorted(counts.items())),
+        "sensitivity_excluded_items": sensitivity,
+    }
+    return FoldResult(
+        rows=tuple(out_rows),
+        manifest=manifest,
+        records=tuple(records),
+        counts=counts,
+        gold_text=text,
+    )
+
+
 def write_gold_version(result: FoldResult, out_dir: Path) -> dict[str, Path]:
     """Write ``gold_vN.jsonl`` + its manifest atomically. Gitignored (KTD1): rows carry surfaces."""
     version = int(result.manifest["gold_version"])  # type: ignore[call-overload]
@@ -1406,6 +2277,230 @@ def _folio_search(folio: Any, index: LabelIndex) -> SearchFn:
     return search
 
 
+def _read_jsonl(path: Path) -> list[dict[str, object]]:  # pragma: no cover - CLI helper
+    if not path.exists():
+        return []
+    return [
+        json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()
+    ]
+
+
+def _slice_metrics(
+    baseline: Path, gold_manifest: Path, split_manifest: Path
+) -> dict[str, object]:  # pragma: no cover - CLI helper
+    """The handful of numbers the v2 sheet compares side by side."""
+    out: dict[str, object] = {}
+    if baseline.exists():
+        payload = json.loads(baseline.read_text(encoding="utf-8"))
+        slices = payload.get("slices") or {}
+        for name, prefix in (("tune", "tune"), ("firm2", "firm2")):
+            entry = slices.get(name) or {}
+            overall = entry.get("overall") or {}
+            out[f"{prefix}_items"] = overall.get("items")
+            out[f"{prefix}_gold_iris"] = overall.get("gold")
+            out[f"{prefix}_precision"] = overall.get("precision")
+            out[f"{prefix}_recall"] = overall.get("recall")
+            out[f"{prefix}_f1"] = overall.get("f1")
+        recall_at_k = (slices.get("tune") or {}).get("recall_at_k") or {}
+        for k in ("1", "5", "10"):
+            out[f"recall_at_{k}"] = recall_at_k.get(k)
+    if gold_manifest.exists():
+        manifest = json.loads(gold_manifest.read_text(encoding="utf-8"))
+        counts = manifest.get("counts") or {}
+        out["items_total"] = counts.get("items_total")
+        out["items_scored"] = counts.get("items_scored")
+    if split_manifest.exists():
+        manifest = json.loads(split_manifest.read_text(encoding="utf-8"))
+        slices = manifest.get("slices") or {}
+        out["frozen"] = (slices.get("frozen") or {}).get("count")
+    return {key: value for key, value in out.items() if value is not None}
+
+
+def _main_v2(args: Any, parser: Any) -> int:  # pragma: no cover - I/O orchestration
+    """The gold-v2 gate: per-cell packet in Damien's format, or the granular fold into v3."""
+    import sys
+
+    from .answer_rule import load_config, rank_candidates
+    from .clusters import collect_raw_candidates, surface_strings
+    from .packet_render import write_packet_v2
+    from .resolve_labels import index_from_folio
+    from .score import PipelineAdapter, build_folio_provider, build_pipeline
+    from .selftest import OntologyPinError, assert_ontology_pin
+    from .splits import FROZEN_SLICE, SLICE_NAMES, load_gold, load_split_manifest
+
+    gold_set = load_gold(args.gold)
+    try:
+        pin = assert_ontology_pin(gold_set.ontology_cache_sha256)
+    except OntologyPinError as error:
+        if not args.allow_ontology_bump:
+            print(f"ABORT: {error}", file=sys.stderr)
+            return 2
+        print(f"WARNING (--allow-ontology-bump): {error}", file=sys.stderr)
+        pin = assert_ontology_pin("")
+    rows = load_gold_rows_v2(args.gold)
+    out_dir = Path(args.out)
+    packet_path = out_dir / "packet.json"
+
+    if args.mode == "fold-v2":
+        if args.decisions is None:
+            print("--decisions is required in fold-v2 mode", file=sys.stderr)
+            return 2
+        packet = packet_v2_from_json(json.loads(packet_path.read_text(encoding="utf-8")))
+        decisions = json.loads(Path(args.decisions).read_text(encoding="utf-8"))
+        result = fold_granular_decisions(
+            rows, decisions, packet=packet, ontology_sha256=pin.sha256
+        )
+        written = write_gold_version(result, Path(args.gold_out))
+        append_decisions(
+            Path(args.decision_log), result.records, surfaces=surface_strings(gold_set)
+        )
+        print(json.dumps(dict(result.manifest), indent=2, sort_keys=True))
+        print(f"wrote {written['gold']} and {written['manifest']}")
+        return 0
+
+    split_manifest = load_split_manifest(args.split_manifest, gold_set)
+    config = load_config(args.config)
+    slice_by_item = {
+        item_id: name for name in SLICE_NAMES for item_id in split_manifest.slices[name]
+    }
+    suspects = _read_jsonl(args.suspects)
+    resolution_batch = _read_jsonl(args.resolution_batch)
+    pairing_rows = _read_jsonl(args.pairing)
+    inconsistent = _read_jsonl(args.inconsistent)
+    cluster_rows = _read_jsonl(args.clusters)
+
+    from folio import FOLIO
+
+    print("loading FOLIO…", file=sys.stderr)
+    folio = FOLIO()
+    provider = build_folio_provider(folio)
+    index = index_from_folio(folio)
+    pipeline = build_pipeline(provider, label_search_limit=args.label_search_limit)
+    adapter = PipelineAdapter(pipeline)
+
+    by_id = {row.item_id: row for row in rows}
+    eligible = frozenset(row.stratum_id for row in rows if not row.blank and row.gold_iris)
+    needed = sorted(
+        {str(entry.get("item_id", "")) for entry in suspects}
+        | {str(entry.get("item_id", "")) for entry in inconsistent}
+        | {str(entry["item_id"]) for entry in _score_driven_suspects_v2(cluster_rows, by_id)}
+        | {row.item_id for row in rows if row.blank and row.stratum_id in eligible}
+    )
+    needed = [item_id for item_id in needed if item_id in by_id]
+    gold_records = {record.item_id: record for record in gold_set.items}
+    cache_path = out_dir / "predictions.json"
+    cache = _load_prediction_cache(cache_path, needed) if not args.refresh_predictions else None
+    if cache is None:
+        print(f"matching {len(needed)} items (suspects + eligible blank cells)…", file=sys.stderr)
+        cache = collect_raw_candidates(
+            [gold_records[item_id] for item_id in needed if item_id in gold_records],
+            adapter,
+            label="audit-v2",
+            progress_every=args.progress_every,
+        )
+        _write_prediction_cache(cache_path, cache)
+    else:
+        print(f"replaying {len(cache)} cached prediction lists from {cache_path}", file=sys.stderr)
+    predictions = {
+        item_id: tuple(rank_candidates(candidates, config))
+        for item_id, candidates in cache.items()
+    }
+
+    wanted: set[str] = set()
+    for row in rows:
+        if row.item_id in predictions or "gold_inconsistent" in row.flags:
+            wanted.update(row.gold_iris)
+    for entry in suspects:
+        wanted.update(str(iri) for iri in _items(entry.get("gold_iris")))
+    for ranked in predictions.values():
+        wanted.update(candidate.iri for candidate in ranked[:PIPELINE_CANDIDATES_SHOWN])
+    definitions: dict[str, str] = {}
+    for iri in sorted(wanted):
+        concept = provider.get_concept(iri)
+        if concept is not None and concept.definition:
+            definitions[iri] = concept.definition
+
+    search = _folio_search(folio, index)
+    labels = sorted(
+        {str(entry.get("normalized") or entry.get("raw") or "") for entry in resolution_batch}
+    )
+    proposals = {
+        label: propose_for_label(label, index=index, search=search) for label in labels if label
+    }
+    for entries in proposals.values():
+        for proposal in entries:
+            concept = provider.get_concept(proposal.iri)
+            if concept is not None and concept.definition:
+                definitions.setdefault(proposal.iri, concept.definition)
+
+    value_iris = {value.raw: value.iri for row in rows for value in row.values}
+
+    split_facts = SplitFacts(
+        seed=split_manifest.seed,
+        tune=len(split_manifest.slices["tune"]),
+        frozen=len(split_manifest.slices[FROZEN_SLICE]),
+        firm2=len(split_manifest.slices["firm2"]),
+        excluded_surface_duplicates=len(split_manifest.excluded_surface_duplicates),
+        realized_frozen_fraction=_realized_fraction(split_manifest),
+        small_strata=len(split_manifest.small_strata),
+        manifest_sha256=split_manifest.content_sha256,
+    )
+    gold_dir = Path(args.gold).parent
+    metrics = {
+        "v1": _slice_metrics(
+            args.baseline_v1,
+            gold_dir / "gold_v1.manifest.json",
+            gold_dir / "split_manifest_v1.json",
+        ),
+        "v2": _slice_metrics(
+            args.baseline_v2,
+            gold_dir / "gold_v2.manifest.json",
+            Path(args.split_manifest),
+        ),
+    }
+
+    packet = build_packet_v2(
+        gold_rows=rows,
+        pairing_rows=pairing_rows,
+        inconsistent_groups=inconsistent,
+        suspects=suspects,
+        resolution_batch=resolution_batch,
+        cluster_rows=cluster_rows,
+        predictions=predictions,
+        definitions=definitions,
+        label_proposals=proposals,
+        value_iris=value_iris,
+        frozen_ids=split_manifest.slices[FROZEN_SLICE],
+        rejected=rejection_memory(
+            load_decisions(Path(args.decision_log)), ontology_sha256=pin.sha256
+        ),
+        eligible_strata=eligible,
+        slice_by_item=slice_by_item,
+        split=split_facts,
+        metrics=metrics,
+        ontology_sha256=pin.sha256,
+        gold_version=gold_set.gold_version,
+        gold_id=gold_set.gold_id,
+        parent_gold_id=str(gold_set.manifest.get("parent_gold_id", "")),
+        prefill_rulings=load_prefill_rulings(args.prefill),
+        harness_config_sha256=config.content_sha256(),
+        suspect_cap=args.suspect_cap,
+        new_gold_cap=args.new_gold_cap,
+    )
+    written = write_packet_v2(packet, out_dir)
+    print(json.dumps(dict(packet.counts), indent=2, sort_keys=True))
+    print(f"overflow by reason: {json.dumps(dict(packet.overflow), sort_keys=True)}")
+    print(
+        "rows per section: "
+        + json.dumps(
+            {name: len(packet.section(name)) for name in SECTIONS_V2}, sort_keys=True
+        )
+    )
+    for name, path in written.items():
+        print(f"{name}: {path} ({path.stat().st_size} bytes)")
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - I/O orchestration
     """Generate the audit-gate packet from the real baseline, or fold a decisions file."""
     import argparse
@@ -1430,7 +2525,9 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - I/O or
         prog="python -m folio_eval.audit",
         description="U5 audit gate: assemble the decision packet, or fold Damien's decisions.",
     )
-    parser.add_argument("--mode", choices=("packet", "fold"), default="packet")
+    parser.add_argument(
+        "--mode", choices=("packet", "fold", "packet-v2", "fold-v2"), default="packet"
+    )
     parser.add_argument("--gold", type=Path, default=DEFAULT_GOLD_DIR / "gold_v1.jsonl")
     parser.add_argument("--split-manifest", type=Path, default=DEFAULT_SPLIT_MANIFEST)
     parser.add_argument("--config", type=Path, default=DEFAULT_GOLD_DIR / DEFAULT_CONFIG_FILENAME)
@@ -1462,11 +2559,26 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - I/O or
         help="re-run the pipeline even when the packet directory holds a usable prediction cache",
     )
     parser.add_argument("--allow-ontology-bump", action="store_true")
+    parser.add_argument(
+        "--pairing", type=Path, default=DEFAULT_GOLD_DIR / "pairing_ambiguous_v2.jsonl"
+    )
+    parser.add_argument(
+        "--inconsistent", type=Path, default=DEFAULT_GOLD_DIR / "gold_inconsistent_v2.jsonl"
+    )
+    parser.add_argument("--prefill", type=Path, default=DEFAULT_PREFILL_PATH)
+    parser.add_argument(
+        "--baseline-v1", type=Path, default=_EVAL_ROOT / "reports" / "baseline-v1.json"
+    )
+    parser.add_argument(
+        "--baseline-v2", type=Path, default=_EVAL_ROOT / "reports" / "baseline-v2.json"
+    )
     args = parser.parse_args(argv)
 
     import sys
 
     ensure_hash_seed()
+    if args.mode in ("packet-v2", "fold-v2"):
+        return _main_v2(args, parser)
     gold_set = load_gold(args.gold)
     try:
         pin = assert_ontology_pin(gold_set.ontology_cache_sha256)
@@ -1693,6 +2805,50 @@ def _realized_fraction(manifest: Any) -> float:  # pragma: no cover - CLI helper
     tune = len(manifest.slices["tune"])
     total = frozen + tune
     return frozen / total if total else 0.0
+
+
+def _entries(raw: object) -> tuple[Mapping[str, object], ...]:
+    return tuple(dict(entry) for entry in _items(raw) if isinstance(entry, Mapping))
+
+
+def packet_v2_from_json(payload: Mapping[str, object]) -> Packet:
+    """Rehydrate a v2 packet, keeping the per-concept gold/pipeline blocks the fold grades."""
+    rows = tuple(
+        PacketRow(
+            decision_id=str(entry["decision_id"]),
+            section=str(entry["section"]),
+            item_id=str(entry.get("item_id", "")),
+            firm=str(entry.get("firm", "")),
+            stratum=str(entry.get("stratum", "")),
+            stratum_id=str(entry.get("stratum_id", "")),
+            ancestor_path=tuple(str(part) for part in _items(entry.get("ancestor_path"))),
+            surface_label=str(entry.get("surface_label", "")),
+            input_text=str(entry.get("input_text", "")),
+            slice_name=str(entry.get("slice", "")),
+            reason_class=str(entry.get("reason_class", "")),
+            suggested_action=str(entry.get("suggested_action", "")),
+            gold=_entries(entry.get("gold")),
+            pipeline=_entries(entry.get("pipeline")),
+            proposed_iris=tuple(str(iri) for iri in _items(entry.get("proposed_iris"))),
+            extra=dict(entry.get("extra") or {}) if isinstance(entry.get("extra"), Mapping) else {},
+        )
+        for entry in _items(payload.get("rows"))
+        if isinstance(entry, Mapping)
+    )
+    meta_raw = payload.get("meta") or {}
+    counts_raw = payload.get("counts") or {}
+    return Packet(
+        rows=rows,
+        variants=(),
+        replay={},
+        split=None,
+        counts={
+            str(key): _as_int(value)
+            for key, value in (counts_raw.items() if isinstance(counts_raw, Mapping) else ())
+        },
+        overflow={},
+        meta=dict(meta_raw) if isinstance(meta_raw, Mapping) else {},
+    )
 
 
 def _packet_from_json(payload: Mapping[str, object]) -> Packet:

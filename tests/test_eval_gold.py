@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 from fixtures.eval_synthetic_workbook import (
     FIRM1_ROWS,
+    FIRM1_V2_ROWS,
     FIRM2_MULTIROW_ROWS,
     FIRM2_SECTOR_ROWS,
     FIRM2_WORKTYPE_ROWS,
@@ -31,7 +32,18 @@ from fixtures.eval_synthetic_workbook import (
 )
 from folio_eval import gold as gold_mod
 from folio_eval import normalize as norm
-from folio_eval.gold import GoldItem, build_gold, item_id, parse_firm1, parse_firm2, write_gold
+from folio_eval.gold import (
+    GoldItem,
+    build_gold,
+    build_gold_v2,
+    item_id,
+    parse_firm1,
+    parse_firm1_v2,
+    parse_firm2,
+    parse_firm2_v2,
+    write_gold,
+    write_gold_v2,
+)
 from folio_eval.resolve_labels import LabelIndex, resolve_gold_value, resolve_label
 
 # --------------------------------------------------------------------------------------
@@ -325,6 +337,220 @@ def test_write_gold_emits_versioned_artifacts_deterministically(
     assert {"item_id", "firm", "stratum", "ancestor_path", "leaf", "input_text", "gold_iris"} <= set(
         lines[0]
     )
+
+
+# --------------------------------------------------------------------------------------
+# gold.py — the per-cell derivation (gold v2, KTD6 v2 / KTD3 v2)
+# --------------------------------------------------------------------------------------
+
+
+@pytest.fixture
+def v2_build(index: LabelIndex) -> gold_mod.GoldBuildV2:
+    return build_gold_v2([parse_firm1_v2(FIRM1_V2_ROWS, firm="firm1")], index)
+
+
+def _v2_by_text(build: gold_mod.GoldBuildV2) -> dict[str, gold_mod.GoldItemV2]:
+    return {item.input_text: item for item in build.items}
+
+
+def test_every_input_cell_at_any_level_becomes_its_own_item(
+    v2_build: gold_mod.GoldBuildV2,
+) -> None:
+    """KTD6 v2: a Level-1, Level-2 and Level-3 cell each get their own 1:1-or-1:many mapping."""
+    items = _v2_by_text(v2_build)
+    assert items["Widget Practice"].level == 1
+    assert set(items["Widget Practice"].gold_iris) == {W_MANUFACTURING}
+    assert items["Widget Advice"].level == 2
+    # One input cell, two output cells -> both belong to it (1:many).
+    assert set(items["Widget Advice"].gold_iris) == {W_ADVISORY, W_INDUSTRY}
+    assert items["First attribute"].level == 3
+    assert v2_build.level_counts["firm1_level1_items"] == 2
+    assert v2_build.level_counts["firm1_level2_items"] == 4
+
+
+def test_nothing_inherits_from_a_heading_cell(v2_build: gold_mod.GoldBuildV2) -> None:
+    """The v1 cascade is gone: a leaf's gold is only what its own cell says."""
+    item = _v2_by_text(v2_build)["Enforcement matters"]
+    assert W_ENFORCEMENT in item.gold_iris
+    assert W_ADVISORY not in item.gold_iris
+    assert W_INDUSTRY not in item.gold_iris
+    assert W_MANUFACTURING not in item.gold_iris
+
+
+def test_shared_row_with_matching_counts_pairs_positionally(
+    v2_build: gold_mod.GoldBuildV2,
+) -> None:
+    """Damien's worked example: two inputs, two outputs, paired 1:1 in order."""
+    items = _v2_by_text(v2_build)
+    assert set(items["Shared Category"].gold_iris) == {W_MANUFACTURING}
+    assert set(items["First attribute"].gold_iris) == {W_AGREEMENTS}
+    assert "pairing_ambiguous" not in items["Shared Category"].flags
+    assert "pairing_ambiguous" not in items["First attribute"].flags
+
+
+def test_uneven_shared_row_uses_the_heuristic_and_is_flagged(
+    v2_build: gold_mod.GoldBuildV2,
+) -> None:
+    """Counts do not line up: first block to the first input, the rest to the last — and flagged."""
+    items = _v2_by_text(v2_build)
+    assert set(items["Uneven Category"].gold_iris) == {W_LITIGATION}
+    assert set(items["Odd attribute"].gold_iris) == {W_ARBITRATION, W_ADVISORY}
+    assert "pairing_ambiguous" in items["Uneven Category"].flags
+    assert "pairing_ambiguous" in items["Odd attribute"].flags
+    assert v2_build.counts["pairing_ambiguous_rows"] == 1
+    assert v2_build.counts["pairing_ambiguous_items"] == 2
+
+    record = v2_build.pairing_rows[0]
+    assert [entry["text"] for entry in record["inputs"]] == ["Uneven Category", "Odd attribute"]
+    assert record["heuristic"] == [
+        ["Sprocket Litigation Practice"],
+        ["Thingamajig Arbitration", "Gadget Advisory Service"],
+    ]
+    # The alternative Damien adjudicates against: everything belongs to the deepest input.
+    assert record["alternative"] == [
+        [],
+        [
+            "Sprocket Litigation Practice",
+            "Thingamajig Arbitration",
+            "Gadget Advisory Service",
+        ],
+    ]
+
+
+def test_pair_blocks_rules_directly() -> None:
+    """The pairing rule on its own, so the sheet's two readings are pinned."""
+    from folio_eval.gold import RawValue, pair_blocks
+
+    def block(name: str, *texts: str) -> tuple[str, list[RawValue]]:
+        return name, [RawValue(text=text, origin="own", column=name) for text in texts]
+
+    one_input = pair_blocks([(3, "leaf")], [block("SALI 0", "A"), block("SALI 1", "B")])
+    assert [[v.text for v in group] for group in one_input[0]] == [["A", "B"]]
+    assert one_input[2] is False
+
+    even = pair_blocks([(2, "head"), (3, "leaf")], [block("SALI 0", "A"), block("SALI 1", "B")])
+    assert [[v.text for v in group] for group in even[0]] == [["A"], ["B"]]
+    assert even[2] is False
+
+    short = pair_blocks([(2, "head"), (3, "leaf")], [block("SALI 0", "A")])
+    assert [[v.text for v in group] for group in short[0]] == [["A"], []]
+    assert [[v.text for v in group] for group in short[1]] == [[], ["A"]]
+    assert short[2] is True
+
+
+def test_identical_cell_text_dedupes_into_one_item(v2_build: gold_mod.GoldBuildV2) -> None:
+    """KTD3 v2: the same cell text is the same question, wherever it sits."""
+    items = [item for item in v2_build.items if item.input_text == "General advice"]
+    assert len(items) == 1
+    assert len(items[0].instances) == 2
+    assert items[0].blank
+    assert "deduped" in items[0].rules
+    assert v2_build.counts["dedup_groups"] == 3
+
+
+def test_duplicate_instances_with_different_gold_are_flagged_inconsistent(
+    v2_build: gold_mod.GoldBuildV2,
+) -> None:
+    """Union stands as gold; the group goes to the sheet's consistency section."""
+    item = _v2_by_text(v2_build)["Enforcement matters"]
+    assert set(item.gold_iris) == {W_ENFORCEMENT, W_PURCHASE}
+    assert "gold_inconsistent" in item.flags
+    assert v2_build.counts["gold_inconsistent_groups"] == 1
+    group = v2_build.inconsistent_groups[0]
+    assert group["input_text"] == "Enforcement matters"
+    assert [entry["gold_iris"] for entry in group["instances"]] == [
+        [W_ENFORCEMENT],
+        [W_PURCHASE],
+    ]
+    # Neither two unanswered instances nor an answered/unanswered pair is a contradiction
+    # (KD7: a blank cell means 'not yet mapped').
+    assert "gold_inconsistent" not in _v2_by_text(v2_build)["General advice"].flags
+    answered_and_blank = _v2_by_text(v2_build)["First attribute"]
+    assert len(answered_and_blank.instances) == 2
+    assert set(answered_and_blank.gold_iris) == {W_AGREEMENTS}
+    assert "gold_inconsistent" not in answered_and_blank.flags
+
+
+def test_blank_cells_are_coverage_not_denominator(v2_build: gold_mod.GoldBuildV2) -> None:
+    items = _v2_by_text(v2_build)
+    for text in ("General advice", "Second Practice", "Other Category"):
+        assert items[text].blank
+        assert items[text].gold_iris == ()
+        assert "blank_cell" in items[text].rules
+    assert v2_build.counts["items_blank"] == 3
+    assert v2_build.counts["items_scored"] == len(v2_build.items) - 3
+
+
+def test_v2_rows_carry_no_ancestor_context_but_keep_their_instances(
+    v2_build: gold_mod.GoldBuildV2,
+) -> None:
+    """KTD3 v2: the pipeline input is the cell text alone; paths survive for display only."""
+    payload = _v2_by_text(v2_build)["First attribute"].to_json()
+    assert payload["ancestor_path"] == []
+    assert payload["input_text"] == payload["leaf"] == "First attribute"
+    assert payload["derivation"] == "per_cell_v2"
+    assert payload["instances"][0]["ancestor_path"] == ["Widget Practice", "Shared Category"]
+
+
+def test_a_level2_heading_shares_its_family_with_its_children(
+    v2_build: gold_mod.GoldBuildV2,
+) -> None:
+    """KTD4: a heading item must never be frozen while its own children tune."""
+    items = _v2_by_text(v2_build)
+    assert items["Shared Category"].family_id == items["First attribute"].family_id
+    assert items["Widget Practice"].family_id != items["First attribute"].family_id
+
+
+def test_write_gold_v2_emits_versioned_artifacts_deterministically(
+    tmp_path: Path, index: LabelIndex
+) -> None:
+    build = build_gold_v2([parse_firm1_v2(FIRM1_V2_ROWS, firm="firm1")], index)
+    paths = write_gold_v2(
+        build,
+        gold_dir=tmp_path / "gold",
+        reports_dir=tmp_path / "reports",
+        ontology_sha256="0" * 64,
+        folio_python_version="9.9.9",
+    )
+    gold_path = tmp_path / "gold" / "gold_v2.jsonl"
+    assert paths["gold"] == gold_path
+    for name in ("pairing", "inconsistent", "manifest", "suspects", "worked_examples"):
+        assert paths[name].exists()
+
+    first = gold_path.read_bytes()
+    manifest = json.loads((tmp_path / "gold" / "gold_v2.manifest.json").read_text(encoding="utf-8"))
+    assert manifest["gold_version"] == 2
+    assert manifest["derivation"] == "per_cell_v2"
+    assert manifest["parent_gold_id"] == gold_mod.PARENT_GOLD_ID
+    assert manifest["content_sha256"] == gold_mod.sha256_bytes(first)
+    assert manifest["pairing_ambiguous_rows"] == 1
+    assert manifest["gold_inconsistent_groups"] == 1
+    assert manifest["dedup_groups"] == 3
+    assert manifest["coverage"]["items_blank"] == 3
+
+    rebuilt = build_gold_v2([parse_firm1_v2(FIRM1_V2_ROWS, firm="firm1")], index)
+    write_gold_v2(
+        rebuilt,
+        gold_dir=tmp_path / "gold",
+        reports_dir=tmp_path / "reports",
+        ontology_sha256="0" * 64,
+        folio_python_version="9.9.9",
+    )
+    assert gold_path.read_bytes() == first
+
+
+def test_firm2_v2_reuses_the_term_parse_and_dedupes(index: LabelIndex) -> None:
+    build = build_gold_v2(
+        [
+            parse_firm2_v2(FIRM2_WORKTYPE_ROWS, firm="firm2"),
+            parse_firm2_v2(FIRM2_MULTIROW_ROWS, firm="firm2"),
+        ],
+        index,
+    )
+    items = _v2_by_text(build)
+    assert items["Acquisition support"].gold_iris == (W_PURCHASE,)
+    assert set(items["Manufacture"].gold_iris) == {W_MANUFACTURING, W_ADVISORY}
+    assert items["Unmapped work"].blank
 
 
 def test_worked_examples_cover_every_rule_that_fired(tmp_path: Path, index: LabelIndex) -> None:

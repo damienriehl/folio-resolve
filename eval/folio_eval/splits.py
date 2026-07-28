@@ -56,8 +56,17 @@ from .intake import DEFAULT_DATA_DIR
 from .normalize import label_key
 
 #: Flags that keep an item out of the frozen slice (KTD4/KTD6 low-confidence pre-flags).
+#: ``pairing_ambiguous`` and ``gold_inconsistent`` are the gold-v2 additions: both mark rows whose
+#: gold set is *pending adjudication*, and a holdout must not be drawn from gold that may move.
 FROZEN_EXCLUDED_FLAGS = frozenset(
-    {"notes_flagged", "suspect_question_mark", "ambiguous_label", "term_deprecated"}
+    {
+        "notes_flagged",
+        "suspect_question_mark",
+        "ambiguous_label",
+        "term_deprecated",
+        "pairing_ambiguous",
+        "gold_inconsistent",
+    }
 )
 
 #: The statistical holdout is 20% of Firm 1 (R6).
@@ -125,15 +134,22 @@ class GoldItemRecord:
     gold_iris: frozenset[str]
     flags: frozenset[str]
     blank: bool
+    #: Gold v2 writes the Level-2 family id directly, because a v2 row's ``ancestor_path`` is
+    #: empty by design (KTD3 v2: the pipeline input is the cell text alone) and a Level-2 heading
+    #: item must group with its own children rather than with its parent practice group.
+    family_id: str = ""
 
     @property
     def group_id(self) -> str:
         """Stable id of the Level-2 group this item hangs under (the split's assignment unit).
 
-        Firm 1 items carry ``ancestor_path = (level1, level2)``, so the path *is* the group key;
-        an item with no Level-2 parent groups under its practice group alone. Hashed so the split
+        Gold v2 supplies it as ``family_id``. For gold v1, Firm 1 items carry
+        ``ancestor_path = (level1, level2)``, so the path *is* the group key; an item with no
+        Level-2 parent groups under its practice group alone. Hashed either way, so the split
         manifest never carries a firm surface string.
         """
+        if self.family_id:
+            return self.family_id
         payload = json.dumps([self.firm, self.stratum, list(self.ancestor_path)], ensure_ascii=False)
         return sha256_text(payload)[:12]
 
@@ -183,6 +199,7 @@ def _record_from_json(payload: Mapping[str, object]) -> GoldItemRecord:
         gold_iris=frozenset(str(iri) for iri in iris_raw),
         flags=frozenset(str(flag) for flag in flags_raw),
         blank=bool(payload.get("blank", False)),
+        family_id=str(payload.get("family_id", "")),
     )
 
 
