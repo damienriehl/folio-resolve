@@ -10,3 +10,8 @@ build/
 .folio/
 # ruler-shootout raw per-engine captures (large corpus match dumps; summary is committed)
 bench/results/
+
+# F1 eval harness: firm workbook derivatives never commit (KTD1) -- only the hashed manifest does.
+eval/data/*
+!eval/data/MANIFEST.md
+eval/data/reports/
