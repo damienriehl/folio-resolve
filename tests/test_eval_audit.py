@@ -13,11 +13,16 @@ from typing import Any
 
 import pytest
 from fixtures.eval_synthetic_workbook import (
+    FIRM1_PIPE_ROWS,
     FIRM1_V2_ROWS,
+    FIRM2_PIPE_ROWS,
     W_ADVISORY,
+    W_AGREEMENTS,
     W_ARBITRATION,
     W_ENFORCEMENT,
+    W_INDUSTRY,
     W_LITIGATION,
+    W_MANUFACTURING,
     W_PURCHASE,
     synthetic_index,
 )
@@ -59,7 +64,7 @@ from folio_eval.audit import (
     write_decision_notes,
     write_gold_version,
 )
-from folio_eval.gold import build_gold_v2, parse_firm1_v2
+from folio_eval.gold import build_gold_v2, parse_firm1_v2, parse_firm2_v2
 from folio_eval.packet_render import (
     render_sheet,
     render_sheet_v2,
@@ -1799,3 +1804,279 @@ def test_decision_notes_land_beside_the_gold_they_explain(
     assert json.loads(path.read_text(encoding="utf-8")) == {
         pairing.decision_id: {"note": "keep the applied reading"}
     }
+
+
+# --------------------------------------------------------------------------------------
+# The pipe cell, end to end — derivation -> gold IRIs -> packet row -> rendered block
+#
+# Damien, 2026-07-28: "Please recognize the pipe character | as representing multiple tags."
+# The derivation always did. What did not was the *sheet*: the packet looked a pairing row's
+# input cells up by text alone, so a firm-1 row bound to firm 2's like-named item and the Gold
+# panel showed that item's (smaller) mapping. These tests pin every hop of that path.
+# --------------------------------------------------------------------------------------
+
+
+@pytest.fixture
+def pipe_gold() -> tuple[Any, list[Any]]:
+    """Firm 1's pipe row and firm 2's like-named cell, built into one gold set."""
+    build = build_gold_v2(
+        [
+            parse_firm1_v2(FIRM1_PIPE_ROWS, firm="firm1"),
+            parse_firm2_v2(FIRM2_PIPE_ROWS, firm="firm2"),
+        ],
+        synthetic_index(),
+    )
+    return build, [gold_row_v2_from_json(item.to_json()) for item in build.items]
+
+
+def _pipe_packet(build: Any, rows: list[Any], **kwargs: Any) -> Any:
+    return build_packet_v2(
+        gold_rows=rows,
+        pairing_rows=build.pairing_rows,
+        inconsistent_groups=build.inconsistent_groups,
+        suspects=build.suspects,
+        value_iris={value.raw: value.iri for row in rows for value in row.values},
+        definitions=DEFINITIONS,
+        ontology_sha256=ONTOLOGY_SHA,
+        gold_id="v2-test",
+        gold_version=2,
+        parent_gold_id="v1-test",
+        generated_at="2026-07-28T00:00:00Z",
+        **kwargs,
+    )
+
+
+def test_a_pipe_cell_is_one_output_block_holding_two_tags(pipe_gold: tuple[Any, list[Any]]) -> None:
+    """Pairing happens at cell granularity; the cell's two tags stay two tags inside it."""
+    build, _ = pipe_gold
+    record = build.pairing_rows[0]
+    cascade = record["blocks"][0]
+    assert cascade["values"] == ["Widget Manufacturing Law", "Bauble Agreements"]
+    assert cascade["from_pipe"] is True
+    assert [block["from_pipe"] for block in record["blocks"][1:]] == [False, False]
+    # three output cells against two input cells is exactly what makes the row ambiguous
+    assert len(record["blocks"]) == 3 and len(record["inputs"]) == 2
+
+
+def test_each_pipe_split_tag_resolves_to_its_own_gold_iri(pipe_gold: tuple[Any, list[Any]]) -> None:
+    _, rows = pipe_gold
+    firm1 = next(row for row in rows if row.firm == "firm1" and row.input_text == "Blended Finance")
+    assert sorted(firm1.gold_iris) == sorted([W_MANUFACTURING, W_AGREEMENTS])
+    assert "pipe_split" in firm1.rules
+    # the firm-2 cell of the same name is a different item with a smaller mapping
+    firm2 = next(row for row in rows if row.firm == "firm2")
+    assert firm2.gold_iris == (W_AGREEMENTS,)
+    assert firm1.item_id != firm2.item_id
+
+
+def test_the_pairing_row_binds_to_its_own_firms_item_not_the_other_firms(
+    pipe_gold: tuple[Any, list[Any]],
+) -> None:
+    """The defect Damien saw: firm 2's like-named cell was shadowing firm 1's gold."""
+    build, rows = pipe_gold
+    packet = _pipe_packet(build, rows)
+    firm1 = next(row for row in rows if row.firm == "firm1" and row.input_text == "Blended Finance")
+    firm2 = next(row for row in rows if row.firm == "firm2")
+
+    pairing = packet.section("pairing")[0]
+    assert pairing.firm == "firm1"
+    bound = {entry["item_id"] for entry in pairing.extra["input_context"]}
+    assert bound == {firm1.item_id}
+    assert firm2.item_id not in bound
+    assert packet.counts["pairing_inputs_unmatched"] == 0
+
+    # and therefore the Gold panel shows BOTH tags the pipe cell named
+    shown = {
+        str(entry["iri"])
+        for context in pairing.extra["input_context"]
+        for entry in context["gold"]
+    }
+    assert shown == {W_MANUFACTURING, W_AGREEMENTS}
+
+
+def test_the_sheet_renders_a_pipe_cell_as_separate_tags_not_a_comma_joined_string(
+    pipe_gold: tuple[Any, list[Any]],
+) -> None:
+    build, rows = pipe_gold
+    packet = _pipe_packet(build, rows)
+    assert packet.counts["pairing_pipe_blocks"] == 1
+    html = render_sheet_v2(packet)
+
+    assert "pipe cell &rarr; 2 tags" in html or "pipe cell → 2 tags" in html
+    # each tag is its own chip carrying its own IRI
+    assert html.count('class="concept"') >= 4
+    for iri in (W_MANUFACTURING, W_AGREEMENTS):
+        assert iri.rsplit("/", 1)[-1][:12] in html
+    # the two concepts are never run together into one comma-joined pseudo-concept
+    assert "Widget Manufacturing Law, Bauble Agreements" not in html
+
+
+# --------------------------------------------------------------------------------------
+# Pairing gold EDITS — his notes rewrite what an input cell means, not just which cell it hangs on
+# --------------------------------------------------------------------------------------
+
+
+def test_a_pairing_edit_rewrites_only_that_rows_contribution(
+    pipe_gold: tuple[Any, list[Any]],
+) -> None:
+    build, rows = pipe_gold
+    packet = _pipe_packet(build, rows)
+    pairing = packet.section("pairing")[0]
+    firm1 = next(row for row in rows if row.firm == "firm1" and row.input_text == "Blended Finance")
+
+    result = fold_granular_decisions(
+        rows,
+        {
+            pairing.decision_id: {
+                "pairing": "heuristic",
+                "edited_iris": {firm1.item_id: [W_ADVISORY]},
+                "note": "the cell means the service, not the two areas",
+            }
+        },
+        packet=packet,
+        ontology_sha256=ONTOLOGY_SHA,
+    )
+    folded = {str(row["item_id"]): row for row in result.rows}
+    assert folded[firm1.item_id]["gold_iris"] == [W_ADVISORY]
+    assert folded[firm1.item_id]["provenance"] == "damien_corrected"
+    assert result.counts["pairing_gold_edited"] == 1
+    assert result.records[0].action == "edit"
+    # the other firm's like-named item is untouched
+    firm2 = next(row for row in rows if row.firm == "firm2")
+    assert folded[firm2.item_id]["gold_iris"] == [W_AGREEMENTS]
+    assert folded[firm2.item_id]["provenance"] == "curator_workbook"
+
+
+def test_a_pairing_edit_naming_an_item_the_row_does_not_touch_is_rejected(
+    pipe_gold: tuple[Any, list[Any]],
+) -> None:
+    build, rows = pipe_gold
+    packet = _pipe_packet(build, rows)
+    pairing = packet.section("pairing")[0]
+    firm2 = next(row for row in rows if row.firm == "firm2")
+    with pytest.raises(ValueError, match="not one of this row's input cells"):
+        fold_granular_decisions(
+            rows,
+            {pairing.decision_id: {"pairing": "heuristic", "edited_iris": {firm2.item_id: []}}},
+            packet=packet,
+            ontology_sha256=ONTOLOGY_SHA,
+        )
+
+
+def test_a_pairing_edit_must_be_an_object_of_item_to_iris(
+    pipe_gold: tuple[Any, list[Any]],
+) -> None:
+    build, rows = pipe_gold
+    packet = _pipe_packet(build, rows)
+    pairing = packet.section("pairing")[0]
+    with pytest.raises(ValueError, match="edited_iris must be an object"):
+        fold_granular_decisions(
+            rows,
+            {pairing.decision_id: {"pairing": "heuristic", "edited_iris": ["nope"]}},
+            packet=packet,
+            ontology_sha256=ONTOLOGY_SHA,
+        )
+
+
+# --------------------------------------------------------------------------------------
+# Section F — machine-proposed gold improvements, and folded rows that stop being asked
+# --------------------------------------------------------------------------------------
+
+
+def test_section_f_asks_accept_or_reject_per_proposed_atom(
+    pipe_gold: tuple[Any, list[Any]],
+) -> None:
+    build, rows = pipe_gold
+    firm1 = next(row for row in rows if row.firm == "firm1" and row.input_text == "Blended Finance")
+    packet = _pipe_packet(
+        build,
+        rows,
+        improvements=[
+            {
+                "item_id": firm1.item_id,
+                "proposals": [
+                    {
+                        "iri": W_INDUSTRY,
+                        "label": "Trinket Industry",
+                        "branch": "Industry and Market",
+                        "method": "anchor",
+                        "query": "blended",
+                        "score": 100.0,
+                    }
+                ],
+            }
+        ],
+    )
+    section = packet.section("improvement")
+    assert len(section) == 1
+    row = section[0]
+    assert row.decision_id == f"improvement:{firm1.item_id}"
+    assert row.extra["machine_proposed"] is True
+    assert [entry["iri"] for entry in row.pipeline] == [W_INDUSTRY]
+    assert packet.counts["improvement_items"] == 1
+    assert packet.counts["improvement_proposals"] == 1
+
+    html = render_sheet_v2(packet)
+    assert 'data-section="improvement"' in html
+    assert "Accept as gold" in html and "machine-proposed" in html
+    # a machine row may never delete curated gold: it offers no keep/remove pair of its own
+    assert "F &middot; Proposed gold improvements" in html or "F · Proposed gold" in html
+
+    # and accepting one lands it in gold through the verdicts the fold already understands
+    result = fold_granular_decisions(
+        rows,
+        {row.decision_id: {"pipeline": {W_INDUSTRY: "elevate"}}},
+        packet=packet,
+        ontology_sha256=ONTOLOGY_SHA,
+    )
+    folded = {str(entry["item_id"]): entry for entry in result.rows}
+    assert W_INDUSTRY in folded[firm1.item_id]["gold_iris"]
+
+
+def test_section_f_is_capped(pipe_gold: tuple[Any, list[Any]]) -> None:
+    build, rows = pipe_gold
+    firm1 = next(row for row in rows if row.firm == "firm1" and row.input_text == "Blended Finance")
+    proposals = [{"iri": W_INDUSTRY, "label": "Trinket Industry", "branch": "Industry and Market"}]
+    packet = _pipe_packet(
+        build,
+        rows,
+        improvements=[{"item_id": firm1.item_id, "proposals": proposals}] * 5,
+        improvement_cap=2,
+    )
+    assert len(packet.section("improvement")) == 2
+
+
+def test_a_folded_decision_renders_locked_and_never_re_enters_the_paste_back(
+    pipe_gold: tuple[Any, list[Any]],
+) -> None:
+    build, rows = pipe_gold
+    packet = _pipe_packet(build, rows)
+    pairing = packet.section("pairing")[0]
+    locked = _pipe_packet(
+        build,
+        rows,
+        folded_decisions={
+            pairing.decision_id: {
+                "summary": "heuristic + gold edits",
+                "note": "a child cell never implies its parent",
+                "gold_version": 3,
+                "gold_id": "v3-abc",
+            }
+        },
+    )
+    assert locked.counts["folded_rows_locked"] == 1
+    row = locked.section("pairing")[0]
+    assert row.extra["folded"]["gold_version"] == 3
+
+    html = render_sheet_v2(locked)
+    assert 'data-locked="1"' in html
+    assert "DONE &mdash; folded" in html or "DONE — folded" in html
+    assert "a child cell never implies its parent" in html
+    assert "<input disabled type=" in html
+    assert "data-locked" in _SCRIPT_LOCK_GUARD(html)
+
+
+def _SCRIPT_LOCK_GUARD(html: str) -> str:
+    """The collector must skip locked rows, not merely grey them out."""
+    start = html.index("function collect()")
+    return html[start : start + 400]

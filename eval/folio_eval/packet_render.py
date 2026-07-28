@@ -416,6 +416,14 @@ SECTION_TITLES_V2: Mapping[str, tuple[str, str]] = {
         "Input cells with no curated mapping at all. Elevated concepts enter gold tagged "
         "provenance=pipeline_suggested, and every later report carries a score excluding them.",
     ),
+    "improvement": (
+        "F · Proposed gold improvements (pilot) — machine-proposed, for your confirmation",
+        "Your six corrections follow one pattern: map the cell atomically, and break the molecule "
+        "into the atoms it names — the industry, the asset, the player, the practice. This is that "
+        "pattern run over the rest of the same practice family, by direct FOLIO label search plus "
+        "your own examples as anchors. Every line here is a machine guess, gold only if you "
+        "accept it.",
+    ),
 }
 
 _STYLE_V2 = (
@@ -489,6 +497,28 @@ ul.iris li.tail { border-left: 3px solid transparent; padding-left: .4rem; color
           padding: .55rem .75rem; margin: .6rem 0 1rem; font-size: .9rem; }
 .banner strong { display: block; margin-bottom: .2rem; }
 .rownote { margin-top: .5rem; }
+
+/* --- a pipe cell is N tags, never one comma-joined string (Damien, 2026-07-28) ------- */
+.cellblock { margin: .25rem 0; font-size: .84rem; }
+.cellblock .col { font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+                  color: var(--muted); }
+.taglist { display: inline-flex; flex-wrap: wrap; gap: .25rem; vertical-align: middle; }
+.taglist .concept { display: inline-flex; align-items: baseline; gap: .3rem;
+                    border: 1px solid var(--line); border-radius: 4px; padding: 0 .35rem; }
+.taglist .concept code { font-size: .72rem; color: var(--muted); }
+.taglist .concept.unresolved { border-style: dashed; color: var(--muted); }
+.pipeflag { color: var(--accent); border-color: var(--accent); }
+
+/* --- rows already folded into a later gold version: shown, locked, never re-asked ---- */
+.row.locked { opacity: .82; }
+.row.locked .panel.proposed { border-left-color: var(--good); background: var(--card); }
+.folded { border: 1px solid var(--good); border-left-width: 3px; border-radius: 7px;
+          padding: .5rem .7rem; margin: .5rem 0; font-size: .88rem; }
+.folded h5 { margin: 0 0 .25rem; font-size: .78rem; text-transform: uppercase;
+             letter-spacing: .06em; color: var(--good); }
+.folded .yournote { margin: .3rem 0 0; white-space: pre-wrap; }
+.tag.done { color: var(--good); border-color: var(--good); font-weight: 600; }
+.machine { color: var(--warn); border-color: var(--warn); }
 """
 )
 
@@ -504,6 +534,7 @@ function verdicts(row, selector) {
 function collect() {
   const decisions = {};
   document.querySelectorAll('.row[data-decision-id]').forEach(function (row) {
+    if (row.hasAttribute('data-locked')) { return; }  // already folded into gold; never re-ask
     const id = row.getAttribute('data-decision-id');
     const entry = {};
     const gold = verdicts(row, '.block.gold');
@@ -573,11 +604,17 @@ def _grade_list(
     decision_id: str,
     kind: str,
     prefill: Mapping[str, object],
+    choices: Sequence[tuple[str, str]] | None = None,
 ) -> str:
-    """One radio pair per concept: the granular grading Damien asked for."""
+    """One radio pair per concept: the granular grading Damien asked for.
+
+    ``choices`` re-labels the pair without changing the values the fold reads, so section F can
+    ask "Accept as gold / Reject" while still emitting the ``elevate``/``not_gold`` verdicts
+    :func:`folio_eval.audit.fold_granular_decisions` already knows how to apply.
+    """
     if not entries:
         return '<p class="note">none</p>'
-    choices = (
+    choices = choices or (
         (("keep", "Keep gold"), ("remove", "Remove from gold"))
         if kind == "gold"
         else (("elevate", "Elevate to gold"), ("not_gold", "Not gold"))
@@ -799,6 +836,48 @@ def _reference_panels(row: PacketRow) -> str:
 # --------------------------------------------------------------------------------------
 
 
+def _tag_chips(entry: Mapping[str, object]) -> str:
+    """One chip per concept, with its IRI. Never a comma-joined run of concept names.
+
+    A pipe cell (``Islamic Law System | Finance and Lending Law``) is two tags. Joined with a
+    comma it reads as one concept whose name happens to contain a comma — which is exactly how
+    the Islamic-finance row looked to Damien when he asked for the pipe to be recognized.
+    """
+    tags = _records(entry.get("tags"))
+    if not tags:
+        tags = [{"label": label, "iri": ""} for label in _strings(entry.get("values"))]
+    if not tags:
+        tags = [{"label": label, "iri": ""} for label in _strings(entry.get("labels"))]
+    if not tags:
+        return "<em>— nothing —</em>"
+    chips: list[str] = []
+    for tag in tags:
+        iri = str(tag.get("iri", ""))
+        code = f" <code>{_esc(_short(iri))}</code>" if iri else ""
+        css = "concept" if iri else "concept unresolved"
+        chips.append(
+            f'<span class="{css}"><strong>{_esc(tag.get("label", ""))}</strong>{code}</span>'
+        )
+    return f'<span class="taglist">{"".join(chips)}</span>'
+
+
+def _output_cells(blocks: Sequence[Mapping[str, object]]) -> str:
+    """The row's output cells, one line each, tags rendered individually."""
+    lines: list[str] = []
+    for block in blocks:
+        values = _strings(block.get("values"))
+        pipe = (
+            f'<span class="tag pipeflag">pipe cell → {len(values)} tags</span> '
+            if block.get("from_pipe")
+            else ""
+        )
+        lines.append(
+            f'<div class="cellblock"><span class="col">{_esc(block.get("column", ""))}</span> '
+            f"{pipe}{_tag_chips(block)}</div>"
+        )
+    return "".join(lines)
+
+
 def _pairing_readings(row: PacketRow) -> str:
     """Reading A / Reading B, with the one that survives Damien's principle pre-checked."""
     assignments = row.extra.get("assignments")
@@ -806,14 +885,17 @@ def _pairing_readings(row: PacketRow) -> str:
     violations: Mapping[str, object] = prechecked if isinstance(prechecked, Mapping) else {}
     choice = str(violations.get("choice", "heuristic"))
     out: list[str] = []
-    blocks = row.extra.get("blocks")
-    if isinstance(blocks, (list, tuple)) and blocks:
-        rendered = " · ".join(
-            f'{_esc(block.get("column", ""))}: '
-            f'{_esc(", ".join(_strings(block.get("values"))))}'
-            for block in _records(blocks)
-        )
-        out.append(f'<p class="blocks">outputs on this row — {rendered}</p>')
+    blocks = _records(row.extra.get("blocks"))
+    if blocks:
+        piped = sum(1 for block in blocks if block.get("from_pipe"))
+        lede = f"outputs on this row — one line per output cell ({len(blocks)})"
+        if piped:
+            lede += (
+                f"; {piped} of them is a pipe cell, i.e. one cell naming several tags"
+                if piped == 1
+                else f"; {piped} of them are pipe cells, i.e. one cell naming several tags"
+            )
+        out.append(f'<p class="blocks">{_esc(lede)}</p>{_output_cells(blocks)}')
     if not isinstance(assignments, Mapping):
         return "".join(out)
     panels: list[str] = []
@@ -823,11 +905,10 @@ def _pairing_readings(row: PacketRow) -> str:
     ):
         lines: list[str] = []
         for entry in _records(assignments.get(reading)):
-            labels = ", ".join(_strings(entry.get("labels")))
             lines.append(
                 f'<li class="instance"><strong>L{_esc(entry.get("level", ""))} '
                 f'{_esc(entry.get("input", ""))}</strong> → '
-                + (_esc(labels) if labels else "<em>— nothing —</em>")
+                + _tag_chips(entry)
                 + "</li>"
             )
         broken = [name.replace("_", " ") for name in _strings(violations.get(key))]
@@ -888,7 +969,81 @@ PROPOSED_TITLES: Mapping[str, str] = {
     "mean?",
     "new_gold": "Proposed — this sheet&rsquo;s question: should any candidate become gold for "
     "this blank cell?",
+    "improvement": "Proposed — this sheet&rsquo;s question: does this cell name an atom its gold "
+    "is missing?",
 }
+
+
+def _improvement_block(row: PacketRow) -> str:
+    """Section F's one question, per proposed atom: accept it as gold, or reject it.
+
+    Gold itself is *not* re-graded here — a machine-generated pilot row must never be able to
+    delete curated gold. It shows read-only above (Panel 1) and only the proposals are askable.
+    """
+    proposals = _records(row.extra.get("proposals"))
+    by_iri = {str(entry.get("iri", "")): entry for entry in proposals}
+    lines: list[str] = []
+    for entry in row.pipeline:
+        proposal = by_iri.get(str(entry.get("iri", "")), {})
+        bits: list[str] = []
+        if proposal.get("branch"):
+            bits.append(f'<span class="tag">{_esc(proposal["branch"])}</span>')
+        if proposal.get("method"):
+            bits.append(
+                f'<span class="tag">via {_esc(proposal["method"])}'
+                + (f' &ldquo;{_esc(proposal.get("query", ""))}&rdquo;' if proposal.get("query") else "")
+                + "</span>"
+            )
+        lines.append("".join(bits))
+    return (
+        '<div class="block pipeline"><h4>Proposed atom tags — accept as gold, or reject'
+        '<span class="tag machine">machine-proposed</span></h4>'
+        + _grade_list(
+            row.pipeline,
+            decision_id=row.decision_id,
+            kind="pipeline",
+            prefill={},
+            choices=(("elevate", "Accept as gold"), ("not_gold", "Reject")),
+        )
+        + f'<textarea class="note pipeline-note" rows="2" '
+        f'name="pipeline-note|{_esc(row.decision_id)}" '
+        f'aria-label="note on these proposals" '
+        f'placeholder="note on these proposals (optional)"></textarea></div>'
+    )
+
+
+def _folded_panel(record: Mapping[str, object]) -> str:
+    """A decision already folded into a later gold version: what you decided, and what it did."""
+    bits: list[str] = []
+    if record.get("summary"):
+        bits.append(f'<p class="note">{_esc(record["summary"])}</p>')
+    for label, key in (("Your note", "note"), ("On the gold", "gold_note")):
+        if record.get(key):
+            bits.append(
+                f'<p class="yournote"><strong>{label}:</strong> {_esc(record[key])}</p>'
+            )
+    if record.get("gold_version"):
+        bits.append(
+            f'<p class="note">folded into gold v{_esc(record["gold_version"])}'
+            + (f' ({_esc(record["gold_id"])})' if record.get("gold_id") else "")
+            + "</p>"
+        )
+    return (
+        '<section class="folded"><h5>Decided — folded, not asking again</h5>'
+        + "".join(bits)
+        + "</section>"
+    )
+
+
+def _lock_inputs(html: str) -> str:
+    """Disable every control in an already-folded row so it cannot be answered twice.
+
+    ``collect()`` also skips ``[data-locked]`` rows, so a locked row can never re-enter the
+    paste-back — disabling is what makes that visible on the page rather than only in the JSON.
+    """
+    return html.replace("<input type=", "<input disabled type=").replace(
+        '<textarea class="note', '<textarea disabled class="note'
+    )
 
 
 def _row_note(row: PacketRow) -> str:
@@ -909,6 +1064,8 @@ def _proposed_panel(row: PacketRow) -> str:
     body: list[str] = []
     if row.section == "pairing":
         body.append(_pairing_readings(row))
+    elif row.section == "improvement":
+        body.append(_improvement_block(row))
     else:
         if row.section == "consistency":
             body.append(_consistency_block(row))
@@ -966,20 +1123,30 @@ def _render_row_v2(row: PacketRow) -> str:
     precheck = row.extra.get("precheck")
     if isinstance(precheck, Mapping) and precheck.get("needs_your_eye"):
         header_bits.append('<span class="tag needseye">needs your eye</span>')
+    folded_raw = row.extra.get("folded")
+    folded: Mapping[str, object] = folded_raw if isinstance(folded_raw, Mapping) else {}
+    if folded:
+        header_bits.append('<span class="tag done">DONE — folded</span>')
+    if row.extra.get("machine_proposed"):
+        header_bits.append('<span class="tag machine">machine-proposed</span>')
 
     body: list[str] = [_paths(row)]
     if row.notes_text:
         body.append(f'<div class="notes">{_esc(row.notes_text)}</div>')
     if row.extra.get("occurrences"):
         body.append(f'<p class="note">appears in {_esc(row.extra["occurrences"])} gold cell(s)</p>')
+    if folded:
+        body.append(_folded_panel(folded))
     body.append(_source_panel(row))
     body.append(_reference_panels(row))
-    body.append(_proposed_panel(row))
+    body.append(_lock_inputs(_proposed_panel(row)) if folded else _proposed_panel(row))
     body.append(f'<p class="note mono">{_esc(row.decision_id)}</p>')
 
     return (
-        f'<article class="row lvl {level_class}" data-section="{_esc(row.section)}" '
-        f'data-decision-id="{_esc(row.decision_id)}">'
+        f'<article class="row lvl {level_class}{" locked" if folded else ""}" '
+        f'data-section="{_esc(row.section)}" '
+        + ('data-locked="1" ' if folded else "")
+        + f'data-decision-id="{_esc(row.decision_id)}">'
         f'<header><h3>{_esc(row.surface_label)}</h3><div>{"".join(header_bits)}</div></header>'
         + "".join(body)
         + "</article>"
@@ -1012,6 +1179,28 @@ def _pairing_banner(packet: Packet) -> str:
         + (f'<p class="prefilled">Your ruling: {_esc(ruling)}</p>' if ruling else "")
         + '<p class="note">This section interprets your workbook&rsquo;s own mapping — the '
         "pipeline is not involved in the question, shown for reference only.</p>"
+        "</div>"
+    )
+
+
+def _improvement_banner(packet: Packet) -> str:
+    """Section F's standing caveat: what generated these, and what accepting one does."""
+    counts = packet.counts
+    items = counts.get("improvement_items", 0)
+    proposals = counts.get("improvement_proposals", 0)
+    per_item = round(proposals / items, 1) if items else 0
+    return (
+        '<div class="banner"><strong>These are machine proposals, not gold</strong>'
+        "Nothing in this section is in gold, and nothing enters gold unless you accept it. Each "
+        "proposal came from the cell&rsquo;s own words — either a FOLIO label search over its noun "
+        "phrases, or one of the trigger&rarr;atom pairs read off your six worked corrections "
+        "(Ship, Bank, Lawyer, Receiver, Borrower, Public Company, Financing Practice&hellip;). "
+        "Proposals are confined to the atom branches: Actor / Player, Asset Type, Industry and "
+        "Market, Service, Legal Entity, Objectives, Area of Law."
+        f'<p class="note">{_esc(items)} cells, {_esc(proposals)} proposals '
+        f'({_esc(per_item)} per cell), capped at {_esc(packet.meta.get("improvement_cap", 40))} '
+        "cells for this pilot. Accepted concepts land as provenance=damien_corrected; rejected "
+        "ones are remembered and never proposed again unchanged.</p>"
         "</div>"
     )
 
@@ -1063,13 +1252,15 @@ def render_sheet_v2(packet: Packet) -> str:
     meta = dict(packet.meta)
     metrics = meta.get("metrics")
     sections: list[str] = []
-    for name in ("pairing", "consistency", "suspect", "resolution", "new_gold"):
+    for name in ("pairing", "consistency", "suspect", "resolution", "new_gold", "improvement"):
         title, lede = SECTION_TITLES_V2[name]
         rows = packet.section(name)
         chunk = [f'<section data-section="{name}"><h2>{_esc(title)}</h2>']
         chunk.append(f'<p class="lede">{_esc(lede)}</p>')
         if name == "pairing":
             chunk.append(_pairing_banner(packet))
+        if name == "improvement":
+            chunk.append(_improvement_banner(packet))
         if name == "suspect" and packet.overflow:
             spilled = ", ".join(
                 f"{_esc(reason)}: {count}" for reason, count in sorted(packet.overflow.items())

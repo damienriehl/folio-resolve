@@ -1179,7 +1179,15 @@ def parse_firm1_v2(rows: Sequence[Row], *, firm: str = "firm1") -> CellParseResu
                         {"level": level, "text": text} for level, text in inputs
                     ],
                     "blocks": [
-                        {"column": column, "values": [value.text for value in values]}
+                        {
+                            "column": column,
+                            "values": [value.text for value in values],
+                            # A pipe cell is one curator gesture naming several concepts. The
+                            # audit sheet must render it as N tags, never as one comma-joined
+                            # pseudo-concept (Damien, 2026-07-28), so the flag travels with the
+                            # block rather than being re-guessed downstream from len(values).
+                            "from_pipe": any(value.from_pipe for value in values),
+                        }
                         for column, values in blocks
                     ],
                     "heuristic": [

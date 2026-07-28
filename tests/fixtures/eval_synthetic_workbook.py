@@ -283,3 +283,33 @@ FIRM2_MULTIROW_ROWS: list[list[str | None]] = [
     _f2ts("Doohickey Topics", "Widgets", "Manufacture", mapping="Widget Manufacturing Law"),
     _f2ts(None, "Widgets", "Manufacture", mapping="Gadget Advisory Service"),
 ]
+
+
+# --- Pipe-cell + cross-firm-collision fixture (the sheet-Gold defect, 2026-07-28) -----------
+#
+# Mirrors the real shape Damien hit: a firm-1 shared row whose cascade-down cell is a pipe cell
+# (one cell naming two concepts) with per-attribute cells repeating them, so the input/output
+# counts do not line up and the row goes to section A. Firm 2 then names a cell with the SAME
+# text and a *different*, smaller mapping. A firm-blind lookup binds the firm-1 pairing row to
+# firm 2's item and shows one concept where the pipe cell put two.
+
+FIRM1_PIPE_ROWS: list[list[str | None]] = [
+    FIRM1_HEADER,
+    _f1(level1="Blended Practice"),
+    _f1(
+        level2="Blended Finance",
+        level3="Blended finance",
+        code="1.0",
+        sali={
+            0: "Widget Manufacturing Law | Bauble Agreements",
+            1: "Widget Manufacturing Law",
+            2: "Bauble Agreements",
+        },
+    ),
+]
+
+FIRM2_PIPE_ROWS: list[list[str | None]] = [
+    FIRM2_WORKTYPE_HEADER,
+    # Same cell text as the firm-1 row above, one concept instead of two.
+    _f2wt("Blended Kinds", "Blended finance", "Blended finance", area="Bauble Agreements"),
+]

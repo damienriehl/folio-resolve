@@ -49,7 +49,7 @@ import os
 import re
 import tempfile
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -1110,7 +1110,11 @@ def build_packet(
 # --------------------------------------------------------------------------------------
 
 #: The v2 sheet's sections, in the order Damien meets them.
-SECTIONS_V2 = ("pairing", "consistency", "suspect", "resolution", "new_gold")
+SECTIONS_V2 = ("pairing", "consistency", "suspect", "resolution", "new_gold", "improvement")
+
+#: Section F is a bounded pilot: enough rows to judge whether the pattern generalizes, few enough
+#: that Damien can read every one of them in a sitting.
+IMPROVEMENT_CAP = 40
 
 #: The gitignored v2 packet directory.
 DEFAULT_PACKET_DIR_V2 = DEFAULT_DATA_DIR / "reports" / "audit_packet_v2"
@@ -1519,6 +1523,49 @@ PAIRING_VIOLATION_EMPTY = "input_maps_to_nothing"
 PAIRING_VIOLATION_DUPLICATE = "outputs_duplicate"
 
 
+def _pairing_blocks(
+    raw: object, value_iris: Mapping[str, str]
+) -> list[dict[str, object]]:
+    """One output *cell* per block, its tags carried individually with the IRI each resolved to.
+
+    A pipe cell (``A | B``) is one block holding two tags, and the sheet has to say so: rendering
+    it as ``A, B`` reads as a single comma-containing concept name, which is exactly how the
+    Islamic-finance row looked wrong to Damien. ``from_pipe`` comes off the derivation record when
+    it is there and falls back to "more than one tag in one cell", which is the same thing.
+    """
+    out: list[dict[str, object]] = []
+    for block in _items(raw):
+        if not isinstance(block, Mapping):
+            continue
+        values = [str(value) for value in _items(block.get("values"))]
+        flagged = block.get("from_pipe")
+        out.append(
+            {
+                "column": str(block.get("column", "")),
+                "values": values,
+                "from_pipe": bool(flagged) if flagged is not None else len(values) > 1,
+                "tags": [
+                    {"label": value, "iri": value_iris.get(value, "")} for value in values
+                ],
+            }
+        )
+    return out
+
+
+def gold_rows_by_input(rows: Sequence[GoldRowV2]) -> dict[tuple[str, str], GoldRowV2]:
+    """``{(firm, normalized input text): row}`` — the only safe way to look an input cell up.
+
+    A v2 item id is ``sha256(firm, derivation, label_key(text))`` (:func:`gold.cell_item_id`), so
+    the *firm* is half the key. Keying a lookup on the text alone silently binds one firm's input
+    cell to the other firm's item wherever both workbooks name the same thing: items sort
+    firm1-before-firm2, so a dict comprehension keeps firm2 and every colliding firm1 pairing row
+    shows firm2's gold. That is the bug Damien hit on the Islamic-finance row, where the pipe cell
+    resolved to two concepts but the panel showed the one concept firm2's like-named cell carries
+    (2026-07-28).
+    """
+    return {(row.firm, label_key(row.input_text)): row for row in rows}
+
+
 def pairing_violations(reading: Sequence[Sequence[str]]) -> tuple[str, ...]:
     """Damien's principle, as a check: dis-prefer a reading that empties an input or duplicates.
 
@@ -1592,9 +1639,12 @@ def build_packet_v2(
     generated_at: str | None = None,
     suspect_cap: int = SUSPECT_ROW_CAP,
     new_gold_cap: int = NEW_GOLD_CAP,
+    improvements: Sequence[Mapping[str, object]] = (),
+    improvement_cap: int = IMPROVEMENT_CAP,
+    folded_decisions: Mapping[str, Mapping[str, object]] | None = None,
     extra_meta: Mapping[str, object] | None = None,
 ) -> Packet:
-    """Assemble the v2 gate: five sections, every concept individually gradeable."""
+    """Assemble the v2 gate: six sections, every concept individually gradeable."""
     predictions = predictions or {}
     definitions = definitions or {}
     label_proposals = label_proposals or {}
@@ -1604,7 +1654,7 @@ def build_packet_v2(
     frozen = frozenset(frozen_ids)
     memory = frozenset(rejected)
     by_id = {row.item_id: row for row in gold_rows}
-    by_text = {label_key(row.input_text): row for row in gold_rows}
+    by_input = gold_rows_by_input(gold_rows)
     eligible = (
         frozenset(eligible_strata)
         if eligible_strata is not None
@@ -1630,6 +1680,11 @@ def build_packet_v2(
         "prefilled_rulings": 0,
         "rows_with_source_grid": 0,
         "rows_with_unlocated_source_rows": 0,
+        "pairing_inputs_unmatched": 0,
+        "pairing_pipe_blocks": 0,
+        "improvement_items": 0,
+        "improvement_proposals": 0,
+        "folded_rows_locked": 0,
     }
     overflow: dict[str, int] = {}
     rows: list[PacketRow] = []
@@ -1662,7 +1717,12 @@ def build_packet_v2(
         alternative = [
             [str(text) for text in _items(block)] for block in _items(entry.get("alternative"))
         ]
-        targets = [by_text.get(label_key(str(value.get("text", "")))) for value in inputs]
+        pairing_firm = str(entry.get("firm", ""))
+        targets = [
+            by_input.get((pairing_firm, label_key(str(value.get("text", "")))))
+            for value in inputs
+        ]
+        counts["pairing_inputs_unmatched"] += sum(1 for target in targets if target is None)
         assignments = {
             "heuristic": [
                 {
@@ -1670,6 +1730,7 @@ def build_packet_v2(
                     "input": str(inputs[position].get("text", "")),
                     "level": _as_int(inputs[position].get("level")),
                     "labels": labels,
+                    "tags": [{"label": text, "iri": value_iris.get(text, "")} for text in labels],
                     "iris": sorted({value_iris[text] for text in labels if text in value_iris}),
                 }
                 for position, labels in enumerate(heuristic)
@@ -1681,6 +1742,7 @@ def build_packet_v2(
                     "input": str(inputs[position].get("text", "")),
                     "level": _as_int(inputs[position].get("level")),
                     "labels": labels,
+                    "tags": [{"label": text, "iri": value_iris.get(text, "")} for text in labels],
                     "iris": sorted({value_iris[text] for text in labels if text in value_iris}),
                 }
                 for position, labels in enumerate(alternative)
@@ -1695,9 +1757,11 @@ def build_packet_v2(
             counts["pairing_precheck_alternative"] += 1
         else:
             counts["pairing_needs_your_eye"] += 1
-        firm = str(entry.get("firm", ""))
+        firm = pairing_firm
         source_row = _as_int(entry.get("row"))
         input_texts = [str(value.get("text", "")) for value in inputs]
+        blocks_json = _pairing_blocks(entry.get("blocks"), value_iris)
+        counts["pairing_pipe_blocks"] += sum(1 for block in blocks_json if block["from_pipe"])
         context = [
             {
                 "item_id": target.item_id if target else "",
@@ -1729,9 +1793,7 @@ def build_packet_v2(
                 extra={
                     "row": source_row,
                     "inputs": inputs,
-                    "blocks": [
-                        dict(block) for block in _items(entry.get("blocks")) if isinstance(block, Mapping)
-                    ],
+                    "blocks": blocks_json,
                     "assignments": assignments,
                     "input_context": context,
                     "precheck": {
@@ -2086,6 +2148,89 @@ def build_packet_v2(
     chosen_new.sort(key=lambda entry: (entry.stratum, entry.ancestor_path, entry.input_text))
     rows.extend(chosen_new)
 
+    # -- [F] proposed gold improvements (pilot, machine-proposed) ------------------------
+    for entry in list(improvements)[:improvement_cap]:
+        item_id = str(entry.get("item_id", ""))
+        row = by_id.get(item_id)
+        atom_proposals = [
+            dict(proposal)
+            for proposal in _items(entry.get("proposals"))
+            if isinstance(proposal, Mapping)
+        ]
+        if row is None or not atom_proposals:
+            continue
+        counts["improvement_items"] += 1
+        counts["improvement_proposals"] += len(atom_proposals)
+        rows.append(
+            PacketRow(
+                decision_id=f"improvement:{item_id}",
+                section="improvement",
+                item_id=item_id,
+                firm=row.firm,
+                stratum=row.stratum,
+                stratum_id=row.stratum_id,
+                ancestor_path=row.first_path,
+                surface_label=row.input_text,
+                input_text=row.input_text,
+                slice_name=slice_by_item.get(item_id, ""),
+                reason_class="proposed_improvement",
+                suggested_action=(
+                    "Machine-proposed, from your own six corrections: this cell names atoms its "
+                    "gold does not carry yet. Accept the ones that belong to this cell as gold; "
+                    "reject the rest. Nothing here is gold until you accept it."
+                ),
+                gold=_gold_block(row, row.gold_iris, definitions),
+                pipeline=tuple(
+                    {
+                        "iri": str(proposal.get("iri", "")),
+                        "label": str(proposal.get("label", "")),
+                        "score": proposal.get("score", 0.0),
+                        "rank": position + 1,
+                        "extraction_path": (
+                            f"{proposal.get('method', '')}:{proposal.get('branch', '')}"
+                        ),
+                        "definition": definition_snippet(
+                            str(proposal.get("definition", ""))
+                            or definitions.get(str(proposal.get("iri", "")))
+                        ),
+                    }
+                    for position, proposal in enumerate(atom_proposals)
+                ),
+                proposed_iris=tuple(str(proposal.get("iri", "")) for proposal in atom_proposals),
+                notes_text=row.notes,
+                label_frequency=len(row.instances),
+                extra={
+                    "level": row.level,
+                    "levels": list(row.levels),
+                    "instances": _instances_json(row),
+                    "machine_proposed": True,
+                    "proposals": atom_proposals,
+                    "gold_ref": gold_reference(row),
+                    "pipeline_ref": pipeline_reference(row, item_id),
+                    "source_grid": source_grid(
+                        row.firm,
+                        [_as_int(instance.get("row")) for instance in row.instances],
+                        [row.input_text],
+                    ),
+                },
+            )
+        )
+
+    # -- decisions already folded into a later gold version render locked, not askable ----
+    folded = {str(key): dict(value) for key, value in (folded_decisions or {}).items()}
+    if folded:
+        locked: list[PacketRow] = []
+        for packet_row in rows:
+            record = folded.get(packet_row.decision_id)
+            if record is None:
+                locked.append(packet_row)
+                continue
+            counts["folded_rows_locked"] += 1
+            extra = dict(packet_row.extra)
+            extra["folded"] = record
+            locked.append(replace(packet_row, extra=extra))
+        rows = locked
+
     # Counted over what actually renders, not over the candidate pools the caps threw away.
     for packet_row in rows:
         grid = packet_row.extra.get("source_grid")
@@ -2106,6 +2251,7 @@ def build_packet_v2(
         "generated_at": generated_at or _now(),
         "suspect_cap": suspect_cap,
         "new_gold_cap": new_gold_cap,
+        "improvement_cap": improvement_cap,
         "sections": list(SECTIONS_V2),
         "metrics": dict(metrics or {}),
         "split": split.to_json() if split else {},
@@ -2470,6 +2616,42 @@ def _pairing_reading_by_item(assignments: Mapping[str, object], reading: str) ->
     return out
 
 
+def _pairing_edits(
+    decision: Mapping[str, object], decision_id: str, targets: Iterable[str]
+) -> dict[str, set[str]]:
+    """``edited_iris`` on a pairing decision: the corrected gold set *per input cell*.
+
+    Damien's rulings do more than pick a reading — they rewrite what an input cell means ("a child
+    cell never implies its parent": *Borrower* is Borrower, not Finance and Lending Law). That is
+    the existing ``edit`` action, keyed to the items the row names, and it stays row-scoped: the
+    edit replaces **this row's own contribution** to the item, exactly as a reading swap does, so
+    the item keeps whatever its other source-row instances contributed (KTD3 v2 dedup).
+    """
+    raw = decision.get("edited_iris")
+    if raw is None:
+        return {}
+    if not isinstance(raw, Mapping):
+        raise ValueError(
+            f"decision {decision_id}: edited_iris must be an object of {{item_id: [iri, ...]}}, "
+            f"got {type(raw).__name__}"
+        )
+    known = set(targets)
+    out: dict[str, set[str]] = {}
+    for item_id, iris in raw.items():
+        key = str(item_id)
+        if key not in known:
+            raise ValueError(
+                f"decision {decision_id}: edited_iris names item {key!r}, which is not one of "
+                f"this row's input cells ({sorted(known)})"
+            )
+        if not isinstance(iris, (list, tuple)):
+            raise ValueError(
+                f"decision {decision_id}: edited_iris[{key}] must be a list of IRIs"
+            )
+        out[key] = {str(iri) for iri in iris}
+    return out
+
+
 def fold_granular_decisions(
     gold_rows: Sequence[GoldRowV2],
     decisions: Mapping[str, Mapping[str, object]],
@@ -2509,6 +2691,7 @@ def fold_granular_decisions(
         "pipeline_elevated": 0,
         "pipeline_rejected": 0,
         "pairing_alternative": 0,
+        "pairing_gold_edited": 0,
         "notes_recorded": 0,
     }
     notes: dict[str, Mapping[str, str]] = {}
@@ -2546,6 +2729,12 @@ def fold_granular_decisions(
             assignments_map = assignments if isinstance(assignments, Mapping) else {}
             applied_by_item = _pairing_reading_by_item(assignments_map, PAIRING_APPLIED_READING)
             chosen_by_item = _pairing_reading_by_item(assignments_map, choice)
+            edits = _pairing_edits(
+                decision, decision_id, set(applied_by_item) | set(chosen_by_item)
+            )
+            for target, edited in edits.items():
+                chosen_by_item[target] = set(edited)
+                counts["pairing_gold_edited"] += 1
             resulting = tuple(sorted({iri for iris in chosen_by_item.values() for iri in iris}))
             # Re-assign only THIS row's own contribution to each target: subtract what it
             # contributed under the previously-applied reading, add what it contributes under the
@@ -2869,17 +3058,19 @@ def _main_v2(args: Any, parser: Any) -> int:  # pragma: no cover - I/O orchestra
     adapter = PipelineAdapter(pipeline)
 
     by_id = {row.item_id: row for row in rows}
-    by_text = {label_key(row.input_text): row for row in rows}
+    by_input = gold_rows_by_input(rows)
     eligible = frozenset(row.stratum_id for row in rows if not row.blank and row.gold_iris)
     # Every row of every section now shows "what folio-resolve says about this input today", so
     # the pairing rows' own input cells and the resolution batch's items need predictions too.
+    # Firm-scoped, like every other input-cell lookup: a text-only key binds a firm-1 pairing row
+    # to firm 2's like-named item and caches the wrong item's predictions.
     pairing_targets = {
-        by_text[key].item_id
+        by_input[key].item_id
         for entry in pairing_rows
         for value in _items(entry.get("inputs"))
         if isinstance(value, Mapping)
-        for key in (label_key(str(value.get("text", ""))),)
-        if key in by_text
+        for key in ((str(entry.get("firm", "")), label_key(str(value.get("text", "")))),)
+        if key in by_input
     }
     needed = sorted(
         {str(entry.get("item_id", "")) for entry in suspects}
@@ -2947,6 +3138,61 @@ def _main_v2(args: Any, parser: Any) -> int:  # pragma: no cover - I/O orchestra
 
     value_iris = {value.raw: value.iri for row in rows for value in row.values}
 
+    # -- section F: the bounded proposed-improvements pilot ------------------------------
+    improvements: list[dict[str, object]] = []
+    wanted_strata = frozenset(args.improvement_stratum_id or ())
+    if wanted_strata:
+        from .improve import branch_index_from_folio, propose_atoms
+
+        print("indexing FOLIO branches for the improvement pilot…", file=sys.stderr)
+        branch_index = branch_index_from_folio(folio)
+        # A cell already queued in sections A-E is not asked a second time in F.
+        asked: set[str] = pairing_targets | {
+            str(entry.get("item_id", ""))
+            for batch in (inconsistent, suspects, resolution_batch)
+            for entry in batch
+        } | {str(entry["item_id"]) for entry in _score_driven_suspects_v2(cluster_rows, by_id)}
+        candidates: list[tuple[int, str, str, list[dict[str, object]]]] = []
+        for row in rows:
+            if row.firm != "firm1" or row.stratum_id not in wanted_strata:
+                continue
+            if row.blank or not row.gold_iris or row.item_id in asked:
+                continue
+            proposed = propose_atoms(
+                row.input_text,
+                index=index,
+                branches=branch_index,
+                search=lambda query, limit: [
+                    (proposal.iri, proposal.label, proposal.score)
+                    for proposal in _folio_search(folio, index)(query, limit)
+                ],
+                gold_iris=row.gold_iris,
+            )
+            if not proposed:
+                continue
+            candidates.append(
+                (-len(proposed), row.stratum, row.input_text, [p.to_json() for p in proposed])
+            )
+        candidates.sort(key=lambda entry: (entry[0], entry[1], entry[2]))
+        chosen = candidates[: args.improvement_cap]
+        chosen.sort(key=lambda entry: (entry[1], entry[2]))
+        by_text_item = {(row.stratum, row.input_text): row.item_id for row in rows}
+        for _, stratum, text, payloads in chosen:
+            improvements.append(
+                {"item_id": by_text_item[(stratum, text)], "proposals": payloads}
+            )
+            for payload in payloads:
+                iri = str(payload["iri"])
+                concept = provider.get_concept(iri)
+                if concept is not None and concept.definition:
+                    definitions.setdefault(iri, concept.definition)
+        print(f"improvement pilot: {len(improvements)} cells", file=sys.stderr)
+
+    folded_decisions = (
+        json.loads(args.folded.read_text(encoding="utf-8")) if args.folded and args.folded.exists()
+        else {}
+    )
+
     split_facts = SplitFacts(
         seed=split_manifest.seed,
         tune=len(split_manifest.slices["tune"]),
@@ -3003,6 +3249,9 @@ def _main_v2(args: Any, parser: Any) -> int:  # pragma: no cover - I/O orchestra
         harness_config_sha256=config.content_sha256(),
         suspect_cap=args.suspect_cap,
         new_gold_cap=args.new_gold_cap,
+        improvements=improvements,
+        improvement_cap=args.improvement_cap,
+        folded_decisions=folded_decisions,
     )
     written = write_packet_v2(packet, out_dir)
     print(json.dumps(dict(packet.counts), indent=2, sort_keys=True))
@@ -3069,6 +3318,30 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - I/O or
         help="detailed suspect rows in this batch (KTD9 default 50; the rest report as counts)",
     )
     parser.add_argument("--new-gold-cap", type=int, default=NEW_GOLD_CAP)
+    parser.add_argument(
+        "--improvement-cap",
+        type=int,
+        default=IMPROVEMENT_CAP,
+        help="section-F pilot size (cells); 0 with no --improvement-stratum-id disables it",
+    )
+    parser.add_argument(
+        "--improvement-stratum-id",
+        action="append",
+        default=[],
+        help=(
+            "stratum id (hashed, KTD1-safe) whose un-reviewed cells the section-F pilot runs "
+            "over; repeatable. Omitted = no pilot."
+        ),
+    )
+    parser.add_argument(
+        "--folded",
+        type=Path,
+        default=None,
+        help=(
+            "JSON of {decision_id: {summary, note, gold_version, gold_id}} already folded into a "
+            "later gold version; those rows render locked instead of being asked again"
+        ),
+    )
     parser.add_argument("--progress-every", type=int, default=200)
     parser.add_argument(
         "--refresh-predictions",
