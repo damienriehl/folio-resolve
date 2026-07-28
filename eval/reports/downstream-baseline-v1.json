@@ -1,0 +1,136 @@
+{
+  "consumers": {
+    "folio-enrich": {
+      "consumer": "folio-enrich",
+      "harness": {
+        "content_sha256": "049311f5621d052b748ad11f122db84493a04595892310ae09d5be8ab1844d38",
+        "elapsed_s": 21.671,
+        "error": false,
+        "folio_resolve_present": true,
+        "items": 24,
+        "resolved": 24,
+        "returncode": 0
+      },
+      "tests": {
+        "collect_error": false,
+        "consumer": "folio-enrich",
+        "counts": {
+          "passed": 889
+        },
+        "elapsed_s": 8.547,
+        "outcomes_sha256": "f095027bc8a78acdd944bdd79c286229d288c267eaebd3bef1cb87d29fbd8823",
+        "returncode": 0,
+        "total": 889
+      }
+    },
+    "folio-mapper": {
+      "consumer": "folio-mapper",
+      "probes": {
+        "banking-finance": {
+          "area": "banking-finance",
+          "content_sha256": "c754b89045b0f710850672ce7b3442746275432861f9293d2b95feefa404e106",
+          "elapsed_s": 1.285,
+          "error": false,
+          "high_score_relevant_total": 46,
+          "items": 16,
+          "relevant_candidates_total": 245,
+          "returncode": 0
+        },
+        "commercial-lit": {
+          "area": "commercial-lit",
+          "content_sha256": "6741cdb67d7bc9198d8e8803e336244ec34058c520af2834d6d50bbfa9504f73",
+          "elapsed_s": 1.236,
+          "error": false,
+          "high_score_relevant_total": 90,
+          "items": 16,
+          "relevant_candidates_total": 246,
+          "returncode": 0
+        },
+        "corporate-ma": {
+          "area": "corporate-ma",
+          "content_sha256": "711f26623cee56a7e0da0b85087657de67172530988877e85ec19155e66c7eaa",
+          "elapsed_s": 1.258,
+          "error": false,
+          "high_score_relevant_total": 64,
+          "items": 16,
+          "relevant_candidates_total": 202,
+          "returncode": 0
+        },
+        "employment-labor": {
+          "area": "employment-labor",
+          "content_sha256": "486d02b36bcb49de481ea423e02aa477cd68f795295e9d9029a558040523ab23",
+          "elapsed_s": 1.252,
+          "error": false,
+          "high_score_relevant_total": 56,
+          "items": 16,
+          "relevant_candidates_total": 234,
+          "returncode": 0
+        },
+        "family-law": {
+          "area": "family-law",
+          "content_sha256": "b0f1056a9dcbc0378a7cc7a9059e2381b0cfc2055fa20b7d17c3fa2f6095e532",
+          "elapsed_s": 1.198,
+          "error": false,
+          "high_score_relevant_total": 68,
+          "items": 16,
+          "relevant_candidates_total": 167,
+          "returncode": 0
+        },
+        "immigration": {
+          "area": "immigration",
+          "content_sha256": "e0dc27e779e8d3c5014e9897d77d38ce6d6967155abb3b30fe1ddba23fec652a",
+          "elapsed_s": 1.222,
+          "error": false,
+          "high_score_relevant_total": 29,
+          "items": 16,
+          "relevant_candidates_total": 121,
+          "returncode": 0
+        },
+        "ip-tech": {
+          "area": "ip-tech",
+          "content_sha256": "d7ae523c3f2be25f9c9afd27b0bf0827eb5a87f648701720b7902955c140e4a9",
+          "elapsed_s": 1.222,
+          "error": false,
+          "high_score_relevant_total": 64,
+          "items": 16,
+          "relevant_candidates_total": 220,
+          "returncode": 0
+        },
+        "real-estate": {
+          "area": "real-estate",
+          "content_sha256": "f481a78e51a2221f947249617c6bd7a76569b8744eeba244893b8429a07e04f2",
+          "elapsed_s": 1.229,
+          "error": false,
+          "high_score_relevant_total": 64,
+          "items": 16,
+          "relevant_candidates_total": 250,
+          "returncode": 0
+        },
+        "solo-criminal": {
+          "area": "solo-criminal",
+          "content_sha256": "5cfc7b5aa789998298bac3b178c68a7f5584a0248f801d5078b933539d99a543",
+          "elapsed_s": 1.216,
+          "error": false,
+          "high_score_relevant_total": 22,
+          "items": 16,
+          "relevant_candidates_total": 141,
+          "returncode": 0
+        }
+      },
+      "tests": {
+        "collect_error": false,
+        "consumer": "folio-mapper",
+        "counts": {
+          "passed": 518,
+          "skipped": 10
+        },
+        "elapsed_s": 5.588,
+        "outcomes_sha256": "898bfc3571c9586102623664f71163090e7a2a3e4064e53737e4371d57d51604",
+        "returncode": 0,
+        "total": 528
+      }
+    }
+  },
+  "kind": "downstream_baseline",
+  "label": "baseline-v1"
+}
