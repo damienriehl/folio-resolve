@@ -129,7 +129,7 @@ class FolioPythonProvider:
 
     def search_by_label(self, query: str, *, limit: int = 20) -> list[tuple[Concept, float]]:
         folio = self._get()
-        results = folio.search_by_label(query)
+        results = folio.search_by_label(query, limit=limit)
         out: list[tuple[Concept, float]] = []
         for item in results[:limit]:
             owl, score = item if isinstance(item, tuple) else (item, 0.0)
