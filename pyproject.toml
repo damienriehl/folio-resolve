@@ -63,7 +63,9 @@ warn_unused_ignores = true
 warn_redundant_casts = true
 disallow_untyped_defs = true
 files = ["src/folio_resolve"]
-mypy_path = "eval"
+# ``eval`` so the harness package resolves; ``src`` so ``mypy eval`` type-checks the library seam
+# from source instead of falling back to the installed (stub-less) distribution.
+mypy_path = "eval:src"
 
 [[tool.mypy.overrides]]
 # optional heavy deps have no stubs; adapters guard their imports at runtime
