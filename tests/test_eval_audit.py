@@ -21,14 +21,18 @@ from fixtures.eval_synthetic_workbook import (
     W_PURCHASE,
     synthetic_index,
 )
-from folio_eval.answer_rule import RankedCandidate
+from folio_eval.answer_rule import AnswerRuleConfig, RankedCandidate
 from folio_eval.audit import (
     GOLD_VARIANTS,
     NEW_GOLD_CAP,
+    PAIRING_VIOLATION_DUPLICATE,
+    PAIRING_VIOLATION_EMPTY,
     SECTIONS_V2,
     SUSPECT_ROW_CAP,
     DecisionRecord,
     LabelProposal,
+    Packet,
+    PacketRow,
     SplitFacts,
     append_decisions,
     build_packet,
@@ -38,14 +42,19 @@ from folio_eval.audit import (
     gold_row_v2_from_json,
     load_decisions,
     load_gold_rows,
+    locate_source_rows,
     packet_v2_from_json,
+    pairing_violations,
+    precheck_pairing,
     propose_for_label,
     rejection_key,
     rejection_memory,
     replay_counts,
+    sheet_source,
     variant_iris,
     variant_stats,
     variant_table,
+    write_decision_notes,
 )
 from folio_eval.gold import build_gold_v2, parse_firm1_v2
 from folio_eval.packet_render import (
@@ -1255,3 +1264,342 @@ def test_confirming_the_pairing_heuristic_changes_nothing(v2_gold: tuple[Any, li
     assert result.counts["pairing_alternative"] == 0
     before = {row.item_id: sorted(row.gold_iris) for row in rows}
     assert {row["item_id"]: sorted(row["gold_iris"]) for row in result.rows} == before
+
+
+# --------------------------------------------------------------------------------------
+# Section A pre-checks — Damien's principle, applied before he opens the sheet
+# --------------------------------------------------------------------------------------
+
+
+def test_a_reading_that_leaves_an_input_mapping_to_nothing_is_dis_preferred() -> None:
+    assert pairing_violations([["A"], []]) == (PAIRING_VIOLATION_EMPTY,)
+    assert pairing_violations([["A"], ["B"]]) == ()
+
+
+def test_a_reading_that_lands_one_concept_on_one_input_twice_is_dis_preferred() -> None:
+    assert pairing_violations([["A", "A"], ["B"]]) == (PAIRING_VIOLATION_DUPLICATE,)
+    # normalization decides sameness, so a case/whitespace variant still counts as a duplicate
+    assert pairing_violations([["Widget Law", "widget  law"]]) == (PAIRING_VIOLATION_DUPLICATE,)
+
+
+def test_two_different_inputs_may_share_a_concept() -> None:
+    """Duplication is judged inside an input cell — Damien's worked example turns on this."""
+    assert pairing_violations([["A", "B"], ["A", "B"]]) == ()
+
+
+def test_precheck_picks_the_reading_that_survives_the_principle() -> None:
+    empty_alternative = precheck_pairing([["A"], ["B"]], [[], ["A", "B"]])
+    assert empty_alternative[0] == "heuristic"
+    assert PAIRING_VIOLATION_EMPTY in empty_alternative[2]
+
+    duplicating_heuristic = precheck_pairing([["A", "A"], ["B"]], [["A"], ["B"]])
+    assert duplicating_heuristic[0] == "alternative"
+    assert PAIRING_VIOLATION_DUPLICATE in duplicating_heuristic[1]
+
+
+def test_precheck_leaves_both_readings_unchecked_when_both_break_the_principle() -> None:
+    """One output block, two inputs: whichever way it falls, an input maps to nothing."""
+    choice, heuristic_bad, alternative_bad = precheck_pairing([["A"], []], [[], ["A"]])
+    assert choice == ""
+    assert PAIRING_VIOLATION_EMPTY in heuristic_bad
+    assert PAIRING_VIOLATION_EMPTY in alternative_bad
+
+
+def test_the_heuristic_wins_a_tie_so_an_untouched_row_stays_a_no_op() -> None:
+    assert precheck_pairing([["A"], ["B"]], [["A"], ["B"]])[0] == "heuristic"
+
+
+def test_the_worked_example_row_pre_checks_the_heuristic() -> None:
+    """The shape Damien ruled on: a cascade-down block repeating the per-attribute blocks."""
+    heuristic = [
+        ["Sprocket Litigation Practice", "Bauble Agreements"],
+        ["Sprocket Litigation Practice", "Bauble Agreements"],
+    ]
+    alternative = [
+        [],
+        [
+            "Sprocket Litigation Practice",
+            "Bauble Agreements",
+            "Sprocket Litigation Practice",
+            "Bauble Agreements",
+        ],
+    ]
+    choice, heuristic_bad, alternative_bad = precheck_pairing(heuristic, alternative)
+    assert choice == "heuristic"
+    assert heuristic_bad == ()
+    assert set(alternative_bad) == {PAIRING_VIOLATION_EMPTY, PAIRING_VIOLATION_DUPLICATE}
+
+
+def test_the_packet_pre_checks_the_pairing_row_and_the_sheet_renders_it(
+    v2_gold: tuple[Any, list[Any]],
+) -> None:
+    build, rows = v2_gold
+    packet = v2_packet(build, rows)
+    pairing = packet.section("pairing")[0]
+    assert pairing.extra["precheck"]["choice"] == "heuristic"
+    assert pairing.extra["precheck"]["needs_your_eye"] is False
+    assert packet.counts["pairing_precheck_heuristic"] == 1
+    assert packet.counts["pairing_needs_your_eye"] == 0
+    html = render_sheet_v2(packet)
+    assert 'value="heuristic" checked' in html
+    assert 'value="alternative" checked' not in html
+    assert "dis-preferred" in html
+
+
+def test_a_row_whose_readings_both_break_the_rule_is_badged_and_left_unchecked(
+    v2_gold: tuple[Any, list[Any]],
+) -> None:
+    _build, rows = v2_gold
+    packet = build_packet_v2(
+        gold_rows=rows,
+        pairing_rows=[
+            {
+                "firm": "firm1",
+                "row": 4,
+                "stratum": "Widget Practice",
+                "inputs": [
+                    {"level": 2, "text": "Shared Category"},
+                    {"level": 3, "text": "First attribute"},
+                ],
+                "blocks": [{"column": "SALI 0 (cascade down)", "values": ["Widget Law"]}],
+                "heuristic": [["Widget Law"], []],
+                "alternative": [[], ["Widget Law"]],
+            }
+        ],
+        ontology_sha256=ONTOLOGY_SHA,
+        gold_id="v2-test",
+        generated_at="2026-07-28T00:00:00Z",
+    )
+    pairing = packet.section("pairing")[0]
+    assert pairing.extra["precheck"]["choice"] == ""
+    assert pairing.extra["precheck"]["needs_your_eye"] is True
+    assert packet.counts["pairing_needs_your_eye"] == 1
+    html = render_sheet_v2(packet)
+    assert "needs your eye" in html
+    assert 'data-kind="pairing" name="pair|' in html
+    assert 'value="heuristic" checked' not in html
+    assert 'value="alternative" checked' not in html
+    # nothing pre-checked means an untouched row emits no decision at all: gold cannot move
+    result = fold_granular_decisions(
+        rows, {}, packet=packet, ontology_sha256=ONTOLOGY_SHA
+    )
+    assert result.counts["changed_items"] == 0
+
+
+# --------------------------------------------------------------------------------------
+# The three labelled panels, and the original-spreadsheet grid under them
+# --------------------------------------------------------------------------------------
+
+
+def test_every_row_of_every_section_carries_the_three_labelled_panels(
+    v2_gold: tuple[Any, list[Any]],
+) -> None:
+    """Damien must never have to guess which system produced what he is looking at."""
+    build, rows = v2_gold
+    suspect_row = _row_by_text(rows, "Unsettled matters")
+    blank_row = _row_by_text(rows, "General advice")
+    packet = v2_packet(
+        build,
+        rows,
+        eligible_strata={suspect_row.stratum_id, blank_row.stratum_id},
+        predictions={
+            suspect_row.item_id: ranked(("R-pipe", "Enforcement Practice", 100.0, 0.9)),
+            blank_row.item_id: ranked(("R-new", "General Advisory", 100.0, 0.9)),
+        },
+        sheet_sources=[sheet_source("firm1", "firm1-sheet", FIRM1_V2_ROWS)],
+    )
+    html = render_sheet_v2(packet)
+    total = html.count('<article class="row')
+    assert total == len(packet.rows) > 0
+    assert html.count("Gold — curated in your workbook") == total
+    assert html.count("Current pipeline — folio-resolve today") == total
+    assert html.count("Proposed — this sheet") == total
+    assert html.count('class="panel source"') == total
+    # every decision unit, pairing and consistency included, has somewhere to write a note
+    assert html.count('class="note row-note rownote"') == total
+    # section A says out loud that the pipeline is reference only
+    assert "the pipeline is not involved in the question" in html
+
+
+def test_the_pipeline_panel_separates_the_committed_answer_from_the_ranked_tail(
+    v2_gold: tuple[Any, list[Any]],
+) -> None:
+    build, rows = v2_gold
+    target = _row_by_text(rows, "Unsettled matters")
+    packet = v2_packet(
+        build,
+        rows,
+        answer_config=AnswerRuleConfig(threshold=0.0, top_k=2, calibrated=True),
+        predictions={
+            target.item_id: ranked(
+                ("R-pipe", "Enforcement Practice", 100.0, 0.9),
+                ("R-junk", "Office of Water", 95.0, 0.4),
+                ("R-tail", "Something Else", 90.0, 0.1),
+            )
+        },
+    )
+    suspect = next(entry for entry in packet.section("suspect") if entry.item_id == target.item_id)
+    reference = suspect.extra["pipeline_ref"]
+    assert [entry["committed"] for entry in reference["candidates"]] == [True, True, False]
+    assert reference["ranked_total"] == 3
+    assert reference["top_k"] == 2
+    assert packet.meta["answer_rule"] == {"top_k": 2, "threshold": 0.0, "calibrated": True}
+    html = render_sheet_v2(packet)
+    assert "committed answer" in html and "ranked tail" in html
+
+
+def test_a_suspect_row_quotes_the_workbook_rows_it_came_from(
+    v2_gold: tuple[Any, list[Any]],
+) -> None:
+    build, rows = v2_gold
+    packet = v2_packet(
+        build, rows, sheet_sources=[sheet_source("firm1", "firm1-sheet", FIRM1_V2_ROWS)]
+    )
+    suspect = next(
+        entry for entry in packet.section("suspect") if entry.input_text == "Unsettled matters"
+    )
+    grid = suspect.extra["source_grid"]
+    assert grid["unlocated"] == []
+    quoted = grid["grids"][0]
+    # 1-based row numbers, header on row 1 — the numbering the curator sees in the workbook
+    assert [record["row"] for record in quoted["rows"]] == [13]
+    assert "Unsettled matters" in quoted["rows"][0]["cells"]
+    assert "SALI NOTES" in quoted["headers"]
+    # a column no row of this sheet uses is not mirrored
+    assert "SALI 6" not in quoted["headers"]
+    assert 'table class="sheetgrid"' in render_sheet_v2(packet)
+
+
+def test_a_row_no_sheet_can_confirm_is_reported_rather_than_guessed_at() -> None:
+    source = sheet_source("firm1", "firm1-sheet", FIRM1_V2_ROWS)
+    grid = locate_source_rows(
+        [source], firm="firm1", row_numbers=[13, 900], needles=["Unsettled matters"]
+    )
+    assert grid["unlocated"] == [900]
+    assert [record["row"] for record in grid["grids"][0]["rows"]] == [13]
+    # and a row number whose text does not match this sheet is not silently quoted
+    mismatched = locate_source_rows(
+        [source], firm="firm1", row_numbers=[13], needles=["Something Else Entirely"]
+    )
+    assert mismatched["unlocated"] == [13]
+    assert mismatched["grids"] == []
+
+
+def test_the_source_row_grid_escapes_workbook_text() -> None:
+    """Workbook cells are arbitrary text; the grid must never inject markup into the sheet."""
+    hostile = sheet_source(
+        "firm1",
+        "hostile-sheet",
+        [
+            ["Level 3 - Attributes", "SALI 1"],
+            ["<script>alert('x')</script>", "Widget & Sons"],
+        ],
+    )
+    grid = locate_source_rows([hostile], firm="firm1", row_numbers=[2], needles=[])
+    packet = Packet(
+        rows=(
+            PacketRow(
+                decision_id="suspect:hostile",
+                section="suspect",
+                item_id="hostile",
+                firm="firm1",
+                stratum="Widget Practice",
+                stratum_id="sid",
+                ancestor_path=(),
+                surface_label="hostile",
+                input_text="hostile",
+                slice_name="",
+                reason_class="gold_suspect",
+                suggested_action="grade it",
+                extra={"source_grid": grid},
+            ),
+        ),
+        variants=(),
+        replay={},
+        split=None,
+        counts={},
+        overflow={},
+        meta={"sections": list(SECTIONS_V2)},
+    )
+    html = render_sheet_v2(packet)
+    assert "<script>alert(&#x27;x&#x27;)</script>" not in html
+    assert "&lt;script&gt;alert(&#x27;x&#x27;)&lt;/script&gt;" in html
+    assert "Widget &amp; Sons" in html
+
+
+# --------------------------------------------------------------------------------------
+# Notes: every decision unit can carry one, and the fold keeps it out of the committed log
+# --------------------------------------------------------------------------------------
+
+
+def test_a_pairing_note_and_a_consistency_note_survive_the_fold(
+    v2_gold: tuple[Any, list[Any]],
+) -> None:
+    build, rows = v2_gold
+    packet = v2_packet(build, rows)
+    pairing = packet.section("pairing")[0]
+    consistency = packet.section("consistency")[0]
+    result = fold_granular_decisions(
+        rows,
+        {
+            pairing.decision_id: {
+                "pairing": "heuristic",
+                "note": "the heading keeps the cascade-down block",
+            },
+            consistency.decision_id: {
+                "note": "same cell, two places, one answer",
+                "gold_note": "both concepts stand",
+            },
+        },
+        packet=packet,
+        ontology_sha256=ONTOLOGY_SHA,
+        now="2026-07-28T00:00:00Z",
+    )
+    assert result.notes[pairing.decision_id] == {
+        "note": "the heading keeps the cascade-down block"
+    }
+    assert result.notes[consistency.decision_id] == {
+        "note": "same cell, two places, one answer",
+        "gold_note": "both concepts stand",
+    }
+    assert result.counts["notes_recorded"] == 2
+    # a note is commentary, never a gold edit
+    assert result.counts["changed_items"] == 0
+    # and it never reaches the committed, leak-scanned decision log
+    for record in result.records:
+        assert not set(record.to_json()) & {"note", "gold_note", "pipeline_note"}
+
+
+def test_a_note_that_is_not_a_string_is_rejected(v2_gold: tuple[Any, list[Any]]) -> None:
+    build, rows = v2_gold
+    packet = v2_packet(build, rows)
+    pairing = packet.section("pairing")[0]
+    with pytest.raises(ValueError, match="note must be a string"):
+        fold_granular_decisions(
+            rows,
+            {pairing.decision_id: {"note": ["not", "a", "string"]}},
+            packet=packet,
+            ontology_sha256=ONTOLOGY_SHA,
+        )
+
+
+def test_decision_notes_land_beside_the_gold_they_explain(
+    v2_gold: tuple[Any, list[Any]], tmp_path: Path
+) -> None:
+    build, rows = v2_gold
+    packet = v2_packet(build, rows)
+    pairing = packet.section("pairing")[0]
+    empty = fold_granular_decisions(rows, {}, packet=packet, ontology_sha256=ONTOLOGY_SHA)
+    assert write_decision_notes(empty, tmp_path) is None
+
+    result = fold_granular_decisions(
+        rows,
+        {pairing.decision_id: {"note": "keep the applied reading"}},
+        packet=packet,
+        ontology_sha256=ONTOLOGY_SHA,
+    )
+    path = write_decision_notes(result, tmp_path)
+    assert path is not None and path.name == "decision_notes_v3.json"
+    assert json.loads(path.read_text(encoding="utf-8")) == {
+        pairing.decision_id: {"note": "keep the applied reading"}
+    }

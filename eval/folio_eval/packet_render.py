@@ -455,6 +455,40 @@ ul.grade > li:last-child { border-bottom: 0; }
 .metrics td.better { color: var(--good); font-weight: 600; }
 .instance { font-size: .84rem; padding: .2rem 0; }
 .blocks { font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--muted); }
+
+/* --- the three labelled panels every row carries, and the source-row grid ---------- */
+.panel { border: 1px solid var(--line); border-radius: 7px; padding: .55rem .7rem; margin: .6rem 0;
+         background: var(--card); }
+.panel > h4 { margin: 0 0 .35rem; font-size: .78rem; text-transform: uppercase;
+              letter-spacing: .06em; color: var(--muted); display: flex; flex-wrap: wrap;
+              gap: .4rem; align-items: baseline; }
+.panel > h4 .who { font-size: .7rem; letter-spacing: .04em; text-transform: none;
+                   font-style: italic; }
+.panel.source { border-left: 3px solid var(--muted); }
+.panel.ref-gold { border-left: 3px solid var(--good); }
+.panel.ref-pipe { border-left: 3px solid var(--accent); }
+.panel.proposed { border-left: 3px solid var(--warn); background: var(--code); }
+.panel.proposed > h4 { color: var(--warn); }
+.perinput { margin: .3rem 0 .5rem; }
+.perinput:last-child { margin-bottom: 0; }
+.perinput > h5 { margin: 0 0 .2rem; font-size: .82rem; font-weight: 600; }
+table.sheetgrid { border-collapse: collapse; font: 11px/1.4 ui-monospace, SFMono-Regular, Menlo,
+                  monospace; min-width: 100%; }
+table.sheetgrid th, table.sheetgrid td { border: 1px solid var(--line); padding: .2rem .4rem;
+                                         text-align: left; vertical-align: top;
+                                         min-width: 6rem; max-width: 15rem;
+                                         overflow-wrap: anywhere; }
+table.sheetgrid thead th { background: var(--code); color: var(--muted); font-weight: 600; }
+table.sheetgrid th.rownum { background: var(--code); color: var(--muted); text-align: right;
+                            white-space: nowrap; min-width: 0; width: 1%; }
+table.sheetgrid tbody td.filled { color: var(--fg); }
+ul.iris li.committed { border-left: 3px solid var(--good); padding-left: .4rem; }
+ul.iris li.tail { border-left: 3px solid transparent; padding-left: .4rem; color: var(--muted); }
+.needseye { color: var(--warn); border-color: var(--warn); font-weight: 600; }
+.banner { border: 1px solid var(--accent); border-left-width: 3px; border-radius: 7px;
+          padding: .55rem .75rem; margin: .6rem 0 1rem; font-size: .9rem; }
+.banner strong { display: block; margin-bottom: .2rem; }
+.rownote { margin-top: .5rem; }
 """
 )
 
@@ -478,6 +512,8 @@ function collect() {
     if (Object.keys(pipeline).length) { entry.pipeline = pipeline; }
     const pairing = row.querySelector('input[data-kind=pairing]:checked');
     if (pairing) { entry.pairing = pairing.value; }
+    const rowNote = row.querySelector('textarea.row-note');
+    if (rowNote && rowNote.value.trim()) { entry.note = rowNote.value.trim(); }
     const goldNote = row.querySelector('textarea.gold-note');
     if (goldNote && goldNote.value.trim()) { entry.gold_note = goldNote.value.trim(); }
     const pipeNote = row.querySelector('textarea.pipeline-note');
@@ -589,7 +625,7 @@ def _paths(row: PacketRow) -> str:
     for instance in list(instances)[:8]:
         if not isinstance(instance, Mapping):
             continue
-        path = " \u203a ".join(str(part) for part in (instance.get("path") or [])) or "(root)"
+        path = " \u203a ".join(_strings(instance.get("path"))) or "(root)"
         chips.append(f'<span>L{_esc(instance.get("level", ""))} {_esc(path)}</span>')
     more = len(instances) - len(chips)
     if more > 0:
@@ -597,43 +633,227 @@ def _paths(row: PacketRow) -> str:
     return f'<p class="paths">{"".join(chips)}</p>'
 
 
-def _pairing_block(row: PacketRow) -> str:
+def _records(value: object) -> list[Mapping[str, object]]:
+    """A nested JSON array of objects, read defensively."""
+    if not isinstance(value, (list, tuple)):
+        return []
+    return [entry for entry in value if isinstance(entry, Mapping)]
+
+
+def _strings(value: object) -> list[str]:
+    """A nested JSON array of scalars, read defensively as text."""
+    if not isinstance(value, (list, tuple)):
+        return []
+    return [str(entry) for entry in value]
+
+
+# --------------------------------------------------------------------------------------
+# Panel 0 -- the original spreadsheet rows behind the question
+# --------------------------------------------------------------------------------------
+
+
+def _source_panel(row: PacketRow) -> str:
+    """The workbook rows this adjudication came from, as a mini-grid with the sheet's headers."""
+    grid = row.extra.get("source_grid")
+    if not isinstance(grid, Mapping):
+        return ""
+    tables: list[str] = []
+    for entry in _records(grid.get("grids")):
+        headers = _strings(entry.get("headers"))
+        head = "".join(f"<th>{_esc(name)}</th>" for name in headers)
+        body: list[str] = []
+        for record in _records(entry.get("rows")):
+            cells = _strings(record.get("cells"))
+            rendered = "".join(
+                f'<td class="filled">{_esc(cell)}</td>' if cell.strip() else "<td></td>"
+                for cell in cells
+            )
+            body.append(
+                f'<tr><th class="rownum">{_esc(record.get("row", ""))}</th>{rendered}</tr>'
+            )
+        if not body:
+            continue
+        tables.append(
+            '<div class="tablewrap"><table class="sheetgrid"><thead><tr>'
+            f'<th class="rownum">row</th>{head}</tr></thead>'
+            f'<tbody>{"".join(body)}</tbody></table></div>'
+        )
+    footnotes: list[str] = []
+    unlocated = _strings(grid.get("unlocated"))
+    if unlocated:
+        footnotes.append(
+            "could not be re-located in the derived sheet — row " + ", ".join(unlocated)
+        )
+    more = grid.get("more") or 0
+    if more:
+        footnotes.append(f"+{more} further source row(s) not shown")
+    if grid.get("ambiguous"):
+        footnotes.append("several sheets carry this row number; the text-matched one is shown")
+    if not tables and not footnotes:
+        return ""
+    note = f'<p class="note">{_esc(" · ".join(footnotes))}</p>' if footnotes else ""
+    return (
+        '<section class="panel source"><h4>Original spreadsheet'
+        '<span class="who">the row(s) this question came from</span></h4>'
+        + "".join(tables)
+        + note
+        + "</section>"
+    )
+
+
+# --------------------------------------------------------------------------------------
+# Panels 1 and 2 -- read-only: what the workbook says, and what the pipeline says
+# --------------------------------------------------------------------------------------
+
+
+def _gold_reference(entries: Sequence[Mapping[str, object]]) -> str:
+    if not entries:
+        return '<p class="note">none — this input cell carries no curated mapping.</p>'
+    items: list[str] = []
+    for entry in entries:
+        bits = [
+            f'<strong>{_esc(entry.get("label", ""))}</strong> '
+            f'<code>{_esc(_short(str(entry.get("iri", ""))))}</code>'
+        ]
+        if entry.get("column"):
+            bits.append(f'<span class="tag">{_esc(entry["column"])}</span>')
+        line = " ".join(bits)
+        if entry.get("definition"):
+            line += f'<span class="def">{_esc(entry["definition"])}</span>'
+        items.append(f"<li>{line}</li>")
+    return '<ul class="iris">' + "".join(items) + "</ul>"
+
+
+def _pipeline_reference(reference: object) -> str:
+    """The ranked list folio-resolve produces today: committed answer set marked off from the tail."""
+    if not isinstance(reference, Mapping):
+        return '<p class="note">no cached prediction for this input cell.</p>'
+    candidates = _records(reference.get("candidates"))
+    if not candidates:
+        return '<p class="note">the pipeline returned no candidate for this input cell.</p>'
+    items: list[str] = []
+    for entry in candidates:
+        committed = bool(entry.get("committed"))
+        score = f'score {_esc(entry.get("score"))}'
+        probability = entry.get("probability")
+        if probability is not None:
+            score += f" · p={_esc(probability)}"
+        bits = [
+            f'<span class="tag">#{_esc(entry.get("rank", ""))}</span>',
+            f'<strong>{_esc(entry.get("label", ""))}</strong>',
+            f'<code>{_esc(_short(str(entry.get("iri", ""))))}</code>',
+            f'<span class="tag">{score}</span>',
+            '<span class="tag good">committed answer</span>'
+            if committed
+            else '<span class="tag">ranked tail</span>',
+        ]
+        if entry.get("already_gold"):
+            bits.append('<span class="tag good">already gold</span>')
+        items.append(f'<li class="{"committed" if committed else "tail"}">{" ".join(bits)}</li>')
+    total = reference.get("ranked_total") or len(candidates)
+    top_k = reference.get("top_k") or 0
+    lede = (
+        f'<p class="note">Committed answer set = the top {_esc(top_k)} of this ranked list '
+        f'(KTD2 answer rule); showing {_esc(len(candidates))} of {_esc(total)} ranked candidates.'
+        "</p>"
+    )
+    return lede + '<ul class="iris">' + "".join(items) + "</ul>"
+
+
+def _reference_panels(row: PacketRow) -> str:
+    """Panels 1 and 2, on every row of every section, labelled identically throughout."""
+    if row.section == "pairing":
+        context = _records(row.extra.get("input_context"))
+        gold_body = "".join(
+            f'<div class="perinput"><h5>L{_esc(entry.get("level", ""))} · '
+            f'{_esc(entry.get("text", ""))}</h5>'
+            f'{_gold_reference(_records(entry.get("gold")))}</div>'
+            for entry in context
+        )
+        pipe_body = "".join(
+            f'<div class="perinput"><h5>L{_esc(entry.get("level", ""))} · '
+            f'{_esc(entry.get("text", ""))}</h5>'
+            f'{_pipeline_reference(entry.get("pipeline"))}</div>'
+            for entry in context
+        )
+    else:
+        gold_raw = row.extra.get("gold_ref")
+        gold_body = _gold_reference(
+            _records(gold_raw) if isinstance(gold_raw, (list, tuple)) else list(row.gold)
+        )
+        pipe_body = _pipeline_reference(row.extra.get("pipeline_ref"))
+    return (
+        '<section class="panel ref-gold"><h4>Gold — curated in your workbook'
+        '<span class="who">your spreadsheet, as this harness derives it</span></h4>'
+        + gold_body
+        + "</section>"
+        '<section class="panel ref-pipe"><h4>Current pipeline — folio-resolve today'
+        '<span class="who">what the matcher returns for this input, gold-blind</span></h4>'
+        + pipe_body
+        + "</section>"
+    )
+
+
+# --------------------------------------------------------------------------------------
+# Panel 3 -- the question this section is asking
+# --------------------------------------------------------------------------------------
+
+
+def _pairing_readings(row: PacketRow) -> str:
+    """Reading A / Reading B, with the one that survives Damien's principle pre-checked."""
     assignments = row.extra.get("assignments")
-    blocks = row.extra.get("blocks")
+    prechecked = row.extra.get("precheck")
+    violations: Mapping[str, object] = prechecked if isinstance(prechecked, Mapping) else {}
+    choice = str(violations.get("choice", "heuristic"))
     out: list[str] = []
+    blocks = row.extra.get("blocks")
     if isinstance(blocks, (list, tuple)) and blocks:
         rendered = " · ".join(
-            f'{_esc(block.get("column", ""))}: {_esc(", ".join(str(v) for v in (block.get("values") or [])))}'
-            for block in blocks
-            if isinstance(block, Mapping)
+            f'{_esc(block.get("column", ""))}: '
+            f'{_esc(", ".join(_strings(block.get("values"))))}'
+            for block in _records(blocks)
         )
-        out.append(f'<p class="blocks">outputs — {rendered}</p>')
+        out.append(f'<p class="blocks">outputs on this row — {rendered}</p>')
     if not isinstance(assignments, Mapping):
         return "".join(out)
     panels: list[str] = []
-    for choice, title in (
-        ("heuristic", "Heuristic (applied today)"),
-        ("alternative", "Alternative"),
+    for reading, title, key in (
+        ("heuristic", "Reading A — heuristic (applied to gold today)", "heuristic_violations"),
+        ("alternative", "Reading B — alternative", "alternative_violations"),
     ):
-        entries = assignments.get(choice) or []
         lines: list[str] = []
-        for entry in entries if isinstance(entries, (list, tuple)) else []:
-            if not isinstance(entry, Mapping):
-                continue
-            labels = ", ".join(str(label) for label in (entry.get("labels") or [])) or "— nothing —"
+        for entry in _records(assignments.get(reading)):
+            labels = ", ".join(_strings(entry.get("labels")))
             lines.append(
                 f'<li class="instance"><strong>L{_esc(entry.get("level", ""))} '
-                f'{_esc(entry.get("input", ""))}</strong> → {_esc(labels)}</li>'
+                f'{_esc(entry.get("input", ""))}</strong> → '
+                + (_esc(labels) if labels else "<em>— nothing —</em>")
+                + "</li>"
             )
+        broken = [name.replace("_", " ") for name in _strings(violations.get(key))]
+        flag = (
+            '<p class="note"><span class="tag needseye">dis-preferred</span> '
+            f'{_esc(", ".join(broken))}</p>'
+            if broken
+            else ""
+        )
+        picked = reading == choice
         panels.append(
-            f'<div class="opt{" picked" if choice == "heuristic" else ""}" data-choice="{choice}">'
+            f'<div class="opt{" picked" if picked else ""}" data-choice="{reading}">'
             f"<h4>{_esc(title)}</h4>"
             f'<ul class="iris">{"".join(lines)}</ul>'
+            f"{flag}"
             f'<label><input type="radio" data-kind="pairing" name="pair|{_esc(row.decision_id)}" '
-            f'value="{choice}"{" checked" if choice == "heuristic" else ""}> pick this reading</label>'
+            f'value="{reading}"{" checked" if picked else ""}> pick this reading</label>'
             "</div>"
         )
     out.append(f'<div class="pairing">{"".join(panels)}</div>')
+    if not choice:
+        out.append(
+            '<p class="note"><span class="tag needseye">needs your eye</span> both readings break '
+            "the rule, so neither is pre-checked — an untouched row leaves gold exactly as it "
+            "is.</p>"
+        )
     return "".join(out)
 
 
@@ -642,45 +862,56 @@ def _consistency_block(row: PacketRow) -> str:
     if not isinstance(instances, (list, tuple)):
         return ""
     lines: list[str] = []
-    for instance in instances:
-        if not isinstance(instance, Mapping):
-            continue
-        path = " \u203a ".join(str(part) for part in (instance.get("path") or [])) or "(root)"
-        labels = ", ".join(str(label) for label in (instance.get("gold_labels_raw") or []))
+    for instance in _records(instances):
+        path = " \u203a ".join(_strings(instance.get("path"))) or "(root)"
+        labels = ", ".join(_strings(instance.get("gold_labels_raw")))
         lines.append(
             f'<li class="instance"><code>row {_esc(instance.get("row", ""))}</code> '
             f'L{_esc(instance.get("level", ""))} {_esc(path)} → '
             f'{_esc(labels or "— no mapping —")}</li>'
         )
-    return f'<div class="block"><h4>Instances of this cell</h4><ul class="iris">{"".join(lines)}</ul></div>'
+    return (
+        '<div class="block"><h4>How this cell was answered in each place</h4>'
+        f'<ul class="iris">{"".join(lines)}</ul></div>'
+    )
 
 
-def _render_row_v2(row: PacketRow) -> str:
+#: What Panel 3 is asking, per section. Panels 1 and 2 are always the same two questions
+#: ("what does the workbook say", "what does folio-resolve say"), so only this one moves.
+PROPOSED_TITLES: Mapping[str, str] = {
+    "pairing": "Proposed — this sheet&rsquo;s question: which reading of the shared row is right?",
+    "consistency": "Proposed — this sheet&rsquo;s question: which of the union&rsquo;s concepts "
+    "belong to this cell?",
+    "suspect": "Proposed — this sheet&rsquo;s question: does this cell&rsquo;s gold stand, and "
+    "should any candidate rise?",
+    "resolution": "Proposed — this sheet&rsquo;s question: which FOLIO concept did this label "
+    "mean?",
+    "new_gold": "Proposed — this sheet&rsquo;s question: should any candidate become gold for "
+    "this blank cell?",
+}
+
+
+def _row_note(row: PacketRow) -> str:
+    """The note field that now sits under every decision unit, pairing and consistency included."""
+    return (
+        f'<textarea class="note row-note rownote" rows="2" '
+        f'name="note|{_esc(row.decision_id)}" '
+        f'aria-label="note on this decision" '
+        f'placeholder="note on this decision (optional)"></textarea>'
+    )
+
+
+def _proposed_panel(row: PacketRow) -> str:
     prefill_raw = row.extra.get("prefill")
     prefill: Mapping[str, object] = prefill_raw if isinstance(prefill_raw, Mapping) else {}
     gold_prefill = _mapping(prefill.get("gold"))
     pipe_prefill = _mapping(prefill.get("pipeline"))
-    level_raw = row.extra.get("level")
-    level = level_raw if isinstance(level_raw, int) else (1 if row.section == "pairing" else 3)
-    level_class = f"lvl-{min(max(level, 1), 6)}"
-
-    header_bits = [f'<span class="tag reason">{_esc(row.reason_class)}</span>']
-    if row.extra.get("level"):
-        header_bits.append(f'<span class="tag">L{_esc(row.extra["level"])}</span>')
-    if row.slice_name:
-        header_bits.append(f'<span class="tag">{_esc(row.slice_name)}</span>')
-    if row.item_id:
-        header_bits.append(f'<span class="tag">{_esc(row.item_id)}</span>')
-    instances = row.extra.get("instances")
-    if isinstance(instances, (list, tuple)) and len(instances) > 1:
-        header_bits.append(f'<span class="tag">x{len(instances)} instances</span>')
-
-    body: list[str] = [_paths(row)]
+    body: list[str] = []
     if row.section == "pairing":
-        body.append(_pairing_block(row))
-    if row.section == "consistency":
-        body.append(_consistency_block(row))
-    if row.section != "pairing":
+        body.append(_pairing_readings(row))
+    else:
+        if row.section == "consistency":
+            body.append(_consistency_block(row))
         body.append(
             '<div class="block gold"><h4>Gold — keep or remove</h4>'
             + _grade_list(row.gold, decision_id=row.decision_id, kind="gold", prefill=gold_prefill)
@@ -690,7 +921,8 @@ def _render_row_v2(row: PacketRow) -> str:
             f'placeholder="note on this cell&rsquo;s gold (optional)"></textarea></div>'
         )
         pipeline_title = (
-            "FOLIO proposals — elevate the right one" if row.section == "resolution"
+            "FOLIO proposals — elevate the right one"
+            if row.section == "resolution"
             else "Pipeline candidates — elevate or reject"
         )
         body.append(
@@ -705,11 +937,44 @@ def _render_row_v2(row: PacketRow) -> str:
         )
     if prefill.get("note"):
         body.append(f'<p class="prefilled">Pre-filled: {_esc(prefill["note"])}</p>')
+    title = PROPOSED_TITLES.get(row.section, "Proposed — this sheet&rsquo;s question")
+    return (
+        f'<section class="panel proposed"><h4>{title}'
+        '<span class="who">what this gate is asking you to decide</span></h4>'
+        + "".join(body)
+        + _row_note(row)
+        + f'<p class="note">{_esc(row.suggested_action)}</p>'
+        + "</section>"
+    )
+
+
+def _render_row_v2(row: PacketRow) -> str:
+    level_raw = row.extra.get("level")
+    level = level_raw if isinstance(level_raw, int) else (1 if row.section == "pairing" else 3)
+    level_class = f"lvl-{min(max(level, 1), 6)}"
+
+    header_bits = [f'<span class="tag reason">{_esc(row.reason_class)}</span>']
+    if row.extra.get("level"):
+        header_bits.append(f'<span class="tag">L{_esc(row.extra["level"])}</span>')
+    if row.slice_name:
+        header_bits.append(f'<span class="tag">{_esc(row.slice_name)}</span>')
+    if row.item_id:
+        header_bits.append(f'<span class="tag">{_esc(row.item_id)}</span>')
+    instances = row.extra.get("instances")
+    if isinstance(instances, (list, tuple)) and len(instances) > 1:
+        header_bits.append(f'<span class="tag">x{len(instances)} instances</span>')
+    precheck = row.extra.get("precheck")
+    if isinstance(precheck, Mapping) and precheck.get("needs_your_eye"):
+        header_bits.append('<span class="tag needseye">needs your eye</span>')
+
+    body: list[str] = [_paths(row)]
     if row.notes_text:
         body.append(f'<div class="notes">{_esc(row.notes_text)}</div>')
     if row.extra.get("occurrences"):
         body.append(f'<p class="note">appears in {_esc(row.extra["occurrences"])} gold cell(s)</p>')
-    body.append(f'<p class="note">{_esc(row.suggested_action)}</p>')
+    body.append(_source_panel(row))
+    body.append(_reference_panels(row))
+    body.append(_proposed_panel(row))
     body.append(f'<p class="note mono">{_esc(row.decision_id)}</p>')
 
     return (
@@ -718,6 +983,36 @@ def _render_row_v2(row: PacketRow) -> str:
         f'<header><h3>{_esc(row.surface_label)}</h3><div>{"".join(header_bits)}</div></header>'
         + "".join(body)
         + "</article>"
+    )
+
+
+def _pairing_banner(packet: Packet) -> str:
+    """Section A's standing instruction: the rule, what it pre-checked, and the pipeline's place.
+
+    The rule itself is stated here, in committed code. Damien's own worked ruling is *not* — it
+    names a practice area that is a firm surface string (KTD1), so it rides in on the packet's
+    ``pairing_note``, which the runner reads from a gitignored file.
+    """
+    counts = packet.counts
+    picked = (
+        f'{counts.get("pairing_precheck_heuristic", 0)} pre-checked on Reading A (heuristic), '
+        f'{counts.get("pairing_precheck_alternative", 0)} on Reading B (alternative), '
+        f'{counts.get("pairing_needs_your_eye", 0)} badged &ldquo;needs your eye&rdquo;'
+    )
+    ruling = str(packet.meta.get("pairing_note", "") or "")
+    return (
+        '<div class="banner"><strong>The rule this section pre-checks by</strong>'
+        "A reading is dis-preferred when it leaves an input cell mapping to nothing, or when it "
+        "lands the same output concept on one input cell twice. The reading that survives is "
+        "pre-checked — the "
+        "heuristic wins every tie, because it is the reading already applied to gold, so a row "
+        "you never touch folds to no change. Where both readings break the rule, nothing is "
+        "pre-checked and the row is badged."
+        f'<p class="note">{picked}.</p>'
+        + (f'<p class="prefilled">Your ruling: {_esc(ruling)}</p>' if ruling else "")
+        + '<p class="note">This section interprets your workbook&rsquo;s own mapping — the '
+        "pipeline is not involved in the question, shown for reference only.</p>"
+        "</div>"
     )
 
 
@@ -773,6 +1068,8 @@ def render_sheet_v2(packet: Packet) -> str:
         rows = packet.section(name)
         chunk = [f'<section data-section="{name}"><h2>{_esc(title)}</h2>']
         chunk.append(f'<p class="lede">{_esc(lede)}</p>')
+        if name == "pairing":
+            chunk.append(_pairing_banner(packet))
         if name == "suspect" and packet.overflow:
             spilled = ", ".join(
                 f"{_esc(reason)}: {count}" for reason, count in sorted(packet.overflow.items())
