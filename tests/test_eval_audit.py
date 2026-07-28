@@ -23,6 +23,7 @@ from fixtures.eval_synthetic_workbook import (
 )
 from folio_eval.answer_rule import AnswerRuleConfig, RankedCandidate
 from folio_eval.audit import (
+    DEFAULT_PACKET_DIR_V2,
     GOLD_VARIANTS,
     NEW_GOLD_CAP,
     PAIRING_VIOLATION_DUPLICATE,
@@ -42,6 +43,7 @@ from folio_eval.audit import (
     gold_row_v2_from_json,
     load_decisions,
     load_gold_rows,
+    load_gold_rows_v2,
     locate_source_rows,
     packet_v2_from_json,
     pairing_violations,
@@ -55,6 +57,7 @@ from folio_eval.audit import (
     variant_stats,
     variant_table,
     write_decision_notes,
+    write_gold_version,
 )
 from folio_eval.gold import build_gold_v2, parse_firm1_v2
 from folio_eval.packet_render import (
@@ -64,7 +67,7 @@ from folio_eval.packet_render import (
     write_packet_v2,
 )
 from folio_eval.resolve_labels import IndexedConcept, LabelIndex
-from folio_eval.splits import sha256_text
+from folio_eval.splits import DEFAULT_GOLD_DIR, sha256_text
 
 ONTOLOGY_SHA = "b" * 64
 OTHER_ONTOLOGY_SHA = "c" * 64
@@ -1153,6 +1156,199 @@ def test_granular_fold_applies_the_pairing_alternative(v2_gold: tuple[Any, list[
     assert by_id[heading.item_id]["blank"] is True
     assert by_id[leaf.item_id]["gold_iris"] == sorted([W_LITIGATION, W_ARBITRATION, W_ADVISORY])
     assert result.counts["pairing_alternative"] == 1
+
+
+# --------------------------------------------------------------------------------------
+# Pairing fold: an item's gold is the UNION of its deduped instances' contributions.
+#
+# Gold v2 dedupes identical cell text across source-row instances (KTD3 v2), so one item can be
+# fed by more than one pairing-ambiguous source row, each independently adjudicated. The fold must
+# re-assign only the ROW being decided -- its old reading's contribution out, its chosen reading's
+# contribution in -- never replace the item's whole gold set, or confirming one instance's already-
+# applied reading silently erases what the item's *other* instances contributed.
+# --------------------------------------------------------------------------------------
+
+
+def _dedup_gold_row(item_id: str, iris: list[str]) -> Any:
+    """A minimal gold v2 row whose current gold is the union of two (synthetic) instances."""
+    return gold_row_v2_from_json(
+        {
+            "item_id": item_id,
+            "firm": "firm1",
+            "stratum": "Corporate",
+            "stratum_id": "corporate",
+            "family_id": "family-1",
+            "level": 3,
+            "levels": [3],
+            "leaf": "Shared cell",
+            "input_text": "Shared cell",
+            "gold_iris": iris,
+            "values": [],
+            "flags": [],
+            "rules": ["deduped"],
+            "blank": not iris,
+            "notes": None,
+            "instances": [],
+            "provenance": "curator_workbook",
+            "gold_version": 2,
+        }
+    )
+
+
+def _pairing_row(
+    decision_id: str, item_id: str, *, heuristic: list[str], alternative: list[str]
+) -> PacketRow:
+    """A pairing packet row for one source-row instance, carrying both readings for its target."""
+    return PacketRow(
+        decision_id=decision_id,
+        section="pairing",
+        item_id="",
+        firm="firm1",
+        stratum="Corporate",
+        stratum_id="",
+        ancestor_path=(),
+        surface_label="Shared cell",
+        input_text="",
+        slice_name="",
+        reason_class="pairing_ambiguous",
+        suggested_action="",
+        extra={
+            "assignments": {
+                "heuristic": [{"item_id": item_id, "iris": sorted(heuristic)}],
+                "alternative": [{"item_id": item_id, "iris": sorted(alternative)}],
+            }
+        },
+    )
+
+
+def _pairing_packet(rows: tuple[PacketRow, ...]) -> Packet:
+    return Packet(
+        rows=rows,
+        variants=(),
+        replay={},
+        split=None,
+        counts={},
+        overflow={},
+        meta={"gold_id": "v2-dedup-test", "gold_version": 2},
+    )
+
+
+def test_pairing_confirm_on_a_deduped_multi_instance_item_is_a_no_op() -> None:
+    """Two source-row instances feed one deduped item; confirming both readings is a strict no-op."""
+    gold = _dedup_gold_row("item-shared", ["iri-x", "iri-y"])
+    row1 = _pairing_row("pairing:r1", "item-shared", heuristic=["iri-x"], alternative=["iri-z"])
+    row2 = _pairing_row("pairing:r2", "item-shared", heuristic=["iri-y"], alternative=["iri-w"])
+    packet = _pairing_packet((row1, row2))
+    result = fold_granular_decisions(
+        [gold],
+        {
+            row1.decision_id: {"pairing": "heuristic"},
+            row2.decision_id: {"pairing": "heuristic"},
+        },
+        packet=packet,
+        ontology_sha256=ONTOLOGY_SHA,
+    )
+    by_id = {row["item_id"]: row for row in result.rows}
+    assert by_id["item-shared"]["gold_iris"] == ["iri-x", "iri-y"]
+    assert result.counts["changed_items"] == 0
+
+
+def test_pairing_alternative_on_one_instance_preserves_the_other_instance() -> None:
+    """Re-assigning one row's reading touches only that row's own contribution to the item."""
+    gold = _dedup_gold_row("item-shared", ["iri-x", "iri-y"])
+    row1 = _pairing_row("pairing:r1", "item-shared", heuristic=["iri-x"], alternative=["iri-z"])
+    row2 = _pairing_row("pairing:r2", "item-shared", heuristic=["iri-y"], alternative=["iri-w"])
+    packet = _pairing_packet((row1, row2))
+    result = fold_granular_decisions(
+        [gold],
+        {
+            row1.decision_id: {"pairing": "alternative"},
+            row2.decision_id: {"pairing": "heuristic"},
+        },
+        packet=packet,
+        ontology_sha256=ONTOLOGY_SHA,
+    )
+    by_id = {row["item_id"]: row for row in result.rows}
+    # row1's old contribution (iri-x) is gone, its new one (iri-z) is in; row2's untouched
+    # contribution (iri-y) survives the fold -- the union, not a replacement.
+    assert by_id["item-shared"]["gold_iris"] == sorted(["iri-y", "iri-z"])
+    assert result.counts["changed_items"] == 1
+
+
+def test_pairing_reassignment_emptying_gold_flips_the_item_blank() -> None:
+    """KD7: an item whose reassigned gold has nothing left becomes blank/coverage, not deleted."""
+    gold = _dedup_gold_row("item-shared", ["iri-x", "iri-y"])
+    row1 = _pairing_row("pairing:r1", "item-shared", heuristic=["iri-x"], alternative=[])
+    row2 = _pairing_row("pairing:r2", "item-shared", heuristic=["iri-y"], alternative=[])
+    packet = _pairing_packet((row1, row2))
+    result = fold_granular_decisions(
+        [gold],
+        {
+            row1.decision_id: {"pairing": "alternative"},
+            row2.decision_id: {"pairing": "alternative"},
+        },
+        packet=packet,
+        ontology_sha256=ONTOLOGY_SHA,
+    )
+    by_id = {row["item_id"]: row for row in result.rows}
+    assert by_id["item-shared"]["gold_iris"] == []
+    assert by_id["item-shared"]["blank"] is True
+    assert result.counts["changed_items"] == 1
+
+
+def test_real_packet_confirming_all_prechecked_heuristic_pairings_is_a_no_op(
+    tmp_path: Path,
+) -> None:
+    """Proof against the real audit gate (read-only on real inputs, writes only to tmp_path).
+
+    Submitting the sheet's 106 pre-checked heuristic readings unchanged must not touch a single
+    item's gold. Before the fix, the pairing branch replaced each adjudicated item's whole gold set
+    with the single row's assignment, dropping whatever the item's *other* deduped instances
+    contributed -- 36 items changed for a sheet Damien never touched.
+    """
+    packet_path = DEFAULT_PACKET_DIR_V2 / "packet.json"
+    gold_path = DEFAULT_GOLD_DIR / "gold_v2.jsonl"
+    manifest_path = DEFAULT_GOLD_DIR / "gold_v2.manifest.json"
+    if not (packet_path.exists() and gold_path.exists() and manifest_path.exists()):
+        pytest.skip("real audit packet / gold v2 not present in this checkout")
+
+    packet = packet_v2_from_json(json.loads(packet_path.read_text(encoding="utf-8")))
+    rows = load_gold_rows_v2(gold_path)
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    ontology_sha256 = str(manifest["ontology_cache_sha256"])
+
+    pairing = packet.section("pairing")
+    heuristic_prechecked = [
+        row for row in pairing if row.extra.get("precheck", {}).get("choice") == "heuristic"  # type: ignore[union-attr]
+    ]
+    assert len(heuristic_prechecked) == 106  # the measured defect scenario
+
+    decisions = {row.decision_id: {"pairing": "heuristic"} for row in heuristic_prechecked}
+    result = fold_granular_decisions(
+        rows,
+        decisions,
+        packet=packet,
+        ontology_sha256=ontology_sha256,
+        now="2026-07-28T00:00:00Z",
+    )
+    assert result.counts["changed_items"] == 0
+
+    written = write_gold_version(result, tmp_path)
+    assert written["gold"].exists()
+    assert written["manifest"].exists()
+
+    # Sanity number: forcing every pairing row to the alternative reading is *not* a no-op.
+    all_alternative = {row.decision_id: {"pairing": "alternative"} for row in pairing}
+    alt_result = fold_granular_decisions(
+        rows,
+        all_alternative,
+        packet=packet,
+        ontology_sha256=ontology_sha256,
+        now="2026-07-28T00:00:00Z",
+    )
+    assert alt_result.counts["changed_items"] > 0
+    print(f"\n[dry-run] all-heuristic confirm changed_items = {result.counts['changed_items']}")
+    print(f"[dry-run] all-alternative sanity changed_items = {alt_result.counts['changed_items']}")
 
 
 def test_granular_fold_records_per_candidate_rejections(v2_gold: tuple[Any, list[Any]]) -> None:

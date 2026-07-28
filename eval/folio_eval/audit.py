@@ -1120,6 +1120,12 @@ GOLD_VERDICTS = frozenset({"keep", "remove"})
 PIPELINE_VERDICTS = frozenset({"elevate", "not_gold"})
 PAIRING_CHOICES = frozenset({"heuristic", "alternative"})
 
+#: The reading already baked into gold when a pairing packet row is built (see
+#: :func:`precheck_pairing`). The fold diffs a decision against this reading, never against
+#: the item's current gold wholesale, because gold v2 dedupes one item across many source-row
+#: instances (KTD3 v2) -- an item's gold is the *union* of its instances' contributions.
+PAIRING_APPLIED_READING = "heuristic"
+
 #: Rulings Damien already made on the v1 sheet, carried forward into v2 pre-checked (ask
 #: ``folio-resolve-2026-07-28-gold-audit-gate``, q4: "both gold concepts stand; the pipeline junk
 #: tail is a precision defect, not gold"). Keyed by the *normalized input cell text*, because the
@@ -2442,6 +2448,28 @@ def _verdicts(decision: Mapping[str, object], key: str, allowed: frozenset[str])
     return out
 
 
+def _pairing_reading_by_item(assignments: Mapping[str, object], reading: str) -> dict[str, set[str]]:
+    """One pairing row's per-item IRI contribution under one reading (heuristic|alternative).
+
+    A single pairing packet row can name more than one target item id (its input cells); a single
+    item id can also receive contributions from more than one pairing packet row, when the same
+    input text recurs across source-row instances that each needed their own adjudication (gold v2
+    dedup, KTD3 v2). The fold must diff *this row's own* contribution between readings, never
+    replace the item's whole gold set, or it silently drops what the item's other instances
+    contributed.
+    """
+    out: dict[str, set[str]] = {}
+    raw = assignments.get(reading) if isinstance(assignments, Mapping) else None
+    for entry in _items(raw):
+        if not isinstance(entry, Mapping):
+            continue
+        target = str(entry.get("item_id", ""))
+        if not target:
+            continue
+        out.setdefault(target, set()).update(str(iri) for iri in _items(entry.get("iris")))
+    return out
+
+
 def fold_granular_decisions(
     gold_rows: Sequence[GoldRowV2],
     decisions: Mapping[str, Mapping[str, object]],
@@ -2465,9 +2493,9 @@ def fold_granular_decisions(
     base_version = _as_version(packet.meta.get("gold_version", 2))
     next_version = base_version + 1
 
-    current_by_item = {row.item_id: set(row.gold_iris) for row in gold_rows}
     replacements: dict[str, tuple[tuple[str, ...], str]] = {}
     additions: dict[str, set[str]] = {}
+    removals: dict[str, set[str]] = {}
     records: list[DecisionRecord] = []
     counts: dict[str, int] = {
         "accepted": 0,
@@ -2506,7 +2534,7 @@ def fold_granular_decisions(
         action = "accept"
 
         if row.section == "pairing":
-            choice = str(decision.get("pairing", "heuristic"))
+            choice = str(decision.get("pairing", PAIRING_APPLIED_READING))
             if choice not in PAIRING_CHOICES:
                 raise ValueError(
                     f"decision {decision_id}: pairing must be one of {sorted(PAIRING_CHOICES)}"
@@ -2514,22 +2542,28 @@ def fold_granular_decisions(
             counts["policy_decisions"] += 1
             if choice == "alternative":
                 counts["pairing_alternative"] += 1
-                action = "edit"
             assignments = row.extra.get("assignments")
-            picked = (
-                assignments.get(choice, []) if isinstance(assignments, Mapping) else []
-            )
-            for entry in _items(picked):
-                if not isinstance(entry, Mapping):
-                    continue
-                target = str(entry.get("item_id", ""))
-                if not target:
-                    continue
-                iris = tuple(sorted(str(iri) for iri in _items(entry.get("iris"))))
-                resulting = tuple(sorted({*resulting, *iris}))
-                if set(iris) == current_by_item.get(target, set()):
-                    continue  # this reading is the one already applied: nothing to rewrite
-                replacements[target] = (iris, PROVENANCE_CORRECTED)
+            assignments_map = assignments if isinstance(assignments, Mapping) else {}
+            applied_by_item = _pairing_reading_by_item(assignments_map, PAIRING_APPLIED_READING)
+            chosen_by_item = _pairing_reading_by_item(assignments_map, choice)
+            resulting = tuple(sorted({iri for iris in chosen_by_item.values() for iri in iris}))
+            # Re-assign only THIS row's own contribution to each target: subtract what it
+            # contributed under the previously-applied reading, add what it contributes under the
+            # chosen one. Every other instance's contribution to the same item is untouched --
+            # gold v2 dedupes an item across many source rows, so its gold is the union of all of
+            # them (KTD3 v2), not just this one row's reading.
+            for target in sorted(set(applied_by_item) | set(chosen_by_item)):
+                prev_iris = applied_by_item.get(target, set())
+                new_iris = chosen_by_item.get(target, set())
+                if new_iris == prev_iris:
+                    continue  # this row's contribution to this item is unchanged
+                action = "edit"
+                to_remove = prev_iris - new_iris
+                to_add = new_iris - prev_iris
+                if to_remove:
+                    removals.setdefault(target, set()).update(to_remove)
+                if to_add:
+                    additions.setdefault(target, set()).update(to_add)
         elif row.section == "resolution":
             if elevated:
                 action = "edit"
@@ -2590,13 +2624,14 @@ def fold_granular_decisions(
         payload["gold_version"] = next_version
         replaced = replacements.get(gold.item_id)
         added = additions.get(gold.item_id)
-        if replaced is None and not added:
+        removed = removals.get(gold.item_id)
+        if replaced is None and not added and not removed:
             provenance = str(payload.get("provenance", PROVENANCE_CURATOR))
             counts["carried_forward"] += 1
         else:
             base = set(replaced[0]) if replaced is not None else set(gold.gold_iris)
             provenance = replaced[1] if replaced is not None else PROVENANCE_CORRECTED
-            iris = tuple(sorted(base | (added or set())))
+            iris = tuple(sorted((base - (removed or set())) | (added or set())))
             payload["gold_iris"] = list(iris)
             payload["blank"] = not iris
             flags = [str(flag) for flag in _items(payload.get("flags"))]
