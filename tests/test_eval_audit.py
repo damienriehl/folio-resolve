@@ -1328,7 +1328,19 @@ def test_real_packet_confirming_all_prechecked_heuristic_pairings_is_a_no_op(
     ]
     assert len(heuristic_prechecked) == 106  # the measured defect scenario
 
-    decisions = {row.decision_id: {"pairing": "heuristic"} for row in heuristic_prechecked}
+    # Rows already folded are excluded from this blanket resubmission: their own no-op baseline is
+    # the *applied* (current-gold) state, not the static heuristic reading (2026-07-28 fix) -- on
+    # the real sheet an untouched folded row whose edit diverged from heuristic pre-checks neither
+    # radio at all, so it would never submit "pairing": "heuristic" in the first place. Their no-op
+    # guarantee is proven separately (test_a_folded_decision_renders_pre_filled_and_fully_enabled).
+    unfolded_heuristic_prechecked = [
+        row for row in heuristic_prechecked if not row.extra.get("folded")
+    ]
+    assert len(unfolded_heuristic_prechecked) == 100
+
+    decisions = {
+        row.decision_id: {"pairing": "heuristic"} for row in unfolded_heuristic_prechecked
+    }
     result = fold_granular_decisions(
         rows,
         decisions,
@@ -1612,7 +1624,12 @@ def test_every_row_of_every_section_carries_the_three_labelled_panels(
     html = render_sheet_v2(packet)
     total = html.count('<article class="row')
     assert total == len(packet.rows) > 0
-    assert html.count("Gold — curated in your workbook") == total
+    # Panel 1 sources from the current gold version, not the pre-fold packet snapshot (Damien,
+    # 2026-07-28) -- every row carries it, and the smaller workbook-curation line underneath it.
+    assert html.count("Gold — current (v") == total
+    # Pairing rows render one workbook-curation line per input cell, so this is a floor, not a
+    # 1:1 count with the article total.
+    assert html.count("Workbook curation:") >= total
     assert html.count("Current pipeline — folio-resolve today") == total
     assert html.count("Proposed — this sheet") == total
     assert html.count('class="panel source"') == total
@@ -2046,13 +2063,16 @@ def test_section_f_is_capped(pipe_gold: tuple[Any, list[Any]]) -> None:
     assert len(packet.section("improvement")) == 2
 
 
-def test_a_folded_decision_renders_locked_and_never_re_enters_the_paste_back(
+def test_a_folded_decision_renders_pre_filled_and_fully_enabled(
     pipe_gold: tuple[Any, list[Any]],
 ) -> None:
+    """Damien, 2026-07-28: "let me add notes and change items even where you think things are
+    settled" -- a folded row shows what was decided, pre-fills it, and never disables anything.
+    """
     build, rows = pipe_gold
     packet = _pipe_packet(build, rows)
     pairing = packet.section("pairing")[0]
-    locked = _pipe_packet(
+    applied = _pipe_packet(
         build,
         rows,
         folded_decisions={
@@ -2064,19 +2084,272 @@ def test_a_folded_decision_renders_locked_and_never_re_enters_the_paste_back(
             }
         },
     )
-    assert locked.counts["folded_rows_locked"] == 1
-    row = locked.section("pairing")[0]
+    assert applied.counts["folded_rows_locked"] == 1
+    row = applied.section("pairing")[0]
     assert row.extra["folded"]["gold_version"] == 3
+    assert row.extra["baseline"]["pairing"] == "heuristic"  # no edits on this fixture's row
 
-    html = render_sheet_v2(locked)
-    assert 'data-locked="1"' in html
-    assert "DONE &mdash; folded" in html or "DONE — folded" in html
+    html = render_sheet_v2(applied)
+    # never disabled -- the whole point of the fix
+    assert "<input disabled" not in html
+    assert "<textarea disabled" not in html
+    assert "data-locked" not in html
+    # badged and pre-filled, not silently blank
+    assert "applied v3" in html
     assert "a child cell never implies its parent" in html
-    assert "<input disabled type=" in html
-    assert "data-locked" in _SCRIPT_LOCK_GUARD(html)
+    # the JS diffs a re-submission against the row's baseline, not a hard skip
+    assert "data-baseline=" in html
+    assert "baselineOf" in _collect_source(html) and "diffMap" in _collect_source(html)
 
 
-def _SCRIPT_LOCK_GUARD(html: str) -> str:
-    """The collector must skip locked rows, not merely grey them out."""
+def _collect_source(html: str) -> str:
     start = html.index("function collect()")
-    return html[start : start + 400]
+    return html[start : start + 900]
+
+
+def test_gold_panel_sources_from_latest_gold_version_not_packet_snapshot(
+    v2_gold: tuple[Any, list[Any]],
+) -> None:
+    """Damien caught this (2026-07-28): a reference/grading panel must show what is *live* in
+    gold right now, never the pre-fold snapshot ``build_packet_v2`` happened to be called with.
+    """
+    build, rows = v2_gold
+    target = _row_by_text(rows, "Enforcement matters")
+    assert {W_ENFORCEMENT, W_PURCHASE} == {str(iri) for iri in target.gold_iris}
+
+    # Simulate a decision that has already moved this item's live gold to a smaller set --
+    # exactly what gold v3 looks like after a fold, without needing to run one for this check.
+    current_payload = dict(target.payload)
+    current_payload["gold_iris"] = [W_ENFORCEMENT]
+    current_payload["gold_version"] = 3
+    current_rows = [
+        gold_row_v2_from_json(current_payload) if row.item_id == target.item_id else row
+        for row in rows
+    ]
+
+    packet = v2_packet(
+        build, rows, current_gold_rows=current_rows, current_gold_version=3, current_gold_id="v3-test"
+    )
+    assert packet.meta["current_gold_version"] == 3
+    assert packet.meta["current_gold_id"] == "v3-test"
+    row = packet.section("consistency")[0]
+    assert row.item_id == target.item_id
+    # the askable gold block grades what is live now...
+    assert {str(entry["iri"]) for entry in row.gold} == {W_ENFORCEMENT}
+    # ...the reference panel agrees...
+    assert {str(entry["iri"]) for entry in row.extra["gold_ref"]} == {W_ENFORCEMENT}
+    # ...and the original workbook curation is still visible, smaller and separate.
+    assert {str(entry["iri"]) for entry in row.extra["workbook_gold"]} == {
+        W_ENFORCEMENT,
+        W_PURCHASE,
+    }
+
+    html = render_sheet_v2(packet)
+    assert "Gold — current (v3, includes your corrections)" in html
+    assert "Workbook curation:" in html
+
+
+def test_folded_row_prefill_equals_the_applied_state(v2_gold: tuple[Any, list[Any]]) -> None:
+    """A previously-folded row's radios and note box pre-fill to exactly what is live, not blank
+    and not the stale carried-forward ruling (Damien, 2026-07-28)."""
+    build, rows = v2_gold
+    target = _row_by_text(rows, "Enforcement matters")
+    predictions = {target.item_id: ranked(("R-pipe", "Enforcement Practice", 100.0, 0.9))}
+    packet = v2_packet(build, rows, predictions=predictions)
+    consistency = packet.section("consistency")[0]
+
+    applied = v2_packet(
+        build,
+        rows,
+        predictions=predictions,
+        folded_decisions={
+            consistency.decision_id: {
+                "summary": "gold: 2 kept, 0 removed",
+                "gold_note": "both concepts stand",
+                "gold_version": 3,
+                "gold_id": "v3-test",
+            }
+        },
+    )
+    row = applied.section("consistency")[0]
+    baseline = row.extra["baseline"]
+    assert baseline["gold"] == {W_ENFORCEMENT: "keep", W_PURCHASE: "keep"}
+    assert baseline["pipeline"] == {"R-pipe": "not_gold"}
+    assert baseline["gold_note"] == "both concepts stand"
+
+    html = render_sheet_v2(applied)
+    assert 'value="keep" checked' in html
+    assert 'value="not_gold" checked' in html
+    # the note is pre-filled INTO the textarea (round-trippable), not just echoed as read-only text
+    assert '<textarea class="note gold-note" rows="2" name="gold-note|' in html
+    assert (
+        f'name="gold-note|{consistency.decision_id}" aria-label="note on this cell&rsquo;s gold" '
+        'placeholder="note on this cell&rsquo;s gold (optional)">both concepts stand</textarea>'
+        in html
+    )
+
+
+def test_amendment_fold_appends_a_new_decision_without_rewriting_the_first(
+    v2_gold: tuple[Any, list[Any]], tmp_path: Path
+) -> None:
+    """A second fold of an already-folded row is an amendment: it lands as an additional decision
+    record (never a rewrite of the first) and its delta is computed against what the first fold
+    actually applied, not the pre-fold curated baseline (Damien, 2026-07-28)."""
+    build, rows = v2_gold
+    suspect_row = _row_by_text(rows, "Unsettled matters")
+    predictions = {
+        suspect_row.item_id: ranked(
+            ("R-pipe", "Enforcement Practice", 100.0, 0.9),
+            ("R-junk", "Office of Water", 90.0, 0.1),
+        )
+    }
+    packet_v2 = v2_packet(build, rows, predictions=predictions)
+    suspect_v2 = next(r for r in packet_v2.section("suspect") if r.item_id == suspect_row.item_id)
+
+    first = fold_granular_decisions(
+        rows,
+        {
+            suspect_v2.decision_id: {
+                "gold": {W_LITIGATION: "remove"},
+                "pipeline": {"R-pipe": "elevate"},
+            }
+        },
+        packet=packet_v2,
+        ontology_sha256=ONTOLOGY_SHA,
+        now="2026-07-28T00:00:00Z",
+    )
+    log_path = tmp_path / "gold_decisions.jsonl"
+    append_decisions(log_path, first.records, surfaces=())
+    by_id_v3 = {row["item_id"]: row for row in first.rows}
+    assert by_id_v3[suspect_row.item_id]["gold_iris"] == ["R-pipe"]
+    assert first.manifest["gold_version"] == 3
+
+    # Regenerate the packet fresh at v3 -- the real workflow's "packet-v2 then fold-v2" loop.
+    v3_rows = [gold_row_v2_from_json(payload) for payload in first.rows]
+    packet_v3 = build_packet_v2(
+        gold_rows=v3_rows,
+        current_gold_rows=v3_rows,
+        pairing_rows=build.pairing_rows,
+        inconsistent_groups=build.inconsistent_groups,
+        suspects=build.suspects,
+        predictions=predictions,
+        definitions=DEFINITIONS,
+        value_iris={value.raw: value.iri for row in v3_rows for value in row.values},
+        ontology_sha256=ONTOLOGY_SHA,
+        gold_id="v3-test",
+        gold_version=3,
+        parent_gold_id="v2-test",
+        generated_at="2026-07-28T01:00:00Z",
+    )
+    suspect_v3 = next(r for r in packet_v3.section("suspect") if r.item_id == suspect_row.item_id)
+    # decision-id stability across regenerations means this is the SAME id the first fold used.
+    assert suspect_v3.decision_id == suspect_v2.decision_id
+    assert {str(entry["iri"]) for entry in suspect_v3.gold} == {"R-pipe"}
+
+    second = fold_granular_decisions(
+        v3_rows,
+        {suspect_v3.decision_id: {"pipeline": {"R-junk": "elevate"}}},
+        packet=packet_v3,
+        ontology_sha256=ONTOLOGY_SHA,
+        now="2026-07-28T02:00:00Z",
+        parent_gold_id="v3-test",
+    )
+    by_id_v4 = {row["item_id"]: row for row in second.rows}
+    # an addition on top of the first fold's result -- never a reset back toward curated gold
+    assert sorted(by_id_v4[suspect_row.item_id]["gold_iris"]) == sorted(["R-junk", "R-pipe"])
+    assert second.manifest["gold_version"] == 4
+    assert second.manifest["parent_gold_id"] == "v3-test"
+
+    append_decisions(log_path, second.records, surfaces=())
+    logged = load_decisions(log_path)
+    same_id = [record for record in logged if record.decision_id == suspect_v2.decision_id]
+    # append, never rewrite: both folds' records for this decision id are on the log
+    assert len(same_id) == 2
+    assert same_id[0].resulting_iris == ("R-pipe",)
+    assert sorted(same_id[1].resulting_iris) == ["R-junk", "R-pipe"]
+    assert same_id[1].gold_version == 3  # the base version THIS fold started from
+
+
+def test_pairing_amendment_diffs_against_the_applied_edit_not_the_original_heuristic(
+    pipe_gold: tuple[Any, list[Any]],
+) -> None:
+    """The real-packet regression this fix had to avoid (2026-07-28): once a pairing row is
+    folded, an untouched re-submission (note-only) must stay a no-op, and a genuine second edit
+    must land *on top of* the first edit -- never diff against the pre-fold heuristic reading,
+    which would silently revert or double-apply Damien's own correction."""
+    build, rows = pipe_gold
+    firm1 = next(row for row in rows if row.firm == "firm1" and row.input_text == "Blended Finance")
+    packet_v2 = _pipe_packet(build, rows)
+    pairing_v2 = packet_v2.section("pairing")[0]
+
+    first = fold_granular_decisions(
+        rows,
+        {
+            pairing_v2.decision_id: {
+                "pairing": "heuristic",
+                "edited_iris": {firm1.item_id: [W_ADVISORY]},
+            }
+        },
+        packet=packet_v2,
+        ontology_sha256=ONTOLOGY_SHA,
+        now="2026-07-28T00:00:00Z",
+    )
+    by_id_v3 = {row["item_id"]: row for row in first.rows}
+    assert by_id_v3[firm1.item_id]["gold_iris"] == [W_ADVISORY]
+
+    # Regenerate at v3 with --folded set, exactly as the real "packet-v2 then fold-v2" loop does.
+    v3_rows = [gold_row_v2_from_json(payload) for payload in first.rows]
+    packet_v3 = build_packet_v2(
+        gold_rows=v3_rows,
+        current_gold_rows=v3_rows,
+        pairing_rows=build.pairing_rows,
+        inconsistent_groups=build.inconsistent_groups,
+        suspects=build.suspects,
+        value_iris={value.raw: value.iri for row in v3_rows for value in row.values},
+        definitions=DEFINITIONS,
+        ontology_sha256=ONTOLOGY_SHA,
+        gold_id="v3-test",
+        gold_version=3,
+        parent_gold_id="v2-test",
+        generated_at="2026-07-28T01:00:00Z",
+        folded_decisions={
+            pairing_v2.decision_id: {
+                "summary": "heuristic + gold edit",
+                "note": "the cell means the service, not the two areas",
+                "gold_version": 3,
+                "gold_id": "v3-test",
+            }
+        },
+    )
+    pairing_v3 = packet_v3.section("pairing")[0]
+    assert pairing_v3.decision_id == pairing_v2.decision_id
+    assert pairing_v3.extra["folded"]["gold_version"] == 3
+    applied = {e["item_id"]: e["iris"] for e in pairing_v3.extra["assignments"]["applied"]}
+    assert applied[firm1.item_id] == [W_ADVISORY]
+
+    # An untouched re-submission (note only) must not move gold at all.
+    untouched = fold_granular_decisions(
+        v3_rows,
+        {pairing_v3.decision_id: {"note": "still the right call"}},
+        packet=packet_v3,
+        ontology_sha256=ONTOLOGY_SHA,
+        now="2026-07-28T02:00:00Z",
+        parent_gold_id="v3-test",
+    )
+    by_id_untouched = {row["item_id"]: row for row in untouched.rows}
+    assert by_id_untouched[firm1.item_id]["gold_iris"] == [W_ADVISORY]
+    assert untouched.counts["changed_items"] == 0
+
+    # A genuine amendment adds to the applied edit -- it does not revert to the original
+    # heuristic's {W_MANUFACTURING, W_AGREEMENTS} and does not need to repeat W_ADVISORY.
+    amended = fold_granular_decisions(
+        v3_rows,
+        {pairing_v3.decision_id: {"edited_iris": {firm1.item_id: [W_ADVISORY, W_INDUSTRY]}}},
+        packet=packet_v3,
+        ontology_sha256=ONTOLOGY_SHA,
+        now="2026-07-28T03:00:00Z",
+        parent_gold_id="v3-test",
+    )
+    by_id_amended = {row["item_id"]: row for row in amended.rows}
+    assert sorted(by_id_amended[firm1.item_id]["gold_iris"]) == sorted([W_ADVISORY, W_INDUSTRY])
+    assert amended.manifest["gold_version"] == 4

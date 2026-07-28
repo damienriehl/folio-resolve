@@ -1228,9 +1228,17 @@ def load_gold_rows_v2(path: Path) -> list[GoldRowV2]:
 
 
 def _gold_block(
-    row: GoldRowV2 | None, iris: Sequence[str], definitions: Mapping[str, str]
+    row: GoldRowV2 | None,
+    iris: Sequence[str],
+    definitions: Mapping[str, str],
+    label_lookup: Mapping[str, str] | None = None,
 ) -> tuple[Mapping[str, object], ...]:
-    """Every gold concept as its own gradeable entry (label, IRI, definition snippet)."""
+    """Every gold concept as its own gradeable entry (label, IRI, definition snippet).
+
+    ``label_lookup`` (iri -> raw label) fills in a concept ``row.values`` never recorded -- an
+    IRI a fold elevated or amended onto the item that the curator workbook itself never named.
+    """
+    label_lookup = label_lookup or {}
     by_iri = {value.iri: value for value in row.values} if row is not None else {}
     out: list[Mapping[str, object]] = []
     for iri in sorted(iris):
@@ -1238,7 +1246,7 @@ def _gold_block(
         out.append(
             {
                 "iri": iri,
-                "label": value.raw if value else "",
+                "label": value.raw if value else label_lookup.get(iri, ""),
                 "column": value.column if value else "",
                 "branch": value.branch if value else "",
                 "definition": definition_snippet(definitions.get(iri)),
@@ -1609,9 +1617,73 @@ def precheck_pairing(
     return "", heuristic_bad, alternative_bad
 
 
+def pairing_reading_matches_applied(assignments: Mapping[str, object], reading: str) -> bool:
+    """Whether ``reading``'s per-item IRI sets equal the row's live ("applied") gold exactly.
+
+    Decides, on a folded pairing row, which of Heuristic/Alternative (if either) is still what is
+    actually in gold today. A custom edit (Damien substituting his own IRI set for a target) can
+    match neither -- the sheet must not pretend one of the two canned readings is still in force
+    when what is live is his own correction.
+    """
+    proposed = _pairing_reading_by_item(assignments, reading)
+    applied = _pairing_reading_by_item(assignments, "applied")
+    if not proposed and not applied:
+        return False
+    return proposed == applied
+
+
+def pairing_applied_reading_name(assignments: Mapping[str, object]) -> str | None:
+    """Which canned reading (if either) the row's live gold still equals, for the JS baseline.
+
+    Heuristic is checked first: when a row's several input-cell instances collapse to the same
+    item (:func:`_pairing_reading_by_item` unions per item id), both readings can coincidentally
+    produce an identical per-item set, and heuristic is the one "already applied to gold" by
+    construction (:data:`PAIRING_APPLIED_READING`) -- the same tie-break :func:`precheck_pairing`
+    already uses, so a genuinely-tied row is never reported as "alternative" by an arbitrary sort.
+    """
+    for reading in (PAIRING_APPLIED_READING, "alternative"):
+        if pairing_reading_matches_applied(assignments, reading):
+            return reading
+    return None
+
+
+def _applied_baseline(row: PacketRow, record: Mapping[str, object]) -> dict[str, object]:
+    """A folded row's live state, as the no-op baseline the sheet's own JS diffs against.
+
+    ``row.gold``/``row.pipeline`` already read the *current* gold version by the time this runs
+    (:func:`build_packet_v2` sources every reference and grading block from ``current_gold_rows``,
+    not the pre-fold snapshot), so "every gold entry -> keep, every pipeline entry -> elevate iff
+    already gold" **is** what is actually live. The sheet's ``collect()`` strips anything a
+    re-submission leaves equal to this before assembling the Copy-decisions JSON, so an untouched
+    folded row folds to nothing and a genuine amendment is the only entry that survives. The note
+    fields ride along too, so a re-typed-but-identical note does not count as a change either.
+    """
+    gold = {str(entry["iri"]): "keep" for entry in row.gold}
+    pipeline = {
+        str(entry["iri"]): ("elevate" if entry.get("already_gold") else "not_gold")
+        for entry in row.pipeline
+    }
+    pairing_choice: str | None = None
+    if row.section == "pairing":
+        assignments = row.extra.get("assignments")
+        if isinstance(assignments, Mapping):
+            pairing_choice = pairing_applied_reading_name(assignments)
+    return {
+        "gold": gold,
+        "pipeline": pipeline,
+        "pairing": pairing_choice,
+        "note": str(record.get("note", "") or ""),
+        "gold_note": str(record.get("gold_note", "") or ""),
+        "pipeline_note": str(record.get("pipeline_note", "") or ""),
+    }
+
+
 def build_packet_v2(
     *,
     gold_rows: Sequence[GoldRowV2],
+    current_gold_rows: Sequence[GoldRowV2] | None = None,
+    current_gold_version: int = 0,
+    current_gold_id: str = "",
     pairing_rows: Sequence[Mapping[str, object]] = (),
     inconsistent_groups: Sequence[Mapping[str, object]] = (),
     suspects: Sequence[Mapping[str, object]] = (),
@@ -1644,7 +1716,18 @@ def build_packet_v2(
     folded_decisions: Mapping[str, Mapping[str, object]] | None = None,
     extra_meta: Mapping[str, object] | None = None,
 ) -> Packet:
-    """Assemble the v2 gate: six sections, every concept individually gradeable."""
+    """Assemble the v2 gate: six sections, every concept individually gradeable.
+
+    ``gold_rows`` is the *base* snapshot the sheet's own questions are asked against (which rows
+    exist in which section, and decision-id stability across regenerations) -- unchanged from
+    before. ``current_gold_rows`` is the *live* gold state -- the latest gold version on disk,
+    which already carries every decision folded so far. Every reference panel and per-concept
+    grading list reads from ``current_gold_rows`` (falling back to ``gold_rows`` for an item
+    ``current_gold_rows`` does not carry), so a row already folded shows what is actually in gold
+    today rather than the pre-fold snapshot the packet was built from (Damien, 2026-07-28: a
+    folded pairing row's reading panel kept showing the superseded pre-edit assignment). Omitting
+    ``current_gold_rows`` makes current == base, exactly today's behavior.
+    """
     predictions = predictions or {}
     definitions = definitions or {}
     label_proposals = label_proposals or {}
@@ -1655,6 +1738,20 @@ def build_packet_v2(
     memory = frozenset(rejected)
     by_id = {row.item_id: row for row in gold_rows}
     by_input = gold_rows_by_input(gold_rows)
+    current_by_id = (
+        {row.item_id: row for row in current_gold_rows} if current_gold_rows is not None else by_id
+    )
+    current_version = current_gold_version or gold_version
+    current_id = current_gold_id or gold_id
+    # Fallback raw label for a current-gold IRI a row's own ``values`` never recorded -- happens
+    # when a decision elevates a pipeline candidate that was never a curator cell for this item.
+    # Any IRI any curator anywhere typed a label for is a reasonable stand-in (KTD1-safe: labels,
+    # not surfaces).
+    label_lookup = {iri: raw for raw, iri in value_iris.items()}
+
+    def current_row(item_id: str) -> GoldRowV2 | None:
+        return current_by_id.get(item_id) or by_id.get(item_id)
+
     eligible = (
         frozenset(eligible_strata)
         if eligible_strata is not None
@@ -1695,9 +1792,12 @@ def build_packet_v2(
         )
 
     def gold_reference(row: GoldRowV2 | None) -> list[Mapping[str, object]]:
+        """The current-gold reference block for whichever row is passed (base or current)."""
         if row is None:
             return []
-        return [dict(entry) for entry in _gold_block(row, row.gold_iris, definitions)]
+        return [
+            dict(entry) for entry in _gold_block(row, row.gold_iris, definitions, label_lookup)
+        ]
 
     def pipeline_reference(row: GoldRowV2 | None, item_id: str) -> dict[str, object]:
         ranked = list(predictions.get(item_id, ()))
@@ -1748,6 +1848,28 @@ def build_packet_v2(
                 for position, labels in enumerate(alternative)
                 for target in (targets[position],)
             ],
+            # The row's own contribution as it actually stands in gold right now -- not a fixed
+            # candidate reading like heuristic/alternative, but whatever the live IRI set is. For
+            # a never-folded row this equals the heuristic reading exactly (heuristic is baked
+            # into gold at build time, KTD3 v2), so it changes nothing for a row Damien hasn't
+            # touched. For a folded row it is the ground truth the "applied" panel renders, and
+            # the fold's own baseline for computing an amendment's delta (never the stale
+            # heuristic default, which would silently discard a prior edit).
+            "applied": [
+                {
+                    "item_id": target.item_id if target else "",
+                    "input": str(inputs[position].get("text", "")),
+                    "level": _as_int(inputs[position].get("level")),
+                    "labels": [entry["label"] for entry in _applied_current],
+                    "tags": [
+                        {"label": entry["label"], "iri": entry["iri"]} for entry in _applied_current
+                    ],
+                    "iris": sorted(_applied_row.gold_iris) if _applied_row else [],
+                }
+                for position, target in enumerate(targets)
+                for _applied_row in (current_row(target.item_id) if target else None,)
+                for _applied_current in (gold_reference(_applied_row),)
+            ],
         }
         counts["pairing_rows"] += 1
         choice, heuristic_bad, alternative_bad = precheck_pairing(heuristic, alternative)
@@ -1767,8 +1889,12 @@ def build_packet_v2(
                 "item_id": target.item_id if target else "",
                 "level": _as_int(inputs[position].get("level")),
                 "text": input_texts[position],
-                "gold": gold_reference(target),
-                "pipeline": pipeline_reference(target, target.item_id if target else ""),
+                "gold": gold_reference(current_row(target.item_id) if target else None),
+                "pipeline": pipeline_reference(
+                    current_row(target.item_id) if target else None,
+                    target.item_id if target else "",
+                ),
+                "workbook_gold": gold_reference(target),
             }
             for position, target in enumerate(targets)
         ]
@@ -1815,11 +1941,12 @@ def build_packet_v2(
             continue
         counts["consistency_groups"] += 1
         ranked = list(predictions.get(item_id, ()))
-        gold_entries = _gold_block(row, row.gold_iris, definitions)
+        current = current_row(item_id) or row
+        gold_entries = _gold_block(current, current.gold_iris, definitions, label_lookup)
         pipeline_entries = _pipeline_block(
             ranked,
             definitions,
-            gold_iris=row.gold_iris,
+            gold_iris=current.gold_iris,
             committed=_committed_iris(ranked, answer_config),
         )
         prefill = _prefill_for(row, gold_entries, pipeline_entries, rulings)
@@ -1853,8 +1980,9 @@ def build_packet_v2(
                     "union_gold_iris": [str(iri) for iri in _items(entry.get("union_gold_iris"))],
                     "hierarchy": list(_hierarchy_key(row)[1]),
                     "prefill": prefill,
-                    "gold_ref": gold_reference(row),
-                    "pipeline_ref": pipeline_reference(row, item_id),
+                    "gold_ref": gold_reference(current),
+                    "pipeline_ref": pipeline_reference(current, item_id),
+                    "workbook_gold": gold_reference(row),
                     "source_grid": source_grid(
                         row.firm,
                         [_as_int(instance.get("row")) for instance in row.instances],
@@ -1878,11 +2006,12 @@ def build_packet_v2(
         reasons = [str(reason) for reason in _items(entry.get("reasons"))]
         reason_class = reasons[0].split(":", 1)[0] if reasons else "gold_suspect"
         ranked = list(predictions.get(item_id, ()))
-        gold_entries = _gold_block(row, row.gold_iris, definitions)
+        current = current_row(item_id) or row
+        gold_entries = _gold_block(current, current.gold_iris, definitions, label_lookup)
         pipeline_entries = _pipeline_block(
             ranked,
             definitions,
-            gold_iris=row.gold_iris,
+            gold_iris=current.gold_iris,
             committed=_committed_iris(ranked, answer_config),
         )
         prefill = _prefill_for(row, gold_entries, pipeline_entries, rulings)
@@ -1920,8 +2049,9 @@ def build_packet_v2(
                     "reasons": reasons,
                     "source": "gold_builder",
                     "prefill": prefill,
-                    "gold_ref": gold_reference(row),
-                    "pipeline_ref": pipeline_reference(row, item_id),
+                    "gold_ref": gold_reference(current),
+                    "pipeline_ref": pipeline_reference(current, item_id),
+                    "workbook_gold": gold_reference(row),
                     "source_grid": source_grid(
                         row.firm,
                         [_as_int(instance.get("row")) for instance in row.instances],
@@ -1944,11 +2074,12 @@ def build_packet_v2(
         seen_suspects.add(item_id)
         counts["score_driven_suspects"] += 1
         ranked = list(predictions.get(item_id, ()))
-        gold_entries = _gold_block(row, row.gold_iris, definitions)
+        current = current_row(item_id) or row
+        gold_entries = _gold_block(current, current.gold_iris, definitions, label_lookup)
         pipeline_entries = _pipeline_block(
             ranked,
             definitions,
-            gold_iris=row.gold_iris,
+            gold_iris=current.gold_iris,
             committed=_committed_iris(ranked, answer_config),
         )
         prefill = _prefill_for(row, gold_entries, pipeline_entries, rulings)
@@ -1985,8 +2116,9 @@ def build_packet_v2(
                     "instances": _instances_json(row),
                     "source": "cluster_triage",
                     "prefill": prefill,
-                    "gold_ref": gold_reference(row),
-                    "pipeline_ref": pipeline_reference(row, item_id),
+                    "gold_ref": gold_reference(current),
+                    "pipeline_ref": pipeline_reference(current, item_id),
+                    "workbook_gold": gold_reference(row),
                     "source_grid": source_grid(
                         row.firm,
                         [_as_int(instance.get("row")) for instance in row.instances],
@@ -2071,8 +2203,11 @@ def build_packet_v2(
                     "occurrences": len(by_label.get(normalized, ())),
                     "item_ids": list(by_label.get(normalized, ())),
                     "level": gold_row.level if gold_row else 0,
-                    "gold_ref": gold_reference(gold_row),
-                    "pipeline_ref": pipeline_reference(gold_row, item_id),
+                    "gold_ref": gold_reference(current_row(item_id) if item_id else None),
+                    "pipeline_ref": pipeline_reference(
+                        current_row(item_id) if item_id else None, item_id
+                    ),
+                    "workbook_gold": gold_reference(gold_row),
                     "source_grid": source_grid(
                         gold_row.firm if gold_row else str(entry.get("firm", "")),
                         [_as_int(instance.get("row")) for instance in gold_row.instances]
@@ -2094,6 +2229,7 @@ def build_packet_v2(
             continue
         counts["new_gold_pool"] += 1
         exact_label = label_key(row.input_text) == label_key(ranked[0].label)
+        current = current_row(row.item_id) or row
         pool.append(
             PacketRow(
                 decision_id=f"new_gold:{row.item_id}",
@@ -2114,7 +2250,7 @@ def build_packet_v2(
                 pipeline=_pipeline_block(
                     ranked,
                     definitions,
-                    gold_iris=row.gold_iris,
+                    gold_iris=current.gold_iris,
                     committed=_committed_iris(ranked, answer_config),
                 ),
                 proposed_iris=tuple(candidate.iri for candidate in ranked[:1]),
@@ -2130,8 +2266,9 @@ def build_packet_v2(
                     "exact_label_match": exact_label,
                     "top_score": ranked[0].score,
                     "candidates_ranked": len(ranked),
-                    "gold_ref": gold_reference(row),
-                    "pipeline_ref": pipeline_reference(row, row.item_id),
+                    "gold_ref": gold_reference(current),
+                    "pipeline_ref": pipeline_reference(current, row.item_id),
+                    "workbook_gold": gold_reference(row),
                     "source_grid": source_grid(
                         row.firm,
                         [_as_int(instance.get("row")) for instance in row.instances],
@@ -2161,6 +2298,8 @@ def build_packet_v2(
             continue
         counts["improvement_items"] += 1
         counts["improvement_proposals"] += len(atom_proposals)
+        current = current_row(item_id) or row
+        current_iris = frozenset(current.gold_iris)
         rows.append(
             PacketRow(
                 decision_id=f"improvement:{item_id}",
@@ -2179,7 +2318,7 @@ def build_packet_v2(
                     "gold does not carry yet. Accept the ones that belong to this cell as gold; "
                     "reject the rest. Nothing here is gold until you accept it."
                 ),
-                gold=_gold_block(row, row.gold_iris, definitions),
+                gold=_gold_block(current, current.gold_iris, definitions, label_lookup),
                 pipeline=tuple(
                     {
                         "iri": str(proposal.get("iri", "")),
@@ -2193,6 +2332,7 @@ def build_packet_v2(
                             str(proposal.get("definition", ""))
                             or definitions.get(str(proposal.get("iri", "")))
                         ),
+                        "already_gold": str(proposal.get("iri", "")) in current_iris,
                     }
                     for position, proposal in enumerate(atom_proposals)
                 ),
@@ -2205,8 +2345,9 @@ def build_packet_v2(
                     "instances": _instances_json(row),
                     "machine_proposed": True,
                     "proposals": atom_proposals,
-                    "gold_ref": gold_reference(row),
-                    "pipeline_ref": pipeline_reference(row, item_id),
+                    "gold_ref": gold_reference(current),
+                    "pipeline_ref": pipeline_reference(current, item_id),
+                    "workbook_gold": gold_reference(row),
                     "source_grid": source_grid(
                         row.firm,
                         [_as_int(instance.get("row")) for instance in row.instances],
@@ -2216,20 +2357,25 @@ def build_packet_v2(
             )
         )
 
-    # -- decisions already folded into a later gold version render locked, not askable ----
+    # -- decisions already folded into a later gold version render pre-filled, not blank --------
+    # Every input on these rows stays enabled (Damien, 2026-07-28: "let me add notes and change
+    # items even where you think things are settled") -- ``folded`` marks the row as decided and
+    # supplies the baseline the sheet's own JS diffs a re-submission against, so an untouched row
+    # still folds to nothing and only a genuine amendment reaches the Copy-decisions JSON.
     folded = {str(key): dict(value) for key, value in (folded_decisions or {}).items()}
     if folded:
-        locked: list[PacketRow] = []
+        applied: list[PacketRow] = []
         for packet_row in rows:
             record = folded.get(packet_row.decision_id)
             if record is None:
-                locked.append(packet_row)
+                applied.append(packet_row)
                 continue
             counts["folded_rows_locked"] += 1
             extra = dict(packet_row.extra)
             extra["folded"] = record
-            locked.append(replace(packet_row, extra=extra))
-        rows = locked
+            extra["baseline"] = _applied_baseline(packet_row, record)
+            applied.append(replace(packet_row, extra=extra))
+        rows = applied
 
     # Counted over what actually renders, not over the candidate pools the caps threw away.
     for packet_row in rows:
@@ -2244,6 +2390,8 @@ def build_packet_v2(
     meta: dict[str, object] = {
         "gold_id": gold_id,
         "gold_version": gold_version,
+        "current_gold_id": current_id,
+        "current_gold_version": current_version,
         "parent_gold_id": parent_gold_id,
         "derivation": "per_cell_v2",
         "ontology_cache_sha256": ontology_sha256,
@@ -2717,18 +2865,37 @@ def fold_granular_decisions(
         action = "accept"
 
         if row.section == "pairing":
-            choice = str(decision.get("pairing", PAIRING_APPLIED_READING))
-            if choice not in PAIRING_CHOICES:
-                raise ValueError(
-                    f"decision {decision_id}: pairing must be one of {sorted(PAIRING_CHOICES)}"
-                )
+            assignments = row.extra.get("assignments")
+            assignments_map = assignments if isinstance(assignments, Mapping) else {}
+            # Only a row build_packet_v2 itself marked "folded" gets the live-gold ("applied")
+            # baseline -- the correct fold baseline for an amendment to a row already decided. A
+            # never-folded row keeps the static heuristic reading as its baseline, even when it
+            # shares a target item with a *different*, already-folded pairing row (gold v2 dedupes
+            # one item across many source-row instances, KTD3 v2): the item's *total* current gold
+            # can differ from this row's own untouched heuristic contribution once a sibling row's
+            # edit has trimmed it, and blaming that on this row would silently "change" gold Damien
+            # never asked to touch (measured: 12 items, real packet, 2026-07-28).
+            applied_by_item = (
+                _pairing_reading_by_item(assignments_map, "applied")
+                if row.extra.get("folded")
+                else {}
+            ) or _pairing_reading_by_item(assignments_map, PAIRING_APPLIED_READING)
+            choice_raw = decision.get("pairing")
+            if choice_raw is None:
+                # No reading re-pick requested: start from what is already live, so a note-only or
+                # edited_iris-only amendment never silently reverts a prior edit back to heuristic.
+                choice = ""
+                chosen_by_item = {target: set(iris) for target, iris in applied_by_item.items()}
+            else:
+                choice = str(choice_raw)
+                if choice not in PAIRING_CHOICES:
+                    raise ValueError(
+                        f"decision {decision_id}: pairing must be one of {sorted(PAIRING_CHOICES)}"
+                    )
+                chosen_by_item = _pairing_reading_by_item(assignments_map, choice)
             counts["policy_decisions"] += 1
             if choice == "alternative":
                 counts["pairing_alternative"] += 1
-            assignments = row.extra.get("assignments")
-            assignments_map = assignments if isinstance(assignments, Mapping) else {}
-            applied_by_item = _pairing_reading_by_item(assignments_map, PAIRING_APPLIED_READING)
-            chosen_by_item = _pairing_reading_by_item(assignments_map, choice)
             edits = _pairing_edits(
                 decision, decision_id, set(applied_by_item) | set(chosen_by_item)
             )
@@ -3017,6 +3184,30 @@ def _main_v2(args: Any, parser: Any) -> int:  # pragma: no cover - I/O orchestra
     out_dir = Path(args.out)
     packet_path = out_dir / "packet.json"
 
+    current_gold_path = Path(args.current_gold) if args.current_gold else latest_gold_path(Path(args.gold))
+    if current_gold_path == Path(args.gold):
+        current_rows = rows
+        current_gold_version = gold_set.gold_version
+        current_gold_id = gold_set.gold_id
+    else:
+        current_rows = load_gold_rows_v2(current_gold_path)
+        current_manifest_path = current_gold_path.parent / (current_gold_path.stem + ".manifest.json")
+        current_manifest = (
+            json.loads(current_manifest_path.read_text(encoding="utf-8"))
+            if current_manifest_path.exists()
+            else {}
+        )
+        current_gold_version = _as_version(
+            current_manifest.get("gold_version")
+            or (current_rows[0].payload.get("gold_version") if current_rows else 0)
+        )
+        current_gold_id = str(current_manifest.get("gold_id", current_gold_path.stem))
+        print(
+            f"reference panels read live gold from {current_gold_path} "
+            f"(v{current_gold_version}, {current_gold_id})",
+            file=sys.stderr,
+        )
+
     if args.mode == "fold-v2":
         if args.decisions is None:
             print("--decisions is required in fold-v2 mode", file=sys.stderr)
@@ -3219,6 +3410,9 @@ def _main_v2(args: Any, parser: Any) -> int:  # pragma: no cover - I/O orchestra
 
     packet = build_packet_v2(
         gold_rows=rows,
+        current_gold_rows=current_rows,
+        current_gold_version=current_gold_version,
+        current_gold_id=current_gold_id,
         pairing_rows=pairing_rows,
         inconsistent_groups=inconsistent,
         suspects=suspects,
@@ -3295,6 +3489,16 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - I/O or
         "--mode", choices=("packet", "fold", "packet-v2", "fold-v2"), default="packet"
     )
     parser.add_argument("--gold", type=Path, default=DEFAULT_GOLD_DIR / "gold_v1.jsonl")
+    parser.add_argument(
+        "--current-gold",
+        type=Path,
+        default=None,
+        help=(
+            "packet-v2 only: the live gold version every reference/grading panel reads from. "
+            "Defaults to the highest gold_vN.jsonl beside --gold, so a plain re-run after a fold "
+            "picks up the new truth automatically."
+        ),
+    )
     parser.add_argument("--split-manifest", type=Path, default=DEFAULT_SPLIT_MANIFEST)
     parser.add_argument("--config", type=Path, default=DEFAULT_GOLD_DIR / DEFAULT_CONFIG_FILENAME)
     parser.add_argument("--suspects", type=Path, default=DEFAULT_GOLD_DIR / "suspects_v1.jsonl")
@@ -3601,6 +3805,28 @@ def _write_prediction_cache(
         for item_id, candidates in sorted(cache.items())
     }
     _atomic_write_text(path, json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n")
+
+
+def latest_gold_path(base: Path) -> Path:
+    """The highest-numbered ``gold_vN.jsonl`` beside ``base`` (``base`` itself if none is higher).
+
+    The packet's own sections are asked against whatever ``--gold`` names (the base a fold started
+    from), but every reference/grading panel must read the *live* gold state -- the actual latest
+    version on disk, which already carries every decision folded so far (Damien, 2026-07-28: a
+    folded row's panel kept showing the pre-fold snapshot). Auto-detecting the highest version
+    beside ``--gold`` means a plain re-run after a fold picks up the new truth with no extra flag.
+    """
+    match = re.match(r"gold_v(\d+)\.jsonl$", base.name)
+    best_version = int(match.group(1)) if match else 0
+    best = base
+    directory = base.parent
+    if directory.exists():
+        for candidate in directory.glob("gold_v*.jsonl"):
+            found = re.match(r"gold_v(\d+)\.jsonl$", candidate.name)
+            if found and int(found.group(1)) > best_version:
+                best_version = int(found.group(1))
+                best = candidate
+    return best
 
 
 def _realized_fraction(manifest: Any) -> float:  # pragma: no cover - CLI helper

@@ -34,7 +34,7 @@ import tempfile
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
-from .audit import Packet, PacketRow
+from .audit import Packet, PacketRow, pairing_applied_reading_name
 
 SECTION_TITLES: Mapping[str, tuple[str, str]] = {
     "cascade": (
@@ -509,9 +509,8 @@ ul.iris li.tail { border-left: 3px solid transparent; padding-left: .4rem; color
 .taglist .concept.unresolved { border-style: dashed; color: var(--muted); }
 .pipeflag { color: var(--accent); border-color: var(--accent); }
 
-/* --- rows already folded into a later gold version: shown, locked, never re-asked ---- */
-.row.locked { opacity: .82; }
-.row.locked .panel.proposed { border-left-color: var(--good); background: var(--card); }
+/* --- rows already folded into a later gold version: pre-filled, badged, fully re-answerable --- */
+.row.applied .panel.proposed { border-left-color: var(--good); background: var(--card); }
 .folded { border: 1px solid var(--good); border-left-width: 3px; border-radius: 7px;
           padding: .5rem .7rem; margin: .5rem 0; font-size: .88rem; }
 .folded h5 { margin: 0 0 .25rem; font-size: .78rem; text-transform: uppercase;
@@ -519,6 +518,9 @@ ul.iris li.tail { border-left: 3px solid transparent; padding-left: .4rem; color
 .folded .yournote { margin: .3rem 0 0; white-space: pre-wrap; }
 .tag.done { color: var(--good); border-color: var(--good); font-weight: 600; }
 .machine { color: var(--warn); border-color: var(--warn); }
+.opt.applied-reading { border-color: var(--good); background: var(--code); margin-bottom: .6rem; }
+.opt.applied-reading h4 { color: var(--good); display: flex; gap: .5rem; align-items: baseline; }
+p.note.workbook { font-size: .78rem; opacity: .85; }
 """
 )
 
@@ -531,24 +533,52 @@ function verdicts(row, selector) {
   });
   return out;
 }
+// A row already folded into gold carries its live state as a data-baseline JSON attribute
+// (gold/pipeline verdicts, the pairing reading, and the three note fields). No input is ever
+// disabled -- every row stays fully answerable -- but a re-submission that leaves the row exactly
+// at its baseline diffs to nothing here, so an untouched folded row never re-enters the
+// Copy-decisions JSON and a genuine amendment is the only entry that survives (Damien, 2026-07-28:
+// "let me add notes and change items even where you think things are settled").
+function baselineOf(row) {
+  const raw = row.getAttribute('data-baseline');
+  if (!raw) { return null; }
+  try { return JSON.parse(raw); } catch (e) { return null; }
+}
+function diffMap(current, base) {
+  const out = {};
+  Object.keys(current).forEach(function (key) {
+    if (!base || base[key] !== current[key]) { out[key] = current[key]; }
+  });
+  return out;
+}
 function collect() {
   const decisions = {};
   document.querySelectorAll('.row[data-decision-id]').forEach(function (row) {
-    if (row.hasAttribute('data-locked')) { return; }  // already folded into gold; never re-ask
     const id = row.getAttribute('data-decision-id');
+    const baseline = baselineOf(row);
     const entry = {};
-    const gold = verdicts(row, '.block.gold');
+    const gold = diffMap(verdicts(row, '.block.gold'), baseline ? baseline.gold : null);
     if (Object.keys(gold).length) { entry.gold = gold; }
-    const pipeline = verdicts(row, '.block.pipeline');
+    const pipeline = diffMap(verdicts(row, '.block.pipeline'), baseline ? baseline.pipeline : null);
     if (Object.keys(pipeline).length) { entry.pipeline = pipeline; }
-    const pairing = row.querySelector('input[data-kind=pairing]:checked');
-    if (pairing) { entry.pairing = pairing.value; }
+    const pairingEl = row.querySelector('input[data-kind=pairing]:checked');
+    const pairing = pairingEl ? pairingEl.value : null;
+    if (pairing && (!baseline || pairing !== baseline.pairing)) { entry.pairing = pairing; }
     const rowNote = row.querySelector('textarea.row-note');
-    if (rowNote && rowNote.value.trim()) { entry.note = rowNote.value.trim(); }
+    const rowNoteVal = rowNote ? rowNote.value.trim() : '';
+    if (rowNoteVal && (!baseline || rowNoteVal !== (baseline.note || ''))) {
+      entry.note = rowNoteVal;
+    }
     const goldNote = row.querySelector('textarea.gold-note');
-    if (goldNote && goldNote.value.trim()) { entry.gold_note = goldNote.value.trim(); }
+    const goldNoteVal = goldNote ? goldNote.value.trim() : '';
+    if (goldNoteVal && (!baseline || goldNoteVal !== (baseline.gold_note || ''))) {
+      entry.gold_note = goldNoteVal;
+    }
     const pipeNote = row.querySelector('textarea.pipeline-note');
-    if (pipeNote && pipeNote.value.trim()) { entry.pipeline_note = pipeNote.value.trim(); }
+    const pipeNoteVal = pipeNote ? pipeNote.value.trim() : '';
+    if (pipeNoteVal && (!baseline || pipeNoteVal !== (baseline.pipeline_note || ''))) {
+      entry.pipeline_note = pipeNoteVal;
+    }
     if (Object.keys(entry).length) { decisions[id] = entry; }
   });
   return decisions;
@@ -797,14 +827,41 @@ def _pipeline_reference(reference: object) -> str:
     return lede + '<ul class="iris">' + "".join(items) + "</ul>"
 
 
-def _reference_panels(row: PacketRow) -> str:
-    """Panels 1 and 2, on every row of every section, labelled identically throughout."""
+def _workbook_line(entries: Sequence[Mapping[str, object]]) -> str:
+    """The smaller provenance line under the current-gold panel: what the curator originally wrote.
+
+    Kept distinct from the panel above it on purpose (Damien, 2026-07-28): a folded row's current
+    gold can differ from the workbook cell it started from, and collapsing the two into one list
+    is exactly the falsehood that prompted this line to exist.
+    """
+    if not entries:
+        return '<p class="note workbook">Workbook curation: none — this input cell carried no curated mapping.</p>'
+    labels = "; ".join(
+        f'{_esc(entry.get("label", ""))} <code>{_esc(_short(str(entry.get("iri", ""))))}</code>'
+        for entry in entries
+    )
+    return f'<p class="note workbook">Workbook curation: {labels}</p>'
+
+
+def _reference_panels(row: PacketRow, *, current_version: int = 0) -> str:
+    """Panels 1 and 2, on every row of every section, labelled identically throughout.
+
+    Panel 1 is the *current* gold state -- the latest gold version on disk, which already carries
+    every decision folded so far -- never the pre-fold snapshot the packet's sections were built
+    from. A smaller line underneath keeps the original workbook curation visible for provenance.
+    """
+    gold_title = (
+        f"Gold — current (v{current_version}, includes your corrections)"
+        if current_version
+        else "Gold — current (includes your corrections)"
+    )
     if row.section == "pairing":
         context = _records(row.extra.get("input_context"))
         gold_body = "".join(
             f'<div class="perinput"><h5>L{_esc(entry.get("level", ""))} · '
             f'{_esc(entry.get("text", ""))}</h5>'
-            f'{_gold_reference(_records(entry.get("gold")))}</div>'
+            f'{_gold_reference(_records(entry.get("gold")))}'
+            f'{_workbook_line(_records(entry.get("workbook_gold")))}</div>'
             for entry in context
         )
         pipe_body = "".join(
@@ -818,10 +875,12 @@ def _reference_panels(row: PacketRow) -> str:
         gold_body = _gold_reference(
             _records(gold_raw) if isinstance(gold_raw, (list, tuple)) else list(row.gold)
         )
+        workbook_raw = row.extra.get("workbook_gold")
+        gold_body += _workbook_line(_records(workbook_raw) if isinstance(workbook_raw, (list, tuple)) else [])
         pipe_body = _pipeline_reference(row.extra.get("pipeline_ref"))
     return (
-        '<section class="panel ref-gold"><h4>Gold — curated in your workbook'
-        '<span class="who">your spreadsheet, as this harness derives it</span></h4>'
+        f'<section class="panel ref-gold"><h4>{_esc(gold_title)}'
+        '<span class="who">the live gold this harness scores against right now</span></h4>'
         + gold_body
         + "</section>"
         '<section class="panel ref-pipe"><h4>Current pipeline — folio-resolve today'
@@ -878,12 +937,46 @@ def _output_cells(blocks: Sequence[Mapping[str, object]]) -> str:
     return "".join(lines)
 
 
+def _applied_reading_panel(assignments: Mapping[str, object]) -> str:
+    """"Your ruling, applied" — the row's live per-input gold, read straight off current gold.
+
+    Shown on a folded pairing row instead of trusting either canned reading's stale pre-fold
+    label: Damien's own edits (``edited_iris``) can leave the live state matching neither
+    Heuristic nor Alternative verbatim (2026-07-28: the Borrower/Insurance-Finance row, edited to
+    drop the cascaded concepts a child cell never implies its parent), so this is read from
+    ``assignments["applied"]`` -- computed fresh from the current gold version every time the
+    packet is built -- rather than re-derived or guessed at render time.
+    """
+    entries = _records(assignments.get("applied"))
+    if not entries:
+        return ""
+    lines = "".join(
+        f'<li class="instance"><strong>L{_esc(entry.get("level", ""))} '
+        f'{_esc(entry.get("input", ""))}</strong> → ' + _tag_chips(entry) + "</li>"
+        for entry in entries
+    )
+    return (
+        '<div class="opt applied-reading" data-choice="applied">'
+        "<h4>Your ruling, applied<span class=\"tag done\">live in gold now</span></h4>"
+        f'<ul class="iris">{lines}</ul>'
+        "</div>"
+    )
+
+
 def _pairing_readings(row: PacketRow) -> str:
     """Reading A / Reading B, with the one that survives Damien's principle pre-checked."""
     assignments = row.extra.get("assignments")
     prechecked = row.extra.get("precheck")
     violations: Mapping[str, object] = prechecked if isinstance(prechecked, Mapping) else {}
-    choice = str(violations.get("choice", "heuristic"))
+    folded = row.extra.get("folded")
+    is_folded = isinstance(folded, Mapping)
+    # A never-folded row is pre-checked by the rule-based precheck (heuristic wins every tie); a
+    # folded row is pre-checked by whichever reading (if either) still equals what is live in
+    # gold today -- an edited row can match neither, and the row must not claim one does.
+    if is_folded and isinstance(assignments, Mapping):
+        choice = str(pairing_applied_reading_name(assignments) or "")
+    else:
+        choice = str(violations.get("choice", "heuristic"))
     out: list[str] = []
     blocks = _records(row.extra.get("blocks"))
     if blocks:
@@ -898,9 +991,19 @@ def _pairing_readings(row: PacketRow) -> str:
         out.append(f'<p class="blocks">{_esc(lede)}</p>{_output_cells(blocks)}')
     if not isinstance(assignments, Mapping):
         return "".join(out)
+    if is_folded:
+        out.append(_applied_reading_panel(assignments))
     panels: list[str] = []
+    # The "(applied to gold today)" claim is only true before any fold -- once folded, "Your
+    # ruling, applied" above is the truth and a candidate reading is labelled as a candidate,
+    # never as what is live (that was the falsehood Damien caught, 2026-07-28).
+    heuristic_title = (
+        "Reading A — heuristic (candidate reading)"
+        if is_folded
+        else "Reading A — heuristic (applied to gold today)"
+    )
     for reading, title, key in (
-        ("heuristic", "Reading A — heuristic (applied to gold today)", "heuristic_violations"),
+        ("heuristic", heuristic_title, "heuristic_violations"),
         ("alternative", "Reading B — alternative", "alternative_violations"),
     ):
         lines: list[str] = []
@@ -929,7 +1032,12 @@ def _pairing_readings(row: PacketRow) -> str:
             "</div>"
         )
     out.append(f'<div class="pairing">{"".join(panels)}</div>')
-    if not choice:
+    if not choice and is_folded:
+        out.append(
+            '<p class="note">Neither candidate reading matches what is live in gold today — see '
+            '&ldquo;Your ruling, applied&rdquo; above. Pick one below only to change it.</p>'
+        )
+    elif not choice:
         out.append(
             '<p class="note"><span class="tag needseye">needs your eye</span> both readings break '
             "the rule, so neither is pre-checked — an untouched row leaves gold exactly as it "
@@ -974,11 +1082,15 @@ PROPOSED_TITLES: Mapping[str, str] = {
 }
 
 
-def _improvement_block(row: PacketRow) -> str:
+def _improvement_block(
+    row: PacketRow, *, pipe_prefill: Mapping[str, object] | None = None, initial: str = ""
+) -> str:
     """Section F's one question, per proposed atom: accept it as gold, or reject it.
 
     Gold itself is *not* re-graded here — a machine-generated pilot row must never be able to
     delete curated gold. It shows read-only above (Panel 1) and only the proposals are askable.
+    ``pipe_prefill``/``initial`` carry a prior applied decision forward the same way every other
+    section's pipeline block does, so a folded improvement row pre-fills instead of re-asking.
     """
     proposals = _records(row.extra.get("proposals"))
     by_iri = {str(entry.get("iri", "")): entry for entry in proposals}
@@ -1002,18 +1114,27 @@ def _improvement_block(row: PacketRow) -> str:
             row.pipeline,
             decision_id=row.decision_id,
             kind="pipeline",
-            prefill={},
+            prefill=pipe_prefill or {},
             choices=(("elevate", "Accept as gold"), ("not_gold", "Reject")),
         )
-        + f'<textarea class="note pipeline-note" rows="2" '
-        f'name="pipeline-note|{_esc(row.decision_id)}" '
-        f'aria-label="note on these proposals" '
-        f'placeholder="note on these proposals (optional)"></textarea></div>'
+        + _textarea(
+            "note pipeline-note",
+            "pipeline-note",
+            row,
+            "note on these proposals",
+            "note on these proposals (optional)",
+            initial=initial,
+        )
+        + "</div>"
     )
 
 
 def _folded_panel(record: Mapping[str, object]) -> str:
-    """A decision already folded into a later gold version: what you decided, and what it did."""
+    """A decision already folded into a later gold version: what you decided, and what it did.
+
+    Still fully open below (Damien, 2026-07-28: "let me add notes and change items even where you
+    think things are settled") — this panel is a record of what happened last time, not a lock.
+    """
     bits: list[str] = []
     if record.get("summary"):
         bits.append(f'<p class="note">{_esc(record["summary"])}</p>')
@@ -1024,58 +1145,78 @@ def _folded_panel(record: Mapping[str, object]) -> str:
             )
     if record.get("gold_version"):
         bits.append(
-            f'<p class="note">folded into gold v{_esc(record["gold_version"])}'
+            f'<p class="note">applied to gold v{_esc(record["gold_version"])}'
             + (f' ({_esc(record["gold_id"])})' if record.get("gold_id") else "")
-            + "</p>"
+            + " — everything below is pre-filled to match; change anything to submit an "
+            "amendment.</p>"
         )
     return (
-        '<section class="folded"><h5>Decided — folded, not asking again</h5>'
+        '<section class="folded"><h5>Decided — applied, still open</h5>'
         + "".join(bits)
         + "</section>"
     )
 
 
-def _lock_inputs(html: str) -> str:
-    """Disable every control in an already-folded row so it cannot be answered twice.
+def _textarea(
+    css_class: str, name_prefix: str, row: PacketRow, aria_label: str, placeholder: str, *, initial: str = ""
+) -> str:
+    """One note field, pre-filled with ``initial`` when this row was already decided.
 
-    ``collect()`` also skips ``[data-locked]`` rows, so a locked row can never re-enter the
-    paste-back — disabling is what makes that visible on the page rather than only in the JSON.
+    Every input on a previously-folded row stays enabled — nothing here is ``disabled`` (Damien,
+    2026-07-28). Re-typing exactly ``initial`` is a no-op the sheet's diff-before-submit JS drops;
+    typing anything else is an amendment.
     """
-    return html.replace("<input type=", "<input disabled type=").replace(
-        '<textarea class="note', '<textarea disabled class="note'
+    return (
+        f'<textarea class="{css_class}" rows="2" '
+        f'name="{name_prefix}|{_esc(row.decision_id)}" '
+        f'aria-label="{aria_label}" '
+        f'placeholder="{placeholder}">{_esc(initial)}</textarea>'
     )
 
 
-def _row_note(row: PacketRow) -> str:
+def _row_note(row: PacketRow, *, initial: str = "") -> str:
     """The note field that now sits under every decision unit, pairing and consistency included."""
-    return (
-        f'<textarea class="note row-note rownote" rows="2" '
-        f'name="note|{_esc(row.decision_id)}" '
-        f'aria-label="note on this decision" '
-        f'placeholder="note on this decision (optional)"></textarea>'
+    return _textarea(
+        "note row-note rownote",
+        "note",
+        row,
+        "note on this decision",
+        "note on this decision (optional)",
+        initial=initial,
     )
 
 
 def _proposed_panel(row: PacketRow) -> str:
     prefill_raw = row.extra.get("prefill")
     prefill: Mapping[str, object] = prefill_raw if isinstance(prefill_raw, Mapping) else {}
-    gold_prefill = _mapping(prefill.get("gold"))
-    pipe_prefill = _mapping(prefill.get("pipeline"))
+    folded_raw = row.extra.get("folded")
+    folded: Mapping[str, object] = folded_raw if isinstance(folded_raw, Mapping) else {}
+    baseline_raw = row.extra.get("baseline")
+    baseline: Mapping[str, object] = baseline_raw if isinstance(baseline_raw, Mapping) else {}
+    # A row already folded pre-fills from what is actually live in gold (the baseline), which
+    # takes precedence over an older carried-forward ruling — it is newer and it is the truth.
+    gold_prefill = _mapping(baseline.get("gold")) or _mapping(prefill.get("gold"))
+    pipe_prefill = _mapping(baseline.get("pipeline")) or _mapping(prefill.get("pipeline"))
     body: list[str] = []
     if row.section == "pairing":
         body.append(_pairing_readings(row))
     elif row.section == "improvement":
-        body.append(_improvement_block(row))
+        body.append(_improvement_block(row, pipe_prefill=pipe_prefill, initial=str(folded.get("pipeline_note", ""))))
     else:
         if row.section == "consistency":
             body.append(_consistency_block(row))
         body.append(
             '<div class="block gold"><h4>Gold — keep or remove</h4>'
             + _grade_list(row.gold, decision_id=row.decision_id, kind="gold", prefill=gold_prefill)
-            + f'<textarea class="note gold-note" rows="2" '
-            f'name="gold-note|{_esc(row.decision_id)}" '
-            f'aria-label="note on this cell&rsquo;s gold" '
-            f'placeholder="note on this cell&rsquo;s gold (optional)"></textarea></div>'
+            + _textarea(
+                "note gold-note",
+                "gold-note",
+                row,
+                "note on this cell&rsquo;s gold",
+                "note on this cell&rsquo;s gold (optional)",
+                initial=str(folded.get("gold_note", "")),
+            )
+            + "</div>"
         )
         pipeline_title = (
             "FOLIO proposals — elevate the right one"
@@ -1087,25 +1228,30 @@ def _proposed_panel(row: PacketRow) -> str:
             + _grade_list(
                 row.pipeline, decision_id=row.decision_id, kind="pipeline", prefill=pipe_prefill
             )
-            + f'<textarea class="note pipeline-note" rows="2" '
-            f'name="pipeline-note|{_esc(row.decision_id)}" '
-            f'aria-label="note on the pipeline&rsquo;s answer" '
-            f'placeholder="note on the pipeline&rsquo;s answer (optional)"></textarea></div>'
+            + _textarea(
+                "note pipeline-note",
+                "pipeline-note",
+                row,
+                "note on the pipeline&rsquo;s answer",
+                "note on the pipeline&rsquo;s answer (optional)",
+                initial=str(folded.get("pipeline_note", "")),
+            )
+            + "</div>"
         )
-    if prefill.get("note"):
+    if prefill.get("note") and not folded:
         body.append(f'<p class="prefilled">Pre-filled: {_esc(prefill["note"])}</p>')
     title = PROPOSED_TITLES.get(row.section, "Proposed — this sheet&rsquo;s question")
     return (
         f'<section class="panel proposed"><h4>{title}'
         '<span class="who">what this gate is asking you to decide</span></h4>'
         + "".join(body)
-        + _row_note(row)
+        + _row_note(row, initial=str(folded.get("note", "")))
         + f'<p class="note">{_esc(row.suggested_action)}</p>'
         + "</section>"
     )
 
 
-def _render_row_v2(row: PacketRow) -> str:
+def _render_row_v2(row: PacketRow, *, current_version: int = 0) -> str:
     level_raw = row.extra.get("level")
     level = level_raw if isinstance(level_raw, int) else (1 if row.section == "pairing" else 3)
     level_class = f"lvl-{min(max(level, 1), 6)}"
@@ -1126,7 +1272,8 @@ def _render_row_v2(row: PacketRow) -> str:
     folded_raw = row.extra.get("folded")
     folded: Mapping[str, object] = folded_raw if isinstance(folded_raw, Mapping) else {}
     if folded:
-        header_bits.append('<span class="tag done">DONE — folded</span>')
+        applied_version = folded.get("gold_version") or current_version
+        header_bits.append(f'<span class="tag done">applied v{_esc(applied_version)}</span>')
     if row.extra.get("machine_proposed"):
         header_bits.append('<span class="tag machine">machine-proposed</span>')
 
@@ -1138,15 +1285,24 @@ def _render_row_v2(row: PacketRow) -> str:
     if folded:
         body.append(_folded_panel(folded))
     body.append(_source_panel(row))
-    body.append(_reference_panels(row))
-    body.append(_lock_inputs(_proposed_panel(row)) if folded else _proposed_panel(row))
+    body.append(_reference_panels(row, current_version=current_version))
+    # Every input stays enabled, folded or not (Damien, 2026-07-28) — a folded row differs only in
+    # arriving pre-filled (``_proposed_panel`` reads ``row.extra["baseline"]``) and in carrying the
+    # ``data-baseline`` JSON below, which the sheet's own JS diffs a re-submission against so an
+    # untouched row still folds to nothing.
+    body.append(_proposed_panel(row))
     body.append(f'<p class="note mono">{_esc(row.decision_id)}</p>')
 
+    baseline_raw = row.extra.get("baseline")
+    baseline_attr = (
+        f' data-baseline="{_esc(json.dumps(baseline_raw, sort_keys=True))}"'
+        if isinstance(baseline_raw, Mapping)
+        else ""
+    )
     return (
-        f'<article class="row lvl {level_class}{" locked" if folded else ""}" '
-        f'data-section="{_esc(row.section)}" '
-        + ('data-locked="1" ' if folded else "")
-        + f'data-decision-id="{_esc(row.decision_id)}">'
+        f'<article class="row lvl {level_class}{" applied" if folded else ""}" '
+        f'data-section="{_esc(row.section)}"{baseline_attr} '
+        f'data-decision-id="{_esc(row.decision_id)}">'
         f'<header><h3>{_esc(row.surface_label)}</h3><div>{"".join(header_bits)}</div></header>'
         + "".join(body)
         + "</article>"
@@ -1251,6 +1407,8 @@ def render_sheet_v2(packet: Packet) -> str:
     """The v2 decision sheet: one self-contained page, per-concept grading throughout."""
     meta = dict(packet.meta)
     metrics = meta.get("metrics")
+    current_version_raw = meta.get("current_gold_version") or meta.get("gold_version") or 0
+    current_version = int(current_version_raw) if isinstance(current_version_raw, (int, str)) else 0
     sections: list[str] = []
     for name in ("pairing", "consistency", "suspect", "resolution", "new_gold", "improvement"):
         title, lede = SECTION_TITLES_V2[name]
@@ -1276,7 +1434,7 @@ def render_sheet_v2(packet: Packet) -> str:
             if row.stratum and row.stratum != group:
                 group = row.stratum
                 chunk.append(f'<p class="groupbar">{_esc(row.stratum)}</p>')
-            chunk.append(_render_row_v2(row))
+            chunk.append(_render_row_v2(row, current_version=current_version))
         chunk.append("</section>")
         sections.append("".join(chunk))
 
