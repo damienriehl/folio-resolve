@@ -168,3 +168,49 @@ def test_embedding_triage_resolves_iri_conflict() -> None:
     resolved = [x for x in results if x.category == "conflict_resolved"]
     assert len(resolved) == 1
     assert resolved[0].concept.folio_iri == "R-B"
+
+
+def test_triage_cross_matches_an_empty_iri_and_adopts_the_resolved_one() -> None:
+    # One side found the span but could not resolve it: there is no conflict to triage,
+    # so the side that HAS an IRI wins outright without consulting the embeddings.
+    calls: list[int] = []
+
+    def sim(pairs: list[tuple[str, str]]) -> list[float]:
+        calls.append(1)
+        return [0.9] * len(pairs)
+
+    r = Reconciler(similarity_batch=sim, index_size=10)
+    results = r.reconcile_with_embedding_triage(
+        [_cm("presumption", "", 0.7)], [_cm("presumption", "R-presume", 0.6)]
+    )
+    assert [(x.category, x.concept.folio_iri) for x in results] == [("both_agree", "R-presume")]
+    assert results[0].concept.confidence > 0.7  # boosted by the agreement
+    assert calls == []
+
+
+def test_triage_keeps_the_ruler_side_when_the_llm_has_no_iri() -> None:
+    r = Reconciler(similarity_batch=lambda pairs: [0.9] * len(pairs), index_size=10)
+    results = r.reconcile_with_embedding_triage(
+        [_cm("presumption", "R-presume", 0.7)], [_cm("presumption", "", 0.6)]
+    )
+    assert [(x.category, x.concept.folio_iri) for x in results] == [("both_agree", "R-presume")]
+
+
+def test_triage_still_emits_the_unmatched_remainder() -> None:
+    r = Reconciler(similarity_batch=lambda pairs: [0.9] * len(pairs), index_size=10)
+    results = r.reconcile_with_embedding_triage(
+        [_cm("deposition", "R-depo", 0.8), _cm("vague", "R-vague", 0.3)],
+        [_cm("presumption", "R-presume", 0.9)],
+    )
+    assert [(x.category, x.concept.folio_iri) for x in results] == [
+        ("ruler_only", "R-depo"),
+        ("llm_only", "R-presume"),
+    ]  # the 0.3 ruler-only hit is below the confidence floor
+
+
+def test_triage_definition_overlap_can_favor_the_ruler_side() -> None:
+    r = Reconciler(similarity_batch=lambda pairs: [0.1, 0.2], index_size=10)
+    ruler = [_cm("lien on property", "R-A", 0.7, folio_label="Encumbrance", folio_definition="a lien on property")]
+    llm = [_cm("lien on property", "R-B", 0.7, folio_label="Criminal Charge", folio_definition="an accusation")]
+    resolved = [x for x in r.reconcile_with_embedding_triage(ruler, llm) if x.category == "conflict_resolved"]
+    assert [x.concept.folio_iri for x in resolved] == ["R-A"]

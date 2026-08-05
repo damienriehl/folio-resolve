@@ -269,3 +269,35 @@ def test_recent_feedback_is_newest_first_and_capped_at_twenty(tmp_path: Path) ->
     recent = store.get_insights().recent_feedback
     assert len(recent) == 20
     assert [e.id for e in recent[:3]] == ["e24", "e23", "e22"]
+
+
+def test_a_failed_write_leaves_no_partial_or_temp_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The atomic-rename contract: readers never see a half-written entry."""
+    import os
+
+    store = FeedbackStore(tmp_path)
+
+    def _boom(_src: object, _dst: object) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(os, "replace", _boom)
+    with pytest.raises(OSError, match="disk full"):
+        store.save(_entry(id="e1"))
+    assert list(tmp_path.iterdir()) == []  # the temp file is cleaned up
+    assert store.load("e1") is None
+
+
+def test_a_failed_write_does_not_clobber_the_previous_entry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import os
+
+    store = FeedbackStore(tmp_path)
+    store.save(_entry(id="e1", comment="original"))
+
+    def _boom(_src: object, _dst: object) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(os, "replace", _boom)
+    with pytest.raises(OSError):
+        store.save(_entry(id="e1", comment="replacement"))
+    loaded = store.load("e1")
+    assert loaded is not None and loaded.comment == "original"
