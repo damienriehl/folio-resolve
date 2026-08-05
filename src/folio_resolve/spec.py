@@ -44,10 +44,16 @@ class OntologyBehavior:
     iri_roots: tuple[str, ...] = ()
 
     def excludes_concept_label(self, label: str) -> bool:
+        """Whether this ontology's rules exclude ``label``. Case-insensitive on both sides.
+
+        The label was already upper-cased for comparison, but the *patterns* were not — so a
+        consumer-authored spec (the point of this layer) written as
+        ``concept_exclude_substrings=("dupe",)`` silently excluded nothing.
+        """
         upper = label.upper()
-        if any(upper.startswith(p) for p in self.concept_exclude_prefixes):
+        if any(upper.startswith(p.upper()) for p in self.concept_exclude_prefixes):
             return True
-        return any(sub in upper for sub in self.concept_exclude_substrings)
+        return any(sub.upper() in upper for sub in self.concept_exclude_substrings)
 
 
 @dataclass(frozen=True)
