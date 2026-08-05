@@ -33,7 +33,12 @@ _FRONT_MATTER_MARKERS = (
 _BACK_MATTER_MARKERS = ("index", "bibliography", "appendix", "glossary", "colophon", "errata")
 _METADATA_MARKERS = ("metadata", "document properties", "publisher", "cataloging")
 
-_ISBN_RE = re.compile(r"\b(?:97[89][- ]?)?\d{1,5}[- ]?\d{1,7}[- ]?\d{1,7}[- ]?[\dxX]\b")
+# A real ISBN-10 (9 digits + check) or ISBN-13 (978/979 + 9 digits + check), with the optional
+# hyphen/space grouping publishers use. The digit count is what makes this an ISBN test: an
+# earlier `\d{1,5}[- ]?\d{1,7}[- ]?\d{1,7}[- ]?[\dxX]` needed only FOUR digits, so any short body
+# unit that mentioned a year ("The 2024 amendments to Rule 26") classified as METADATA and was
+# silently dropped from tagging by MatchPipeline.match.
+_ISBN_RE = re.compile(r"\b(?:97[89][- ]?)?(?:\d[- ]?){9}[\dxX]\b")
 
 
 def classify_source(section_label: str, text: str = "") -> SourceType:
