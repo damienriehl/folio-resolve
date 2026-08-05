@@ -84,8 +84,15 @@ def _resolve_one(search: SearchByLabel, term: str, threshold: float) -> Resolved
         return None
     if not results:
         return None
-    obj, score = results[0]
-    score = float(score)
+    # `search_by_label` is a duck-typed consumer callable, so its top row is untrusted input:
+    # unpacking and float() sat outside the guard and could raise straight through a resolver
+    # that documents itself as returning [] when nothing clears the bar.
+    try:
+        obj, raw_score = results[0]
+        score = float(raw_score)
+    except (TypeError, ValueError):
+        logger.warning("search_by_label returned an unusable row for term=%r: %r", term, results[0])
+        return None
     if score < threshold:
         return None
     iri = _attr(obj, "iri")
