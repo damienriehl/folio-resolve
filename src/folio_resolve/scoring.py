@@ -318,11 +318,15 @@ def generate_search_terms(term: str) -> list[str]:
                 if content_words(sub):
                     terms.append(sub)
 
-    for w in sorted(content, key=len, reverse=True):
+    # `content` is a set, so both loops need a total order or the emitted term order varies
+    # between processes: "Commercial Litigation" yielded [..., "commercial", "litigation", ...]
+    # or [..., "litigation", "commercial", ...] depending on PYTHONHASHSEED, because the two
+    # words are the same length. Longest-first (the intended ranking), then alphabetical.
+    for w in sorted(content, key=lambda word: (-len(word), word)):
         if len(w) >= 3:
             terms.append(w)
 
-    for w in content:
+    for w in sorted(content):
         for suffix in LEGAL_TERM_EXPANSIONS.get(w, []):
             terms.append(f"{w} {suffix}")
 
