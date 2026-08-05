@@ -16,6 +16,19 @@ from folio_resolve.annotate.feedback_store import FeedbackStore
 from folio_resolve.annotate.models import FeedbackEntry
 
 
+def test_feedback_store_is_exported_from_the_annotate_package() -> None:
+    """The package docstring lists FeedbackStore under ``annotate``; it must be importable there.
+
+    ``get_insights`` is the "insights" half of the README's annotate-primitives row, and it lives
+    on this class — but the class was only reachable via the private-looking
+    ``folio_resolve.annotate.feedback_store`` submodule.
+    """
+    import folio_resolve.annotate as annotate
+
+    assert annotate.FeedbackStore is FeedbackStore
+    assert "FeedbackStore" in annotate.__all__
+
+
 def _entry(**kw: object) -> FeedbackEntry:
     payload: dict[str, object] = {"job_id": "j1", "annotation_id": "a1", "rating": "up"}
     payload.update(kw)
