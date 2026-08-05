@@ -69,10 +69,15 @@ class InMemoryOntology:
     def all_labels(self) -> dict[str, LabelInfo]:
         out: dict[str, LabelInfo] = {}
         for c in self._concepts:
+            # Skip blank labels, as FolioPythonProvider does: a concept with no label would
+            # otherwise register an empty-string key that no consumer can match on and that
+            # every later blank-labelled concept would overwrite.
             label = c.preferred_label or c.label
-            out[label.lower()] = LabelInfo(concept=c, label_type="preferred")
+            if label:
+                out[label.lower()] = LabelInfo(concept=c, label_type="preferred")
             for alt in c.alternative_labels:
-                out.setdefault(alt.lower(), LabelInfo(concept=c, label_type="alternative"))
+                if alt:
+                    out.setdefault(alt.lower(), LabelInfo(concept=c, label_type="alternative"))
         return out
 
     def search_by_label(self, query: str, *, limit: int = 20) -> list[tuple[Concept, float]]:
