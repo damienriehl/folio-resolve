@@ -82,9 +82,12 @@ class Reconciler:
         handled_ruler: set[tuple[str, str]] = set()
         handled_llm: set[tuple[str, str]] = set()
 
-        # Pass 1: exact (text, IRI) agreement
-        for key in set(ruler_by_key) | set(llm_by_key):
-            if key in ruler_by_key and key in llm_by_key:
+        # Pass 1: exact (text, IRI) agreement.
+        # Iterate the ruler dict (insertion-ordered), NOT `set(a) | set(b)` — set iteration order
+        # over string tuples varies with PYTHONHASHSEED, which made the result list order differ
+        # between processes for identical input.
+        for key in ruler_by_key:
+            if key in llm_by_key:
                 concept = llm_by_key[key]
                 base = max(ruler_by_key[key].confidence, llm_by_key[key].confidence)
                 concept.confidence = min(1.0, base + _diminishing_boost(base))
@@ -155,8 +158,9 @@ class Reconciler:
         handled_llm: set[tuple[str, str]] = set()
         conflicts: list[tuple[str, ConceptMatch, ConceptMatch]] = []
 
-        for key in set(ruler_by_key) | set(llm_by_key):
-            if key in ruler_by_key and key in llm_by_key:
+        # Ruler insertion order, not set order — see the note in `reconcile`.
+        for key in ruler_by_key:
+            if key in llm_by_key:
                 lc = llm_by_key[key]
                 base = max(ruler_by_key[key].confidence, lc.confidence)
                 lc.confidence = min(1.0, base + _diminishing_boost(base))
