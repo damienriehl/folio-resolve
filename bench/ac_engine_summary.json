@@ -1,0 +1,644 @@
+{
+  "generated": "2026-08-05T12:32:37-0500",
+  "engines": {
+    "c": {
+      "engine": "c",
+      "python": "3.13.11",
+      "pattern_count_input": 68693,
+      "concept_count": 16682,
+      "corpus_docs": 22,
+      "corpus_chars": 156876,
+      "doc_chars_median": 8253,
+      "parity_probes": {
+        "case_insensitive": [
+          [
+            4,
+            9,
+            "P-Court"
+          ],
+          [
+            10,
+            15,
+            "P-ruled"
+          ],
+          [
+            21,
+            26,
+            "P-Court"
+          ],
+          [
+            42,
+            47,
+            "P-Court"
+          ]
+        ],
+        "case_sensitive": [
+          [
+            10,
+            15,
+            "P-ruled"
+          ],
+          [
+            21,
+            26,
+            "P-Court"
+          ]
+        ],
+        "duplicate_key_matches": [
+          [
+            4,
+            9,
+            "P-lower"
+          ]
+        ],
+        "duplicate_key_pattern_count": 1,
+        "rebuild_stable": true,
+        "rebuild_first": [
+          [
+            0,
+            3,
+            "2"
+          ],
+          [
+            9,
+            12,
+            "3"
+          ],
+          [
+            13,
+            17,
+            "4"
+          ],
+          [
+            18,
+            20,
+            "1"
+          ]
+        ],
+        "empty_pattern": {
+          "ok": true,
+          "matches": [
+            [
+              2,
+              5,
+              "cat"
+            ]
+          ]
+        },
+        "overlap_fixture": [
+          [
+            4,
+            9,
+            "C"
+          ],
+          [
+            4,
+            19,
+            "A"
+          ],
+          [
+            10,
+            19,
+            "B"
+          ],
+          [
+            33,
+            37,
+            "D"
+          ]
+        ]
+      },
+      "backend": {
+        "module": "pyahocorasick",
+        "version": "2.3.0",
+        "extension_file": "/home/damienriehl/Coding Projects/folio-enrich/backend/.venv/lib/python3.13/site-packages/ahocorasick.cpython-313-x86_64-linux-gnu.so",
+        "compiled": true
+      },
+      "cold_build": {
+        "add_patterns_s": 0.0649,
+        "build_s": 0.1476,
+        "total_s": 0.2124,
+        "pattern_count_reported": 68693,
+        "rss_baseline_mb": 352.4,
+        "rss_after_build_mb": 380.2,
+        "rss_delta_mb": 27.8
+      },
+      "steady_build": {
+        "add_patterns_s": {
+          "n": 5,
+          "median": 0.063255,
+          "min": 0.054655,
+          "max": 0.177517,
+          "spread_pct": 224.8,
+          "samples": [
+            0.072544,
+            0.054655,
+            0.177517,
+            0.063255,
+            0.060662
+          ]
+        },
+        "build_s": {
+          "n": 5,
+          "median": 0.1461,
+          "min": 0.138104,
+          "max": 0.157615,
+          "spread_pct": 14.1,
+          "samples": [
+            0.138104,
+            0.138147,
+            0.157615,
+            0.1461,
+            0.149843
+          ]
+        },
+        "total_median_s": 0.2094
+      },
+      "rebuild_in_place_s": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "search_corpus": {
+        "n": 11,
+        "median": 0.347266,
+        "min": 0.333114,
+        "max": 0.358679,
+        "spread_pct": 7.7,
+        "samples": [
+          0.358679,
+          0.355048,
+          0.335452,
+          0.351921,
+          0.335803,
+          0.347266,
+          0.339702,
+          0.355803,
+          0.347932,
+          0.333114,
+          0.347041
+        ],
+        "matches": 4914,
+        "chars_per_s_median": 451745
+      },
+      "search_per_doc": {
+        "aggregate_all_docs_s": {
+          "n": 5,
+          "median": 0.034509,
+          "min": 0.033452,
+          "max": 0.035502,
+          "spread_pct": 6.1,
+          "samples": [
+            0.034509,
+            0.034349,
+            0.035502,
+            0.033452,
+            0.034885
+          ]
+        },
+        "per_call_median_s": 0.001446,
+        "per_call_min_s": 0.000249,
+        "per_call_max_s": 0.004146,
+        "docs": 22
+      },
+      "decomposition": {
+        "raw_matches_before_overlap_resolution": 4928,
+        "walk_only_s": {
+          "n": 11,
+          "median": 0.021138,
+          "min": 0.019885,
+          "max": 0.022758,
+          "spread_pct": 14.4,
+          "samples": [
+            0.020679,
+            0.019885,
+            0.020102,
+            0.020251,
+            0.021145,
+            0.021863,
+            0.020322,
+            0.021788,
+            0.02253,
+            0.022758,
+            0.021138
+          ]
+        },
+        "walk_only_chars_per_s_median": 7421512,
+        "own_resolver_s": {
+          "n": 11,
+          "median": 0.376957,
+          "min": 0.354959,
+          "max": 0.530236,
+          "spread_pct": 49.4,
+          "samples": [
+            0.402395,
+            0.354959,
+            0.530236,
+            0.373561,
+            0.369869,
+            0.387861,
+            0.384162,
+            0.376957,
+            0.368711,
+            0.374272,
+            0.378385
+          ]
+        },
+        "sweep_resolver_s": {
+          "n": 11,
+          "median": 0.002165,
+          "min": 0.002051,
+          "max": 0.002386,
+          "spread_pct": 16.3,
+          "samples": [
+            0.002317,
+            0.002304,
+            0.002165,
+            0.002161,
+            0.002082,
+            0.002386,
+            0.002088,
+            0.002051,
+            0.002303,
+            0.002231,
+            0.002062
+          ]
+        },
+        "note": "walk_only = automaton traversal + word-boundary checks, overlap resolution stubbed out. own_resolver = the _resolve_overlaps this engine actually ships. sweep_resolver = folio-resolve's active-interval version fed this engine's raw matches, i.e. what this engine would cost with the library's post-processing."
+      },
+      "search_corpus_gc_frozen": {
+        "n": 11,
+        "median": 0.406477,
+        "min": 0.388746,
+        "max": 0.737464,
+        "spread_pct": 89.7,
+        "samples": [
+          0.403198,
+          0.388746,
+          0.396377,
+          0.398507,
+          0.402495,
+          0.406477,
+          0.462833,
+          0.643975,
+          0.711039,
+          0.737464,
+          0.41123
+        ],
+        "note": "gc.freeze() after build moves the trie out of collection scope."
+      },
+      "build_gc_disabled_s": 0.2656,
+      "tracemalloc": {
+        "built_structure_mb": 41.7,
+        "peak_mb": 42.2,
+        "caveat": "Python-heap only; the C automaton is invisible to tracemalloc. Compare RSS."
+      },
+      "rss_final_peak_mb": 528.4
+    },
+    "py": {
+      "engine": "py",
+      "python": "3.13.11",
+      "pattern_count_input": 68693,
+      "concept_count": 16682,
+      "corpus_docs": 22,
+      "corpus_chars": 156876,
+      "doc_chars_median": 8253,
+      "parity_probes": {
+        "case_insensitive": [
+          [
+            4,
+            9,
+            "P-Court"
+          ],
+          [
+            10,
+            15,
+            "P-ruled"
+          ],
+          [
+            21,
+            26,
+            "P-Court"
+          ],
+          [
+            42,
+            47,
+            "P-Court"
+          ]
+        ],
+        "case_sensitive": [
+          [
+            4,
+            9,
+            "P-Court"
+          ],
+          [
+            10,
+            15,
+            "P-ruled"
+          ]
+        ],
+        "duplicate_key_matches": [
+          [
+            4,
+            9,
+            "P-upper"
+          ]
+        ],
+        "duplicate_key_pattern_count": 2,
+        "rebuild_stable": true,
+        "rebuild_first": [
+          [
+            0,
+            3,
+            "2"
+          ],
+          [
+            9,
+            12,
+            "3"
+          ],
+          [
+            13,
+            17,
+            "4"
+          ],
+          [
+            18,
+            20,
+            "1"
+          ]
+        ],
+        "empty_pattern": {
+          "ok": true,
+          "matches": [
+            [
+              2,
+              5,
+              "cat"
+            ]
+          ]
+        },
+        "overlap_fixture": [
+          [
+            4,
+            9,
+            "C"
+          ],
+          [
+            4,
+            19,
+            "A"
+          ],
+          [
+            10,
+            19,
+            "B"
+          ],
+          [
+            33,
+            37,
+            "D"
+          ]
+        ]
+      },
+      "backend": {
+        "module": "pure-python (folio_resolve.matching.aho_corasick)"
+      },
+      "folio_resolve_file": "/home/damienriehl/Coding Projects/folio-resolve/src/folio_resolve/__init__.py",
+      "cold_build": {
+        "add_patterns_s": 2.3061,
+        "build_s": 0.8875,
+        "total_s": 3.1936,
+        "pattern_count_reported": 68693,
+        "rss_baseline_mb": 352.4,
+        "rss_after_build_mb": 722.4,
+        "rss_delta_mb": 370.0
+      },
+      "steady_build": {
+        "add_patterns_s": {
+          "n": 5,
+          "median": 7.602641,
+          "min": 4.700383,
+          "max": 7.760608,
+          "spread_pct": 65.1,
+          "samples": [
+            4.700383,
+            7.760608,
+            7.602641,
+            7.732674,
+            7.1924
+          ]
+        },
+        "build_s": {
+          "n": 5,
+          "median": 0.972693,
+          "min": 0.919314,
+          "max": 0.997394,
+          "spread_pct": 8.5,
+          "samples": [
+            0.97997,
+            0.997394,
+            0.972693,
+            0.956897,
+            0.919314
+          ]
+        },
+        "total_median_s": 8.5753
+      },
+      "rebuild_in_place_s": [
+        0.9627,
+        0.891,
+        0.8972,
+        0.8927
+      ],
+      "search_corpus": {
+        "n": 11,
+        "median": 0.048441,
+        "min": 0.045801,
+        "max": 4.252462,
+        "spread_pct": 9184.6,
+        "samples": [
+          0.917522,
+          0.046251,
+          4.252462,
+          0.045801,
+          0.048838,
+          0.050723,
+          0.047991,
+          0.048339,
+          0.045833,
+          0.05988,
+          0.048441
+        ],
+        "matches": 4914,
+        "chars_per_s_median": 3238496
+      },
+      "search_per_doc": {
+        "aggregate_all_docs_s": {
+          "n": 5,
+          "median": 0.043082,
+          "min": 0.041375,
+          "max": 0.047673,
+          "spread_pct": 15.2,
+          "samples": [
+            0.047673,
+            0.041375,
+            0.047129,
+            0.042203,
+            0.043082
+          ]
+        },
+        "per_call_median_s": 0.001993,
+        "per_call_min_s": 0.000434,
+        "per_call_max_s": 0.003914,
+        "docs": 22
+      },
+      "decomposition": {
+        "raw_matches_before_overlap_resolution": 4928,
+        "walk_only_s": {
+          "n": 11,
+          "median": 0.047089,
+          "min": 0.039593,
+          "max": 0.056309,
+          "spread_pct": 42.2,
+          "samples": [
+            0.047089,
+            0.048728,
+            0.045666,
+            0.049522,
+            0.055104,
+            0.056309,
+            0.046967,
+            0.047418,
+            0.046311,
+            0.041446,
+            0.039593
+          ]
+        },
+        "walk_only_chars_per_s_median": 3331476,
+        "own_resolver_s": {
+          "n": 11,
+          "median": 0.001731,
+          "min": 0.001664,
+          "max": 0.002144,
+          "spread_pct": 28.8,
+          "samples": [
+            0.001828,
+            0.001748,
+            0.002144,
+            0.001743,
+            0.00168,
+            0.001723,
+            0.001664,
+            0.001675,
+            0.001738,
+            0.001713,
+            0.001731
+          ]
+        },
+        "sweep_resolver_s": {
+          "n": 11,
+          "median": 0.00172,
+          "min": 0.001665,
+          "max": 0.001856,
+          "spread_pct": 11.5,
+          "samples": [
+            0.001665,
+            0.00172,
+            0.001854,
+            0.001767,
+            0.001756,
+            0.001712,
+            0.001671,
+            0.00171,
+            0.001723,
+            0.001856,
+            0.001673
+          ]
+        },
+        "note": "walk_only = automaton traversal + word-boundary checks, overlap resolution stubbed out. own_resolver = the _resolve_overlaps this engine actually ships. sweep_resolver = folio-resolve's active-interval version fed this engine's raw matches, i.e. what this engine would cost with the library's post-processing."
+      },
+      "search_corpus_gc_frozen": {
+        "n": 11,
+        "median": 0.045237,
+        "min": 0.041135,
+        "max": 0.050154,
+        "spread_pct": 21.9,
+        "samples": [
+          0.043004,
+          0.045587,
+          0.041135,
+          0.041256,
+          0.041858,
+          0.045237,
+          0.044877,
+          0.045676,
+          0.046528,
+          0.045725,
+          0.050154
+        ],
+        "note": "gc.freeze() after build moves the trie out of collection scope."
+      },
+      "build_gc_disabled_s": 1.4823,
+      "tracemalloc": {
+        "built_structure_mb": 356.7,
+        "peak_mb": 356.7,
+        "caveat": "Python-heap only; the C automaton is invisible to tracemalloc. Compare RSS."
+      },
+      "rss_final_peak_mb": 1202.0
+    }
+  },
+  "isolated_memory": {
+    "c": {
+      "engine": "c",
+      "patterns": 68693,
+      "rss_before_mb": 322.9,
+      "rss_after_build_mb": 369.1,
+      "rss_delta_mb": 46.3,
+      "rss_released_on_del_mb": 44.2,
+      "gc_tracked_objects_after_build": 565471
+    },
+    "py": {
+      "engine": "py",
+      "patterns": 68693,
+      "rss_before_mb": 322.7,
+      "rss_after_build_mb": 711.1,
+      "rss_delta_mb": 388.4,
+      "rss_released_on_del_mb": 371.5,
+      "gc_tracked_objects_after_build": 4132015
+    }
+  },
+  "corpus_parity": {
+    "c_total": 4914,
+    "py_total": 4914,
+    "identical": true,
+    "both": 4914,
+    "c_only": 0,
+    "py_only": 0,
+    "c_only_examples": [],
+    "py_only_examples": []
+  },
+  "probe_parity": {
+    "case_insensitive": true,
+    "case_sensitive": false,
+    "duplicate_key_matches": false,
+    "duplicate_key_pattern_count": false,
+    "rebuild_stable": true,
+    "rebuild_first": true,
+    "empty_pattern": true,
+    "overlap_fixture": true
+  },
+  "ratios_py_over_c": {
+    "cold_build_total_py_over_c": 15.04,
+    "steady_build_total_py_over_c": 40.95,
+    "corpus_search_py_over_c": 0.14,
+    "per_doc_search_py_over_c": 1.38,
+    "rss_delta_py_over_c": 13.31,
+    "walk_only_py_over_c": 2.23,
+    "own_resolver_py_over_c": 0.0,
+    "like_for_like_corpus_py_over_c": 2.09,
+    "isolated_rss_delta_py_over_c": 8.39
+  }
+}
