@@ -6,8 +6,9 @@ Cold-start orientation for the next session continuing the F1 loop. The plan is 
 
 - **Branch:** `feat/f1-eval-loop`, pushed to origin. All gates green at every commit (`uv run pytest` 384 passed, `uv run mypy src`, `uv run mypy eval`, `uv run ruff check`).
 - **Done:** U1 intake · U2 gold builder · U3 scoring harness · U4 baseline+clusters · U5 audit-gate machinery (iterated through five sheet versions) · U6 iteration runner · U9 downstream baseline snapshot (both consumers fully green pre-iteration).
-- **OPEN — the loop is paused on Damien:** Gate 1b. He has folded 7 rulings (gold v3); the rest of the sheet is pending. **Iterations are parked until he says go** (gate2 ask q2 unanswered).
-- **Pending after the gate:** U7 iteration 1, U8 iterations 2–3, U10 check-in. U11/U12 (synthetic corpus, CI floor) gated on his satisfaction signal.
+- **OPEN — Gate 1b:** he has folded 7 rulings (gold v3); the rest of the sheet is pending. Sheet regenerated 2026-08-05 (byte-identical to the 07-28 packet apart from `generated_at`) and republished to the same private artifact.
+- **U7 iteration 1 measured 2026-08-05** (he answered gate2 q2 "start now"; scored against gold v3, membership-identical to the v2 he approved). `attempt-0001` is in `eval/reports/experiments.jsonl`. See "Iteration queue" below — the result changes the plan.
+- **Pending:** U8 iterations 2–3, U10 check-in. U11/U12 (synthetic corpus, CI floor) gated on his satisfaction signal.
 
 ## Baselines (identical pipeline; only the answer key changed)
 
@@ -37,9 +38,10 @@ Split (seed 20260727, v3 membership-identical to v2): frozen 79 / tune 634 / fir
 
 ## Iteration queue (evidence-backed, in order)
 
-1. **Provider limit forward-fix** — `src/folio_resolve/ontology.py:132` drops `limit`; folio-python defaults to 10. Direct measurement: 9 vs 131 results for the same query; 503-miss truncated cluster; median gold rank 35.5 at limit=200. One line + tests, run as a U6 attempt (golden no-drift table must be deliberately versioned per R12).
-2. **One named recalibration** after the limit fix (calibration currently saturates at P=.373 → rule degenerated to top-2, threshold inert).
-3. Synonymy/context levers per post-fix clusters. **Recall-engine port only if the post-fix residual justifies it** (KD9's "cheap fix first" clause; aligns with `docs/migration/SCHEDULE.md` Stage 2).
+1. ~~**Provider limit forward-fix**~~ — **DONE, and it scored zero.** Commit `a2db64a`; `attempt-0001`, decision `keep`. Tune F1 .208931 → .208931, Firm-2 F1 .125984 → .125984, tp/fp/fn identical on both slices, AE4 clean (0 regressed, 0 improved, CI [0.0, 0.0]). The reason is that every harness entry point defaults `label_search_limit=10`, which is *also* folio-python's own default — the fix removes a cap nothing was pushing against. Only movement: tune `exact_items` 11 → 12, a second-order effect at the `limit=3` call sites (`pipeline.py:103`, `domain_prior.py:162`), where upstream now limits matched labels before class expansion instead of after. Keep it: it is correct, tested, and the precondition for the limit lever. **Δcode credit for iteration 1 is 0.000000.**
+2. **The limit lever itself was then probed and does not pay** (gitignored `score-v3-*-{tune,firm2}-probe-limit200.json`). At `--label-search-limit 200`: tune F1 .208931 → .206210, Firm-2 .125984 → .125654. Ranked-list recall does rise — tune recall@10 .3143 → .3199 (hits@10 391 → 398 of 1244), Firm-2 recall@10 .225 → .250 — but nothing reaches the top-2 the answer rule commits, and one Firm-2 item flips correct→incorrect (AE4 would fire). Do not ship a raised limit as an iteration.
+3. **One named recalibration** (calibration saturates at P=.373 → rule degenerated to top-2, threshold inert). Note the limit probe leaves it inert too.
+4. **Recall-engine port — the residual now justifies it** (KD9's "cheap fix first" clause is discharged; aligns with `docs/migration/SCHEDULE.md` Stage 2). The 982 tune misses decompose as 509 `candidate_gap_truncated` + 337 `candidate_gap_unreachable` + 136 `ranked_below_cutoff`, and item 2 shows lexical depth converts ~7 of the 509 into top-10 and none into answers: those concepts sit around rank 35 in a 200-long lexical list, so the bottleneck is **ranking, not retrieval depth**. Add the 337 unreachable and the 321 `zero_token_overlap` signals — misses sharing no token with any label, which no lexical limit can ever reach — and semantic recall is the only lever left in the queue.
 
 ## Mechanics a fresh session needs
 
