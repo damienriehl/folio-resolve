@@ -81,9 +81,17 @@ class ScoreCalibration:
         return "strong"
 
     def weak_band_bounds(self, *, weak_below: float = 0.5, strong_at: float = 0.8) -> tuple[float, float]:
-        """The raw-score range that maps to the 'weak' calibrated band, as ``(low, high)``."""
+        """The raw-score range that maps to the 'weak' calibrated band, as ``(low, high)``.
+
+        ``low`` is the lowest fitted score whose calibrated probability reaches ``weak_below``;
+        ``high`` the lowest that reaches ``strong_at``. When the fit never reaches a threshold
+        the band collapses at the top of the fitted range: the previous fallback returned
+        ``self._steps[0][0]`` for ``low``, i.e. the *lowest* observed score, which reported the
+        entire range as weak precisely when nothing in it was even weak.
+        """
         if not self._steps:
             return (weak_below * 100.0, strong_at * 100.0)
-        low = next((x for x, p in self._steps if p >= weak_below), self._steps[0][0])
-        high = next((x for x, p in self._steps if p >= strong_at), self._steps[-1][0])
-        return (low, high)
+        top = self._steps[-1][0]
+        low = next((x for x, p in self._steps if p >= weak_below), top)
+        high = next((x for x, p in self._steps if p >= strong_at), top)
+        return (low, max(low, high))
