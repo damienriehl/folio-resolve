@@ -23,15 +23,15 @@ Written for a session that has never seen this repo and cannot ask questions.
   **KTD12 of the governing plan names the Anthropic API as the only approved model
   surface for that content.** Codex means OpenAI egress. Do not read, open, print,
   summarize, `grep`, or otherwise pull `eval/data/**` into your context.
-- The safe surface for a Codex worker here is `src/`, `tests/`, and `docs/`. That is
-  the fence the 2026-07-28 session drew unilaterally when it delegated the limit fix,
-  and it is **still awaiting Damien's ratification** — it is question `q3` on the open
-  ask `folio-resolve-2026-07-28-gold-audit-gate2`.
-- **Unverified:** I do not know whether Damien has classified folio-resolve as a
-  privileged/client-content repo under the newer cockpit-wide egress perimeter. If he
-  has, the correct reading is Claude-only and Codex needs per-task sign-off. Treat that
-  as open, and prefer the narrow fence until he says otherwise. Do not widen it because
-  a task would be faster.
+- **Damien has ruled on the fence** (gate2 `q3-codex-delegation-scope`, answered
+  2026-08-05): *"Codex may also touch `eval/` harness code that reads no firm rows."*
+  So the permitted surface is `src/`, `tests/`, `docs/`, **and** the harness code under
+  `eval/folio_eval/` — with the condition attached to it: **no firm rows may enter the
+  worker's context.** `eval/data/**` is therefore still hard off-limits, and the burden
+  is on you to keep it out of scope when editing harness code that reads it at runtime.
+- The 2026-07-28 session had drawn a narrower fence (`src/` + `tests/` only) on its own
+  authority and asked him to ratify it. He widened it. Follow his ruling, not that
+  session's instinct — but note the ruling is conditional, not a blanket clearance.
 - Aggregate outputs under `eval/reports/` are committed and safe **because** no committed
   file may carry a firm surface string; `clusters.assert_no_surfaces` is the choke point.
   Run it over anything new you would commit.
@@ -152,11 +152,20 @@ candidates, and a 60-proposal atom pilot over 26 cells. **Unverified:** I do not
 much of that he has since worked. Check `briefs/qa-state.json` in the cockpit repo, keyed
 by (stem, qid), before assuming anything — and before re-asking him anything.
 
-**Open decisions** on ask `folio-resolve-2026-07-28-gold-audit-gate2`:
-- `q1-sheet-v2-decisions` — the sheet itself. Open.
-- `q3-codex-delegation-scope` — ratify the Codex fence. Open. **Answer this before
-  dispatching Codex workers at any width beyond `src/` + `tests/`.**
-- `q2-start-iteration1-early` — answered and now recorded; do not re-ask.
+**Decision state** on ask `folio-resolve-2026-07-28-gold-audit-gate2`, per
+`briefs/qa-state.json` in the cockpit repo (read it under the `asks` key — see the
+warning below):
+- `q1-sheet-v2-decisions` — **the only one still open.** The sheet itself.
+- `q2-start-iteration1-early` — answered 2026-08-05 ("start now"), executed as
+  attempt-0001. Do not re-ask.
+- `q3-codex-delegation-scope` — answered 2026-08-05: *"Codex may also touch `eval/`
+  harness code that reads no firm rows."* Do not re-ask, and do not re-narrow it.
+
+**Read `qa-state.json` correctly.** Per-question state is nested under a top-level
+`asks` key: `state["asks"]["<stem>"]["<qid>"]`. Querying top-level keys for the stem
+returns nothing and looks exactly like "never answered" — this handoff originally
+claimed q3 was open for precisely that reason. An absence claim here is a claim about
+where you looked.
 
 ---
 
