@@ -29,6 +29,7 @@ from .entity_ruler import FOLIOEntityRuler
 from .gates import PlaceNameGate, ShortLabelGate
 from .judge import Judge, build_judge_prompt, parse_judge_json
 from .ontology import Concept, OntologyProvider
+from .recall import MultiStrategyRecall
 from .sources import SourceClassifier
 
 
@@ -62,6 +63,7 @@ class MatchPipeline:
     judge: Judge | None = None
     label_search_limit: int = 10
     score_floor: float = 45.0
+    recall_engine: MultiStrategyRecall | None = None
 
     # -- Stage 1: filter --------------------------------------------------
 
@@ -97,6 +99,18 @@ class MatchPipeline:
 
     def _expand(self, surface_term: str) -> list[MatchCandidate]:
         candidates: list[MatchCandidate] = []
+        if self.recall_engine is not None:
+            for recalled in self.recall_engine.recall(surface_term):
+                candidates.append(
+                    MatchCandidate(
+                        iri=recalled.concept.iri,
+                        label=recalled.concept.label,
+                        score=recalled.score,
+                        branch=recalled.concept.branch,
+                        extraction_path="multi_strategy_recall",
+                        surface_term=surface_term,
+                    )
+                )
         parts = decompose(surface_term)
         # Skip the first element (the original) — already searched in _filter.
         for part in parts[1:]:

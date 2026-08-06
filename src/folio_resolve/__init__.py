@@ -53,8 +53,16 @@ from .lemma import (
     save_lemma_cache,
     spacy_lemmatizer,
 )
-from .ontology import Concept, FolioPythonProvider, InMemoryOntology, LabelInfo, OntologyProvider
+from .ontology import (
+    Concept,
+    FolioPythonProvider,
+    InMemoryOntology,
+    LabelInfo,
+    OntologyProvider,
+    RecallOntology,
+)
 from .pipeline import MatchCandidate, MatchPipeline
+from .recall import MultiStrategyRecall, RecallResult
 from .reconciler import ConceptMatch, Reconciler, ReconciliationResult
 from .resolve import (
     CONJUNCT_THRESHOLD,
@@ -102,9 +110,12 @@ __all__ = [
     "Lemmatizer",
     "MatchCandidate",
     "MatchPipeline",
+    "MultiStrategyRecall",
     "OntologyProvider",
     "OntologySpec",
     "PlaceNameGate",
+    "RecallOntology",
+    "RecallResult",
     "Reconciler",
     "ReconciliationResult",
     "ResolvedConcept",
