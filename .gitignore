@@ -10,3 +10,11 @@ build/
 .folio/
 # ruler-shootout raw per-engine captures (large corpus match dumps; summary is committed)
 bench/results/
+
+# F1 eval harness firm-workbook derivatives (KTD1/KTD12): confidential law-firm
+# taxonomy data. These rules mirror feat/f1-eval-loop so the protection exists on
+# main too -- the data sits untracked in this checkout and main previously had no
+# rule covering it, so a stray `git add .` here would have committed firm content.
+eval/data/*
+!eval/data/MANIFEST.md
+eval/data/reports/
