@@ -351,6 +351,25 @@ def test_adapter_passes_leaf_as_surface_term_and_ancestors_as_heading_terms() ->
     assert any(candidate.iri == "R-arb" for candidate in results)
 
 
+def test_build_pipeline_can_enable_multi_strategy_recall() -> None:
+    ontology = InMemoryOntology(
+        [
+            Concept(
+                iri="R-expectation",
+                label="Expectation Damages",
+                definition="A remedy for a broken agreement",
+            ),
+        ]
+    )
+    adapter = PipelineAdapter(
+        build_pipeline(ontology, with_entity_ruler=False, with_multi_strategy_recall=True)
+    )
+
+    results = adapter(item("recall", ("R-expectation",), leaf="agreement remedy"))
+
+    assert [candidate.iri for candidate in results] == ["R-expectation"]
+
+
 def test_scoring_end_to_end_over_the_synthetic_ontology() -> None:
     concepts = [
         Concept(iri="R-arb", label="Arbitration Rules"),

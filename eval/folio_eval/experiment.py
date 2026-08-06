@@ -832,6 +832,7 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - I/O or
     )
     common_paths.add_argument("--split-manifest", type=Path, default=DEFAULT_SPLIT_MANIFEST)
     common_paths.add_argument("--label-search-limit", type=int, default=10)
+    common_paths.add_argument("--multi-strategy-recall", action="store_true")
     common_paths.add_argument("--experiments-log", type=Path, default=DEFAULT_EXPERIMENTS_LOG)
     common_paths.add_argument("--pending", type=Path, default=DEFAULT_PENDING_PATH)
     common_paths.add_argument("--allow-ontology-bump", action="store_true")
@@ -878,7 +879,11 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - I/O or
 
         folio = FOLIO()
         provider = build_folio_provider(folio)
-        pipeline = build_pipeline(provider, label_search_limit=args.label_search_limit)
+        pipeline = build_pipeline(
+            provider,
+            label_search_limit=args.label_search_limit,
+            with_multi_strategy_recall=args.multi_strategy_recall,
+        )
         hierarchy = Hierarchy.from_folio(folio)
         adapter = PipelineAdapter(pipeline)
         outcomes: dict[str, SliceOutcome] = {}

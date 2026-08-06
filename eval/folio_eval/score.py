@@ -32,8 +32,9 @@ from pathlib import Path
 from typing import Any
 
 from folio_resolve.entity_ruler import FOLIOEntityRuler
-from folio_resolve.ontology import Concept, FolioPythonProvider, OntologyProvider
+from folio_resolve.ontology import Concept, FolioPythonProvider, OntologyProvider, RecallOntology
 from folio_resolve.pipeline import MatchPipeline
+from folio_resolve.recall import MultiStrategyRecall
 
 from .answer_rule import (
     AnswerRuleConfig,
@@ -387,6 +388,7 @@ def build_pipeline(
     *,
     with_entity_ruler: bool = True,
     label_search_limit: int = 10,
+    with_multi_strategy_recall: bool = False,
 ) -> MatchPipeline:
     """Construct the pipeline under test over an already-built ontology provider.
 
@@ -397,10 +399,16 @@ def build_pipeline(
     if with_entity_ruler:
         ruler = FOLIOEntityRuler()
         ruler.load_patterns(provider.all_labels())
+    recall_engine: MultiStrategyRecall | None = None
+    if with_multi_strategy_recall:
+        if not isinstance(provider, RecallOntology):
+            raise TypeError("multi-strategy recall requires a RecallOntology provider")
+        recall_engine = MultiStrategyRecall(provider)
     return MatchPipeline(
         ontology=provider,
         entity_ruler=ruler,
         label_search_limit=label_search_limit,
+        recall_engine=recall_engine,
     )
 
 
@@ -466,6 +474,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="score only the first N items of the slice by item_id (smoke runs; marks the report sampled)",
     )
     parser.add_argument("--label-search-limit", type=int, default=10)
+    parser.add_argument("--multi-strategy-recall", action="store_true")
     parser.add_argument("--no-entity-ruler", action="store_true")
     parser.add_argument("--determinism-target", default=DEFAULT_SELFTEST_TARGET)
     parser.add_argument(
@@ -542,6 +551,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         provider,
         with_entity_ruler=not args.no_entity_ruler,
         label_search_limit=args.label_search_limit,
+        with_multi_strategy_recall=args.multi_strategy_recall,
     )
     hierarchy = Hierarchy.from_folio(folio)
 
@@ -566,6 +576,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "determinism_selftest": selftest.to_json(),
             "label_search_limit": args.label_search_limit,
             "entity_ruler": not args.no_entity_ruler,
+            "multi_strategy_recall": args.multi_strategy_recall,
         },
     )
     stem = "-".join(part for part in (gold.gold_id, args.slice, args.label or None) if part)
