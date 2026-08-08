@@ -9,12 +9,12 @@ from __future__ import annotations
 import hashlib
 import json
 import time
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import Any
 
 from folio_resolve import FolioPythonProvider, MultiStrategyRecall
 
-EXPECTED_DIGEST = "441d45d0007cb98cd60d652bbdd4d01bb23d178aff95d780eb2ca2f4fca0933e"
+EXPECTED_DIGEST = "20127799283863c7a5a4a718be39b7e6e453a15b92d85e5f0b8ebc1ee13b10b2"
 QUERIES = (
     "contract damages",
     "contract claim",
@@ -57,16 +57,33 @@ class _CountingOntology:
         return self.ontology.parents_of(iri)
 
 
-def _snapshot(engine: MultiStrategyRecall) -> list[list[tuple[str, float]]]:
-    return [
-        [(result.concept.iri, result.score) for result in engine.recall(query)]
-        for query in QUERIES
-    ]
+Snapshot = list[list[dict[str, object]]]
 
 
-def _digest(snapshot: list[list[tuple[str, float]]]) -> str:
+def _snapshot(engine: MultiStrategyRecall) -> Snapshot:
+    return [[asdict(result) for result in engine.recall(query)] for query in QUERIES]
+
+
+def _digest(snapshot: Snapshot) -> str:
     payload = json.dumps(snapshot, separators=(",", ":"), sort_keys=True).encode()
     return hashlib.sha256(payload).hexdigest()
+
+
+def benchmark_payload(
+    first: Snapshot,
+    second: Snapshot,
+    *,
+    elapsed_seconds: float,
+    ontology_search_calls: int,
+) -> dict[str, int | float]:
+    """Build the stable aggregate benchmark contract from measured snapshots."""
+    return {
+        "elapsed_seconds": round(elapsed_seconds, 6),
+        "output_equivalent": int(_digest(first) == EXPECTED_DIGEST),
+        "deterministic": int(first == second),
+        "query_count": len(QUERIES),
+        "ontology_search_calls": ontology_search_calls,
+    }
 
 
 def main() -> None:
@@ -81,17 +98,15 @@ def main() -> None:
     elapsed = time.perf_counter() - started
     first_call_count = ontology.search_calls
     second = _snapshot(engine)
-    digest = _digest(first)
 
     print(
         json.dumps(
-            {
-                "median_seconds": round(elapsed, 6),
-                "output_equivalent": int(digest == EXPECTED_DIGEST),
-                "deterministic": int(first == second),
-                "query_count": len(QUERIES),
-                "ontology_search_calls": first_call_count,
-            },
+            benchmark_payload(
+                first,
+                second,
+                elapsed_seconds=elapsed,
+                ontology_search_calls=first_call_count,
+            ),
             sort_keys=True,
         )
     )

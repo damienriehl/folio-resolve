@@ -50,8 +50,12 @@ class MultiStrategyRecall:
     _score_cache: OrderedDict[
         tuple[frozenset[str], str, str, str | None, tuple[str, ...], str | None], float
     ] = field(default_factory=OrderedDict, init=False, repr=False, compare=False)
+    _cache_ontology: RecallOntology | None = field(
+        default=None, init=False, repr=False, compare=False
+    )
 
     def recall(self, text: str) -> list[RecallResult]:
+        self._ensure_cache_ontology()
         query_content = content_words(text) or set(tokenize(text))
         if not query_content:
             return []
@@ -139,6 +143,23 @@ class MultiStrategyRecall:
 
         ranked = sorted(scores.items(), key=lambda item: (-item[1], item[0]))
         return [RecallResult(raw[iri], score) for iri, score in ranked[: self.top_n]]
+
+    def clear_caches(self) -> None:
+        """Discard cached searches and scores after an in-place ontology refresh.
+
+        Replacing :attr:`ontology` is detected automatically on the next public
+        :meth:`recall` call. Providers refreshed in place must call this method so
+        subsequent recall uses the provider's new state.
+        """
+        self._label_cache.clear()
+        self._prefix_cache.clear()
+        self._definition_cache.clear()
+        self._score_cache.clear()
+        self._cache_ontology = self.ontology
+
+    def _ensure_cache_ontology(self) -> None:
+        if self._cache_ontology is not self.ontology:
+            self.clear_caches()
 
     def _search_by_label(self, query: str, *, limit: int) -> list[tuple[Concept, float]]:
         key = (query, limit)

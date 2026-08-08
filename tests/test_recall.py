@@ -243,6 +243,51 @@ def test_search_cache_returns_fresh_lists() -> None:
     assert ontology.calls == [("label", "Agreement Remedy", 1)]
 
 
+def test_search_cache_can_be_disabled() -> None:
+    ontology = _CountingRecallOntology()
+    engine = MultiStrategyRecall(ontology, search_cache_capacity=0)
+
+    engine._search_by_label("Agreement", limit=1)
+    engine._search_by_label("Agreement", limit=1)
+    engine._search_by_prefix("Agreement", limit=1)
+    engine._search_by_prefix("Agreement", limit=1)
+    engine._search_by_definition("Agreement", limit=1)
+    engine._search_by_definition("Agreement", limit=1)
+
+    assert ontology.calls == [
+        ("label", "Agreement", 1),
+        ("label", "Agreement", 1),
+        ("prefix", "Agreement", 1),
+        ("prefix", "Agreement", 1),
+        ("definition", "Agreement", 1),
+        ("definition", "Agreement", 1),
+    ]
+
+
+def test_replacing_ontology_automatically_clears_all_caches() -> None:
+    first_ontology = InMemoryOntology([Concept(iri="first", label="Agreement Remedy")])
+    second_ontology = InMemoryOntology([Concept(iri="second", label="Agreement Remedy")])
+    engine = MultiStrategyRecall(first_ontology)
+
+    assert [result.concept.iri for result in engine.recall("Agreement Remedy")] == ["first"]
+
+    engine.ontology = second_ontology
+
+    assert [result.concept.iri for result in engine.recall("Agreement Remedy")] == ["second"]
+
+
+def test_clear_caches_exposes_in_place_ontology_refresh() -> None:
+    ontology = InMemoryOntology([Concept(iri="first", label="Agreement Remedy")])
+    engine = MultiStrategyRecall(ontology)
+    assert [result.concept.iri for result in engine.recall("Agreement Remedy")] == ["first"]
+
+    ontology._concepts = [Concept(iri="second", label="Agreement Remedy")]
+    ontology._by_iri = {concept.iri: concept for concept in ontology._concepts}
+    engine.clear_caches()
+
+    assert [result.concept.iri for result in engine.recall("Agreement Remedy")] == ["second"]
+
+
 def test_score_cache_key_contains_every_scoring_input() -> None:
     engine = MultiStrategyRecall(_ontology())
     base = Concept(
