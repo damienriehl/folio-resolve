@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections import OrderedDict
+from dataclasses import dataclass, field
+from typing import TypeVar
 
 from .ontology import Concept, RecallOntology
 from .scoring import (
@@ -12,6 +14,9 @@ from .scoring import (
     generate_search_terms,
     tokenize,
 )
+
+_K = TypeVar("_K")
+_V = TypeVar("_V")
 
 
 @dataclass(frozen=True)
@@ -31,6 +36,16 @@ class MultiStrategyRecall:
     threshold: float = 30.0
     ancestor_depth: int = 3
     ancestor_decay: float = 0.85
+    search_cache_capacity: int = 256
+    _label_cache: OrderedDict[tuple[str, int], tuple[tuple[Concept, float], ...]] = field(
+        default_factory=OrderedDict, init=False, repr=False, compare=False
+    )
+    _prefix_cache: OrderedDict[tuple[str, int], tuple[Concept, ...]] = field(
+        default_factory=OrderedDict, init=False, repr=False, compare=False
+    )
+    _definition_cache: OrderedDict[tuple[str, int], tuple[tuple[Concept, float], ...]] = field(
+        default_factory=OrderedDict, init=False, repr=False, compare=False
+    )
 
     def recall(self, text: str) -> list[RecallResult]:
         query_content = content_words(text) or set(tokenize(text))
@@ -44,14 +59,14 @@ class MultiStrategyRecall:
         )
         for term in search_terms:
             label_batch = sorted(
-                self.ontology.search_by_label(term, limit=25),
+                self._search_by_label(term, limit=25),
                 key=lambda pair: pair[0].iri,
             )
             for concept, _score in label_batch:
                 raw.setdefault(concept.iri, concept)
             if len(term) >= 3:
                 prefix_batch = sorted(
-                    self.ontology.search_by_prefix(term, limit=50), key=lambda concept: concept.iri
+                    self._search_by_prefix(term, limit=50), key=lambda concept: concept.iri
                 )
                 for concept in prefix_batch:
                     raw.setdefault(concept.iri, concept)
@@ -59,7 +74,7 @@ class MultiStrategyRecall:
         for word in sorted(query_content):
             if len(word) >= 6:
                 prefix_batch = sorted(
-                    self.ontology.search_by_prefix(word[:-2], limit=50),
+                    self._search_by_prefix(word[:-2], limit=50),
                     key=lambda concept: concept.iri,
                 )
                 for concept in prefix_batch:
@@ -72,7 +87,7 @@ class MultiStrategyRecall:
         for term in definition_terms:
             if len(term) >= 3:
                 definition_batch = sorted(
-                    self.ontology.search_by_definition(term, limit=20),
+                    self._search_by_definition(term, limit=20),
                     key=lambda pair: pair[0].iri,
                 )
                 for concept, _score in definition_batch:
@@ -120,6 +135,44 @@ class MultiStrategyRecall:
 
         ranked = sorted(scores.items(), key=lambda item: (-item[1], item[0]))
         return [RecallResult(raw[iri], score) for iri, score in ranked[: self.top_n]]
+
+    def _search_by_label(self, query: str, *, limit: int) -> list[tuple[Concept, float]]:
+        key = (query, limit)
+        cached = self._label_cache.get(key)
+        if cached is None:
+            cached = tuple(self.ontology.search_by_label(query, limit=limit))
+            self._store(self._label_cache, key, cached)
+        else:
+            self._label_cache.move_to_end(key)
+        return list(cached)
+
+    def _search_by_prefix(self, query: str, *, limit: int) -> list[Concept]:
+        key = (query, limit)
+        cached = self._prefix_cache.get(key)
+        if cached is None:
+            cached = tuple(self.ontology.search_by_prefix(query, limit=limit))
+            self._store(self._prefix_cache, key, cached)
+        else:
+            self._prefix_cache.move_to_end(key)
+        return list(cached)
+
+    def _search_by_definition(self, query: str, *, limit: int) -> list[tuple[Concept, float]]:
+        key = (query, limit)
+        cached = self._definition_cache.get(key)
+        if cached is None:
+            cached = tuple(self.ontology.search_by_definition(query, limit=limit))
+            self._store(self._definition_cache, key, cached)
+        else:
+            self._definition_cache.move_to_end(key)
+        return list(cached)
+
+    def _store(self, cache: OrderedDict[_K, _V], key: _K, value: _V) -> None:
+        if self.search_cache_capacity <= 0:
+            return
+        cache[key] = value
+        cache.move_to_end(key)
+        if len(cache) > self.search_cache_capacity:
+            cache.popitem(last=False)
 
     @staticmethod
     def _score(query_content: set[str], query: str, concept: Concept) -> float:

@@ -174,6 +174,74 @@ def test_recall_normalizes_order_varying_provider_batches() -> None:
     ]
 
 
+class _CountingRecallOntology(InMemoryOntology):
+    def __init__(self) -> None:
+        super().__init__([Concept(iri="hit", label="Agreement Remedy")])
+        self.calls: list[tuple[str, str, int]] = []
+
+    def search_by_label(self, query: str, *, limit: int = 20) -> list[tuple[Concept, float]]:
+        self.calls.append(("label", query, limit))
+        return super().search_by_label(query, limit=limit)
+
+    def search_by_prefix(self, prefix: str, *, limit: int = 50) -> list[Concept]:
+        self.calls.append(("prefix", prefix, limit))
+        return super().search_by_prefix(prefix, limit=limit)
+
+    def search_by_definition(self, query: str, *, limit: int = 20) -> list[tuple[Concept, float]]:
+        self.calls.append(("definition", query, limit))
+        return super().search_by_definition(query, limit=limit)
+
+
+def test_search_cache_keys_include_method_query_and_limit() -> None:
+    ontology = _CountingRecallOntology()
+    engine = MultiStrategyRecall(ontology)
+
+    engine._search_by_label("Agreement", limit=1)
+    engine._search_by_label("Agreement", limit=1)
+    engine._search_by_label("agreement", limit=1)
+    engine._search_by_label("Agreement", limit=2)
+    engine._search_by_prefix("Agreement", limit=1)
+    engine._search_by_definition("Agreement", limit=1)
+
+    assert ontology.calls == [
+        ("label", "Agreement", 1),
+        ("label", "agreement", 1),
+        ("label", "Agreement", 2),
+        ("prefix", "Agreement", 1),
+        ("definition", "Agreement", 1),
+    ]
+
+
+def test_search_cache_is_lru_bounded() -> None:
+    ontology = _CountingRecallOntology()
+    engine = MultiStrategyRecall(ontology, search_cache_capacity=2)
+
+    engine._search_by_prefix("first", limit=1)
+    engine._search_by_prefix("second", limit=1)
+    engine._search_by_prefix("first", limit=1)
+    engine._search_by_prefix("third", limit=1)
+    engine._search_by_prefix("second", limit=1)
+
+    assert ontology.calls == [
+        ("prefix", "first", 1),
+        ("prefix", "second", 1),
+        ("prefix", "third", 1),
+        ("prefix", "second", 1),
+    ]
+
+
+def test_search_cache_returns_fresh_lists() -> None:
+    ontology = _CountingRecallOntology()
+    engine = MultiStrategyRecall(ontology)
+
+    first = engine._search_by_label("Agreement Remedy", limit=1)
+    expected = list(first)
+    first.clear()
+
+    assert engine._search_by_label("Agreement Remedy", limit=1) == expected
+    assert ontology.calls == [("label", "Agreement Remedy", 1)]
+
+
 def test_pipeline_recall_off_is_exact_existing_output_and_on_is_additive() -> None:
     ontology = _ontology()
     baseline = MatchPipeline(ontology=ontology, score_floor=30.0).match("benefit bargain")
