@@ -19,7 +19,7 @@ from .experiment import (
 from .experiment import (
     main as experiment_main,
 )
-from .splits import DEFAULT_GOLD_DIR, load_gold
+from .splits import DEFAULT_GOLD_DIR, GoldSet, SplitIntegrityError, load_gold, load_split_manifest
 
 DEFAULT_PRIVATE_GOLD = DEFAULT_GOLD_DIR / "gold_v3.jsonl"
 
@@ -103,6 +103,20 @@ def _captured_experiment(argv: Sequence[str]) -> None:
         raise PrivateRecallError("experiment command failed")
 
 
+def _matching_split_manifest(gold: GoldSet) -> Path:
+    """Select a split that validates against this gold without exposing its path or contents."""
+    matches: list[Path] = []
+    for candidate in sorted(DEFAULT_GOLD_DIR.glob("split_manifest*.json")):
+        try:
+            load_split_manifest(candidate, gold)
+        except SplitIntegrityError:
+            continue
+        matches.append(candidate)
+    if not matches:
+        raise PrivateRecallError("no split manifest matches the selected gold")
+    return matches[-1]
+
+
 def run_private_recall(*, gold: Path = DEFAULT_PRIVATE_GOLD) -> dict[str, object]:
     """Run before/after scoring and return only a leak-checked aggregate projection."""
     if os.environ.get("PYTHONHASHSEED") != "0":
@@ -110,7 +124,9 @@ def run_private_recall(*, gold: Path = DEFAULT_PRIVATE_GOLD) -> dict[str, object
     if DEFAULT_PENDING_PATH.exists():
         raise PrivateRecallError("an experiment is already pending")
 
-    common = ["--gold", str(gold)]
+    gold_set = load_gold(gold)
+    split_manifest = _matching_split_manifest(gold_set)
+    common = ["--gold", str(gold), "--split-manifest", str(split_manifest)]
     _captured_experiment(
         [
             "start",
@@ -145,7 +161,6 @@ def run_private_recall(*, gold: Path = DEFAULT_PRIVATE_GOLD) -> dict[str, object
         raise PrivateRecallError("experiment record missing")
     payload = aggregate_payload(attempts[-1])
     rendered = json.dumps(payload, ensure_ascii=False, sort_keys=True)
-    gold_set = load_gold(gold)
     assert_no_surfaces(rendered, surface_strings(gold_set), what="private recall aggregate output")
     return payload
 
