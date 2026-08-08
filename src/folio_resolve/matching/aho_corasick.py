@@ -25,7 +25,13 @@ class MatchResult:
 class _Node:
     children: dict[str, _Node] = field(default_factory=dict)
     fail: _Node | None = None
+    # Patterns ending exactly at this node. Owned by `add_pattern`; never touched by `build`.
     outputs: list[tuple[str, dict[str, object]]] = field(default_factory=list)
+    # `outputs` plus everything reachable through the failure link, recomputed from scratch on
+    # every `build`. Keeping the two apart is what makes `build` idempotent: folding the failure
+    # chain into `outputs` in place meant a second `build` re-folded the already-folded lists and
+    # grew them superlinearly (10 -> 20 -> 35 -> 56 entries over four rebuilds).
+    all_outputs: list[tuple[str, dict[str, object]]] = field(default_factory=list)
 
 
 def _is_word_boundary(text: str, pos: int) -> bool:
@@ -45,6 +51,13 @@ class AhoCorasickMatcher:
         self._pattern_count = 0
 
     def add_pattern(self, pattern: str, value: dict[str, object] | None = None) -> None:
+        """Add one pattern. Matching is case-insensitive; the original casing is preserved.
+
+        An empty pattern is ignored — it cannot anchor a span, and it would attach an output to
+        the root node that `search` would report with a negative start offset.
+        """
+        if not pattern:
+            return
         key = pattern.lower()
         node = self._root
         for ch in key:
@@ -58,14 +71,19 @@ class AhoCorasickMatcher:
             self.add_pattern(pattern, value)
 
     def build(self) -> None:
-        """Compute failure links via BFS. Idempotent-safe to call before searching."""
+        """Compute failure links via BFS. Idempotent — rebuilding recomputes, never accumulates."""
         queue: deque[_Node] = deque()
         self._root.fail = self._root
+        self._root.all_outputs = list(self._root.outputs)
         for child in self._root.children.values():
             child.fail = self._root
             queue.append(child)
         while queue:
             current = queue.popleft()
+            # BFS order guarantees `current.fail.all_outputs` is already final here.
+            fail_node = current.fail
+            assert fail_node is not None
+            current.all_outputs = list(current.outputs) + fail_node.all_outputs
             for ch, child in current.children.items():
                 queue.append(child)
                 fail = current.fail
@@ -76,14 +94,21 @@ class AhoCorasickMatcher:
                 child.fail = fail.children.get(ch, self._root)
                 if child.fail is child:
                     child.fail = self._root
-                child.outputs.extend(child.fail.outputs)
         self._built = True
 
     def search(self, text: str, *, case_sensitive: bool = False) -> list[MatchResult]:
+        """Find every pattern occurrence in ``text``, word-boundary validated.
+
+        ``case_sensitive=True`` keeps only hits whose matched slice equals the pattern as it was
+        registered. The automaton itself is always walked case-insensitively: patterns are keyed
+        lowercase by :meth:`add_pattern`, so the previous approach — walking the *original*-cased
+        text — could only ever match already-lowercase input and silently returned nothing for
+        ``search("The Court ruled.", case_sensitive=True)`` against the pattern ``"Court"``.
+        """
         if not self._built:
             self.build()
 
-        search_text = text if case_sensitive else text.lower()
+        search_text = text.lower()
         raw: list[MatchResult] = []
         node = self._root
         for end_idx, ch in enumerate(search_text):
@@ -91,11 +116,13 @@ class AhoCorasickMatcher:
                 assert node.fail is not None
                 node = node.fail
             node = node.children.get(ch, self._root)
-            for pattern, value in node.outputs:
+            for pattern, value in node.all_outputs:
                 start_idx = end_idx - len(pattern) + 1
                 if not _is_word_boundary(search_text, start_idx - 1):
                     continue
                 if not _is_word_boundary(search_text, end_idx + 1):
+                    continue
+                if case_sensitive and text[start_idx : end_idx + 1] != pattern:
                     continue
                 raw.append(
                     MatchResult(pattern=pattern, start=start_idx, end=end_idx + 1, value=value)

@@ -16,8 +16,11 @@ from __future__ import annotations
 
 import hashlib
 import math
+import re
 from collections.abc import Sequence
 from typing import Protocol, runtime_checkable
+
+_TOKEN_RE = re.compile(r"[a-zA-Z]+")
 
 
 @runtime_checkable
@@ -50,19 +53,21 @@ class HashingEmbeddingProvider:
     """
 
     def __init__(self, dim: int = 256) -> None:
+        if dim < 1:
+            raise ValueError(f"dim must be >= 1, got {dim}")
         self._dim = dim
 
     def dimension(self) -> int:
         return self._dim
 
     def embed(self, text: str) -> list[float]:
-        import re
-
         vec = [0.0] * self._dim
-        for tok in re.findall(r"[a-zA-Z]+", text.lower()):
+        for tok in _TOKEN_RE.findall(text.lower()):
             if len(tok) < 2:
                 continue
-            h = int(hashlib.md5(tok.encode()).hexdigest(), 16)
+            # usedforsecurity=False: this is a bucket hash, not a digest. Without it the call
+            # raises on FIPS-mode hosts, which would take out the dependency-free semantic path.
+            h = int(hashlib.md5(tok.encode(), usedforsecurity=False).hexdigest(), 16)
             vec[h % self._dim] += 1.0
         norm = math.sqrt(sum(v * v for v in vec)) or 1.0
         return [v / norm for v in vec]
@@ -85,6 +90,13 @@ class BruteForceIndex:
         return len(self._iris)
 
     def build(self, iris: Sequence[str], labels: Sequence[str], definitions: Sequence[str | None]) -> None:
+        # `iris` was previously unchecked against the other two, so a mismatched build succeeded
+        # and blew up later inside query()/score_candidates() with a bare "zip() argument 2 is
+        # shorter than argument 1" — far from the call that caused it.
+        if not len(iris) == len(labels) == len(definitions):
+            raise ValueError(
+                f"iris/labels/definitions must be parallel: got {len(iris)}/{len(labels)}/{len(definitions)}"
+            )
         texts = [f"{lbl}: {dfn}" if dfn else lbl for lbl, dfn in zip(labels, definitions, strict=True)]
         self._iris = list(iris)
         self._labels = list(labels)

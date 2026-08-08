@@ -6,6 +6,7 @@ reject/restore lifecycle, and feedback insights as library primitives — plus t
 verdict** (``correct`` / ``weak`` / ``wrong`` + note) the Ch02 review demanded.
 """
 
+from .feedback_store import FeedbackStore
 from .lifecycle import (
     bulk_reject,
     cascade_promote,
@@ -31,6 +32,7 @@ __all__ = [
     "ConceptTag",
     "FeedbackEntry",
     "FeedbackItem",
+    "FeedbackStore",
     "InsightsSummary",
     "RenderedSegment",
     "Span",

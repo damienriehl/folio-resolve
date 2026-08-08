@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import pytest
+
 from folio_resolve import (
     WHOLE_STRING_THRESHOLD,
     AliasBlocklist,
@@ -106,3 +108,103 @@ def test_seed_blocklist_fires_on_real_iris() -> None:
 
 def test_seed_blocklist_is_a_real_alias_blocklist() -> None:
     assert isinstance(load_seed_blocklist(), AliasBlocklist)
+
+
+# -- resolution policy details -------------------------------------------
+
+
+def test_a_label_the_catalogue_does_not_know_resolves_to_nothing() -> None:
+    assert LabelResolver(_search).resolve("no such heading anywhere") == []
+
+
+def test_the_surface_records_what_actually_resolved() -> None:
+    """Gates compare `surface` against `label` to tell a real place mention from a mis-map."""
+    resolver = LabelResolver(_search)
+    assert resolver.resolve("Hearing")[0].surface == "Hearing"
+    conjuncts = resolver.resolve("Proposed Findings of Fact and Conclusions of Law")
+    assert {r.surface for r in conjuncts} == {
+        "Proposed Findings of Fact",
+        "Proposed Conclusions of Law",
+    }
+
+
+def test_the_whole_string_is_the_fallback_when_no_conjunct_clears_the_bar() -> None:
+    # "Presumptions" alone is a 90.0 mis-map, but a compound whose conjuncts resolve to nothing
+    # must still get its whole-string chance rather than silently returning [].
+    catalogue = {"Alpha and Beta": [(_Result("R-ab", "Alpha and Beta", "Objectives"), 100.0)]}
+    resolver = LabelResolver(lambda label: list(catalogue.get(label, [])))
+    resolved = resolver.resolve("Alpha and Beta")
+    assert [r.iri for r in resolved] == ["R-ab"]
+    assert resolved[0].surface == "Alpha and Beta"
+
+
+def test_conjuncts_resolving_to_the_same_concept_are_deduplicated() -> None:
+    same = [(_Result("R-same", "Same", "Objectives"), 100.0)]
+    resolver = LabelResolver(lambda label: list(same))
+    assert [r.iri for r in resolver.resolve("Alpha and Beta")] == ["R-same"]
+
+
+def test_the_thresholds_are_per_instance_overridable() -> None:
+    # A consumer with a differently-calibrated backend tunes the bar without forking the policy.
+    assert LabelResolver(_search).resolve("law") == []
+    lenient = LabelResolver(_search, whole_string_threshold=89.0, conjunct_threshold=89.0)
+    assert [r.iri for r in lenient.resolve("law")] == ["R-delaware"]
+    assert [r.iri for r in lenient.resolve("Arbitration and Mediation")] == ["R-arb", "R-med"]
+
+
+def test_a_row_without_an_iri_is_not_a_resolution() -> None:
+    unusable = [(_Result("", "Nameless", "Objectives"), 100.0)]
+    assert LabelResolver(lambda _label: list(unusable)).resolve("anything") == []
+
+
+def test_the_label_falls_back_from_preferred_label_to_label() -> None:
+    @dataclass
+    class _LabelOnly:
+        iri: str
+        label: str
+        branch: str
+
+    rows = [(_LabelOnly("R1", "Hearing", "Event"), 100.0)]
+    assert LabelResolver(lambda _l: list(rows)).resolve("Hearing")[0].label == "Hearing"
+
+
+def test_a_search_backend_that_raises_degrades_to_no_resolution() -> None:
+    def _boom(_label: str) -> list[tuple[object, float]]:
+        raise RuntimeError("catalogue unavailable")
+
+    assert LabelResolver(_boom).resolve("Hearing") == []
+    assert LabelResolver(_boom).resolve("Arbitration and Mediation") == []
+
+
+@pytest.mark.parametrize(
+    "row",
+    [
+        ("not-a-pair-just-a-string"),
+        (object(),),
+        (_Result("R1", "X", "Y"), "high"),
+        (_Result("R1", "X", "Y"), None),
+        (_Result("R1", "X", "Y"),),
+    ],
+)
+def test_a_malformed_search_row_degrades_instead_of_raising(row: object) -> None:
+    """Regression: the unpack and float() sat OUTSIDE the guard.
+
+    `search_by_label` is a duck-typed consumer callable, so its top row is untrusted input —
+    but a non-numeric score or a row that is not a (concept, score) pair raised straight
+    through a resolver that documents itself as returning [] when nothing clears the bar.
+    Same defensive contract as parse_judge_json and compute_relevance_score.
+    """
+    assert LabelResolver(lambda _label: [row]).resolve("Hearing") == []  # type: ignore[list-item]
+
+
+def test_a_numeric_string_score_is_still_accepted() -> None:
+    # float("96.97") is a real number; only genuinely unusable rows are dropped.
+    rows = [(_Result("R1", "Hearing", "Event"), "96.97")]
+    assert [r.iri for r in LabelResolver(lambda _l: list(rows)).resolve("Hearing")] == ["R1"]  # type: ignore[list-item]
+
+
+def test_resolved_concepts_are_frozen_value_objects() -> None:
+    resolved = LabelResolver(_search).resolve("Hearing")[0]
+    assert hash(resolved)
+    with pytest.raises(AttributeError):
+        resolved.score = 0.0  # type: ignore[misc]

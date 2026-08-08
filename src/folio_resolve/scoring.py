@@ -154,7 +154,7 @@ def word_overlap(
     if not query_words or not target_words:
         return 0.0
 
-    def _directional_overlap(source: set[str], dest: set[str]) -> float:
+    def _directional_overlap(source: list[str], dest: set[str]) -> float:
         matched = 0.0
         for sw in source:
             best = 0.0
@@ -183,11 +183,17 @@ def word_overlap(
             matched += best
         return matched / len(source)
 
-    forward = _directional_overlap(query_words, target_words)
+    # `matched += best` accumulates floats in `source` iteration order, and float addition is
+    # not associative — so iterating the *set* made the returned overlap depend on
+    # PYTHONHASHSEED. word_overlap("rules of arbitration" vs "Northern Mariana Islands") with
+    # an injected `word_similarity` returned 0.21750000000000003 under seed 0 and
+    # 0.21749999999999997 under seed 1. Only `source` needs a total order: the inner `dest`
+    # loop resolves to a max (or an early exact-match break), which is order-independent.
+    forward = _directional_overlap(sorted(query_words), target_words)
 
     reverse = 0.0
     if len(target_words) >= 2:
-        reverse = _directional_overlap(target_words, query_words) * 0.75
+        reverse = _directional_overlap(sorted(target_words), query_words) * 0.75
 
     return max(forward, reverse)
 
@@ -318,11 +324,15 @@ def generate_search_terms(term: str) -> list[str]:
                 if content_words(sub):
                     terms.append(sub)
 
-    for w in sorted(content, key=len, reverse=True):
+    # `content` is a set, so both loops need a total order or the emitted term order varies
+    # between processes: "Commercial Litigation" yielded [..., "commercial", "litigation", ...]
+    # or [..., "litigation", "commercial", ...] depending on PYTHONHASHSEED, because the two
+    # words are the same length. Longest-first (the intended ranking), then alphabetical.
+    for w in sorted(content, key=lambda word: (-len(word), word)):
         if len(w) >= 3:
             terms.append(w)
 
-    for w in content:
+    for w in sorted(content):
         for suffix in LEGAL_TERM_EXPANSIONS.get(w, []):
             terms.append(f"{w} {suffix}")
 

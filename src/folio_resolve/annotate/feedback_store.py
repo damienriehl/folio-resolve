@@ -8,11 +8,17 @@ dependency) — the atomic-rename guarantee is preserved.
 from __future__ import annotations
 
 import os
+import re
 import tempfile
 from collections import Counter
 from pathlib import Path
 
 from .models import FeedbackEntry, InsightsSummary
+
+# A feedback id becomes a filename. Ids default to a uuid4, but `FeedbackEntry.id` is settable
+# and, in the FastAPI consumers this store was lifted from, reachable from a request path — so
+# an id like "../../secrets" would have written and read outside the store's directory.
+_SAFE_ID_RE = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9._-]*\Z")
 
 
 class FeedbackStore:
@@ -21,6 +27,11 @@ class FeedbackStore:
         self._base.mkdir(parents=True, exist_ok=True)
 
     def _path(self, feedback_id: str) -> Path:
+        if not isinstance(feedback_id, str) or not _SAFE_ID_RE.match(feedback_id) or ".." in feedback_id:
+            raise ValueError(
+                f"unsafe feedback id {feedback_id!r}: expected [A-Za-z0-9._-] starting "
+                "alphanumeric (a uuid4 by default)"
+            )
         return self._base / f"{feedback_id}.json"
 
     def save(self, entry: FeedbackEntry) -> None:
@@ -41,8 +52,14 @@ class FeedbackStore:
         return FeedbackEntry.model_validate_json(path.read_text(encoding="utf-8"))
 
     def list_all(self) -> list[FeedbackEntry]:
+        """Every stored entry, in a stable (filename) order.
+
+        ``Path.glob`` yields directory order, which is filesystem-dependent — that made
+        ``find_by_annotation`` and the ``most_common`` / ``recent_feedback`` tie-breaks in
+        :meth:`get_insights` differ between machines for identical stored data.
+        """
         out: list[FeedbackEntry] = []
-        for p in self._base.glob("*.json"):
+        for p in sorted(self._base.glob("*.json")):
             out.append(FeedbackEntry.model_validate_json(p.read_text(encoding="utf-8")))
         return out
 

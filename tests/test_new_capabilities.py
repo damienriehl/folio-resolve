@@ -272,3 +272,76 @@ def test_calibration_monotone_and_bands() -> None:
 def test_calibration_empty_falls_back_to_linear() -> None:
     cal = ScoreCalibration()
     assert cal.probability(50) == 0.5
+
+
+def test_a_place_token_is_governed_even_with_no_branch_metadata() -> None:
+    # Embedding and label-search backends often return no branch at all; the curated token
+    # set is the only signal left, and it has to be enough on its own.
+    gate = PlaceNameGate(min_signals=2)
+    d = gate.evaluate(query="Presumptions", label="Slovenia", branch="", score=90.0)
+    assert d.demoted
+    assert d.score <= 40.0
+
+
+def test_a_multi_word_place_label_is_governed_by_its_tokens() -> None:
+    gate = PlaceNameGate(min_signals=2)
+    assert gate.evaluate(query="Presumptions", label="Puerto Rico", branch="", score=90.0).demoted
+
+
+def test_extra_branch_markers_need_a_non_blank_branch() -> None:
+    # An empty branch must not match a marker by accident; the token/marker rules cover that case.
+    gate = PlaceNameGate(min_signals=2, extra_branch_markers=("municipality",))
+    assert not gate.evaluate(query="retaliation", label="Exampleton", branch="", score=90.0).demoted
+    assert not gate.evaluate(query="retaliation", label="Exampleton", branch="   ", score=90.0).demoted
+
+
+def test_corroborating_signals_alone_can_clear_the_place_gate() -> None:
+    gate = PlaceNameGate(min_signals=3)
+    assert gate.evaluate(
+        query="Slovenian contract law", label="Slovenia", branch="Location", score=88.0,
+        corroborating_signals=3,
+    ).reason == "corroborated-place"
+
+
+def test_the_demoted_score_is_a_ceiling_not_a_replacement() -> None:
+    # A candidate already below the floor must not be *raised* by being demoted.
+    gate = PlaceNameGate(min_signals=2, demoted_score=40.0)
+    assert gate.evaluate(query="x", label="Slovenia", branch="Location", score=12.0).score == 12.0
+
+
+def test_the_short_label_gate_governs_single_content_word_labels() -> None:
+    # "Auction" is 7 characters but one content word — exactly the homonym shape.
+    gate = ShortLabelGate()
+    assert gate.evaluate(query="cause of action", label="Auction", score=88.0).demoted
+    # Two content words is enough specificity to pass ungated.
+    d = gate.evaluate(query="cause of action", label="Cause of Action", score=88.0)
+    assert not d.demoted and d.reason == "not-short"
+
+
+def test_the_short_label_gate_lets_an_exact_string_match_through_at_any_score() -> None:
+    gate = ShortLabelGate(near_exact_threshold=95.0)
+    d = gate.evaluate(query="  TAX  ", label="Tax", score=60.0)
+    assert not d.demoted and d.reason == "near-exact-short-label"
+
+
+def test_the_short_label_gate_thresholds_are_configurable() -> None:
+    lenient = ShortLabelGate(near_exact_threshold=80.0)
+    assert not lenient.evaluate(query="law of the sea", label="law", score=88.0).demoted
+    assert ShortLabelGate().evaluate(query="law of the sea", label="law", score=88.0).demoted
+
+
+def test_calibration_bands_redraw_the_weak_band_from_verdicts() -> None:
+    # Finding 004 end to end: raw 60 reads "weak" on the raw scale but the recorded verdicts
+    # say scores that low are wrong.
+    cal = ScoreCalibration.fit(
+        [
+            CalibrationSample(60, "wrong"),
+            CalibrationSample(65, "wrong"),
+            CalibrationSample(90, "correct"),
+            CalibrationSample(95, "correct"),
+        ]
+    )
+    assert cal.band(60) == "wrong"
+    assert cal.band(90) == "strong"
+    low, high = cal.weak_band_bounds()
+    assert low <= high <= 90.0

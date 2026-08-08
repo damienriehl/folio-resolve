@@ -29,11 +29,11 @@ label token (Presumptions → Litigation Burdens of Proof). Those became this li
 
 | Capability | Module | Solves |
 |---|---|---|
-| Word-order-invariant relevance scoring | `scoring` | "arbitration rules" = "rules of arbitration" |
-| Multi-strategy label search + legal expansions | `scoring`, `pipeline` | recall on paraphrases |
+| Word-order-invariant relevance scoring | `scoring` | "arbitration rules" and "rules of arbitration" both reach *Arbitration Rules* |
+| Multi-strategy search-term generation + legal expansions | `scoring` | recall on paraphrases (a helper the consumer drives — see the note below) |
 | Pure-Python Aho-Corasick entity ruler | `entity_ruler`, `matching` | trusted exact-label spans, no spaCy/C deps |
 | Candidate reconciliation (ruler + LLM + semantic) | `reconciler` | one clean candidate set with provenance |
-| **Span decomposition** (conjunction split + shared head) | `decompose` | "Findings of Fact **and** Conclusions of Law" → both siblings |
+| **Span decomposition** (conjunction split + shared head/tail) | `decompose` | "**Proposed** Findings of Fact **and** Conclusions of Law" → both siblings |
 | **Place-name / short-label gates** | `gates` | kills Slovenia→99 and Presumptions→Northern Mariana Islands@90 |
 | **Alias/homonym blocklist** | `blocklist` | deterministic Action ≠ Auction guard |
 | **Metadata/front-matter exclusion** | `sources` | never tag the copyright page |
@@ -44,6 +44,42 @@ label token (Presumptions → Litigation Burdens of Proof). Those became this li
 | LLM judge interface + domain-prior prompts | `judge` | context-aware disambiguation, verdict enforcement |
 | **Annotate primitives** (confidence, per-tag verdicts, notes, reject/restore, insights) | `annotate` | the self-improving feedback loop, as a library |
 | 4-stage pipeline: filter → expand → rank → judge | `pipeline` | the build-once-use-many entry point |
+
+### Reading that table precisely
+
+Three rows mean slightly less than a quick read suggests. Consumers pin this library, so the
+exact shape matters more than the headline:
+
+- **"Word-order invariant" is a property of the *overlap*, not of the final number.**
+  `content_words` reduces both phrasings to the same set, so both reach the concept — but the
+  scorer also has exact-string and substring fast paths that word order does reach.
+  `"arbitration rules"` scores **99.0** against *Arbitration Rules* (exact string), while
+  `"rules of arbitration"` scores **88.0** (pure overlap). Same concept, same rank in practice;
+  not the same score. Consumers that threshold on an absolute value should know which path fired.
+- **`generate_search_terms` is a helper you call, not a pipeline stage.** It produces the
+  sub-phrases, content words, and `LEGAL_TERM_EXPANSIONS` suffixes ("litigation" → "litigation
+  practice", "litigation service"), and it is exported for exactly that use — but
+  `MatchPipeline` does **not** call it. The pipeline's `filter` stage runs one
+  `search_by_label(surface_term)`; its `expand` stage runs `decompose` plus the optional semantic
+  index. Drive the multi-strategy search yourself if you want that recall:
+  `[pipe.match(t) for t in generate_search_terms(heading)]`.
+- **The shared-*tail* rule is a heuristic, and it over-fires on prepositional tails.** It is
+  right when the tail is a genuine elided head noun — `"Antitrust and Securities Law"` →
+  `["Antitrust Law", "Securities Law"]` — and wrong when the tail word is the object of a
+  preposition: `"Findings of Fact and Conclusions of Law"` emits `"Findings of Fact Law"`
+  alongside the correct `"Conclusions of Law"`. That extra string is noise the scorer filters
+  (nothing matches it), not a wrong tag, and a leading shared head suppresses the tail rule
+  entirely — which is why the **Proposed** variant in the table decomposes cleanly.
+
+### Determinism is a guarantee, not a coincidence
+
+Identical input produces byte-identical output in any process, and several consumers commit
+golden/snapshot baselines that depend on it. That is enforced, not assumed: `tests/test_determinism.py`
+re-runs the public entry points in subprocesses under different `PYTHONHASHSEED` values and
+compares them byte-for-byte. In-process assertions cannot catch this class — within one process a
+set's iteration order is fixed, so the bug is invisible. Anything that reaches a caller-visible
+result is therefore totally ordered: ties break on a stable field (IRI, label, filename), never on
+a hash.
 
 ## Personas
 
