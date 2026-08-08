@@ -6,6 +6,7 @@ import contextlib
 import io
 import json
 import os
+import time
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
@@ -47,7 +48,9 @@ def _metrics(value: object, name: str) -> dict[str, float]:
     }
 
 
-def aggregate_payload(record: Mapping[str, object]) -> dict[str, object]:
+def aggregate_payload(
+    record: Mapping[str, object], *, elapsed_seconds: float | None = None
+) -> dict[str, object]:
     """Project an experiment record to the only schema allowed to leave this process."""
     before = _mapping(record.get("scores_before"), "scores_before")
     after = _mapping(record.get("scores_after"), "scores_after")
@@ -65,7 +68,7 @@ def aggregate_payload(record: Mapping[str, object]) -> dict[str, object]:
     changed = dict(_mapping(tripwire.get("breakdown"), "tripwire.breakdown"))
     ci = dict(_mapping(tripwire.get("ci"), "tripwire.ci"))
 
-    return {
+    payload: dict[str, object] = {
         "status": "measured",
         "attempt_id": record.get("attempt_id"),
         "commit_sha": record.get("commit_sha"),
@@ -92,6 +95,9 @@ def aggregate_payload(record: Mapping[str, object]) -> dict[str, object]:
         "decision": record.get("decision"),
         "reason": record.get("reason"),
     }
+    if elapsed_seconds is not None:
+        payload["elapsed_seconds"] = round(elapsed_seconds, 3)
+    return payload
 
 
 def _captured_experiment(argv: Sequence[str]) -> None:
@@ -124,6 +130,7 @@ def run_private_recall(*, gold: Path = DEFAULT_PRIVATE_GOLD) -> dict[str, object
     if DEFAULT_PENDING_PATH.exists():
         raise PrivateRecallError("an experiment is already pending")
 
+    started = time.perf_counter()
     gold_set = load_gold(gold)
     split_manifest = _matching_split_manifest(gold_set)
     common = ["--gold", str(gold), "--split-manifest", str(split_manifest)]
@@ -159,7 +166,7 @@ def run_private_recall(*, gold: Path = DEFAULT_PRIVATE_GOLD) -> dict[str, object
     attempts = [record for record in records if record.get("record_type") == RECORD_ATTEMPT]
     if not attempts:
         raise PrivateRecallError("experiment record missing")
-    payload = aggregate_payload(attempts[-1])
+    payload = aggregate_payload(attempts[-1], elapsed_seconds=time.perf_counter() - started)
     rendered = json.dumps(payload, ensure_ascii=False, sort_keys=True)
     assert_no_surfaces(rendered, surface_strings(gold_set), what="private recall aggregate output")
     return payload

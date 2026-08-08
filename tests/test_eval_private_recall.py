@@ -39,10 +39,11 @@ def test_aggregate_payload_excludes_row_level_fields() -> None:
         "reason": "automatic decision: AE4 flagged cross-firm risk",
     }
 
-    payload = aggregate_payload(record)
+    payload = aggregate_payload(record, elapsed_seconds=123.4567)
     rendered = json.dumps(payload, sort_keys=True)
 
     assert payload["decision"] == "park"
+    assert payload["elapsed_seconds"] == 123.457
     assert payload["tune"]["delta_f1"] == 0.02
     assert payload["firm2"]["changed"] == {
         "items": 1,
