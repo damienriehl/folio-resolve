@@ -212,7 +212,7 @@ class _FakeFolio:
         self._by_iri = {c.iri: c for c in classes}
         self.searched: list[str] = []
 
-    def search_by_label(self, query: str) -> list[Any]:
+    def search_by_label(self, query: str, **kwargs: Any) -> list[Any]:
         self.searched.append(query)
         return [(owl, 90.0) for owl in self.classes]
 
@@ -240,6 +240,22 @@ def fake_folio() -> _FakeFolio:
     )
 
 
+class _FolioSpy:
+    def __init__(self, result_count: int, *, over_return_by: int = 0) -> None:
+        self.result_count = result_count
+        self.over_return_by = over_return_by
+        self.calls: list[tuple[str, dict[str, Any]]] = []
+
+    def search_by_label(self, label: str, **kwargs: Any) -> list[tuple[_Owl, float]]:
+        self.calls.append((label, kwargs))
+        requested_limit = int(kwargs.get("limit", 10))
+        count = min(self.result_count, requested_limit + self.over_return_by)
+        return [
+            (_Owl(iri=f"iri:{index}", label=f"Concept {index}"), 100.0)
+            for index in range(count)
+        ]
+
+
 def test_provider_all_labels_skips_foreign_iris(fake_folio: _FakeFolio) -> None:
     labels = FolioPythonProvider(fake_folio).all_labels()
     assert set(labels) == {"arbitration rules", "rules of arbitration"}
@@ -262,11 +278,35 @@ def test_provider_search_by_label_normalizes_and_limits(fake_folio: _FakeFolio) 
     assert fake_folio.searched == ["arbitration"]
 
 
+def test_folio_provider_forwards_requested_limit() -> None:
+    folio = _FolioSpy(50)
+
+    FolioPythonProvider(folio).search_by_label("contract", limit=27)
+
+    assert folio.calls == [("contract", {"limit": 27})]
+
+
+def test_folio_provider_can_return_more_than_upstream_default() -> None:
+    folio = _FolioSpy(25)
+
+    results = FolioPythonProvider(folio).search_by_label("contract", limit=20)
+
+    assert len(results) == 20
+
+
+def test_folio_provider_truncates_upstream_over_return() -> None:
+    folio = _FolioSpy(25, over_return_by=5)
+
+    results = FolioPythonProvider(folio).search_by_label("contract", limit=12)
+
+    assert len(results) == 12
+
+
 def test_provider_search_by_label_accepts_bare_rows() -> None:
     """folio-python's search returns bare objects on some paths, (obj, score) on others."""
 
     class _BareSearch(_FakeFolio):
-        def search_by_label(self, query: str) -> list[Any]:
+        def search_by_label(self, query: str, **kwargs: Any) -> list[Any]:
             return list(self.classes)
 
     out = FolioPythonProvider(_BareSearch([_Owl(iri="R1", label="X")])).search_by_label("x")
