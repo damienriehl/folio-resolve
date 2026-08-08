@@ -100,6 +100,7 @@ RECORD_ATTEMPT = "attempt"
 RECORD_BOUNDARY = "boundary"
 
 DECISIONS = ("keep", "revert", "park")
+AUTO_DECISION = "auto"
 
 
 class ExperimentError(RuntimeError):
@@ -739,13 +740,14 @@ def finish_attempt(
 ) -> ExperimentRecord:
     """Close the pending attempt: re-score, evaluate AE4, append the record, clear the pending state.
 
-    ``decision`` must be one of :data:`DECISIONS` (``keep``, ``revert``, ``park``) -- reverted and
-    parked attempts append exactly like kept ones and count toward the check-in tally (KTD8). When
-    ``cluster_rows``/``gold_rows`` are supplied, the incremental triage hook runs too and its new-
-    suspect count rides along on the record under ``triage``.
+    ``decision`` may be one of :data:`DECISIONS` or ``auto``. Automatic decisions keep only a
+    positive tune-F1 delta with a clear AE4 tripwire, revert a negative tune delta, and park every
+    flat or cross-firm-flagged result for human judgment. The persisted record always contains one
+    of the three KTD8 decisions. When ``cluster_rows``/``gold_rows`` are supplied, the incremental
+    triage hook runs too and its new-suspect count rides along on the record under ``triage``.
     """
-    if decision not in DECISIONS:
-        raise ValueError(f"decision must be one of {DECISIONS}: {decision!r}")
+    if decision not in (*DECISIONS, AUTO_DECISION):
+        raise ValueError(f"decision must be one of {(*DECISIONS, AUTO_DECISION)}: {decision!r}")
     if not pending_path.exists():
         raise PendingAttemptError(
             f"no attempt in progress at {pending_path} — call start_attempt first"
@@ -766,6 +768,34 @@ def finish_attempt(
     tripwire = evaluate_ae4_tripwire(
         pending.firm2_before_items, firm2_after_items, n_resamples=ci_resamples, seed=ci_seed
     )
+
+    if decision == AUTO_DECISION:
+        before_tune = pending.scores_before.get("tune")
+        after_tune = scores_after.get("tune")
+        if not isinstance(before_tune, Mapping) or not isinstance(after_tune, Mapping):
+            raise ExperimentError("automatic decision requires tune aggregate scores")
+        before_f1_raw = before_tune.get("f1")
+        after_f1_raw = after_tune.get("f1")
+        if not isinstance(before_f1_raw, int | float) or not isinstance(
+            after_f1_raw, int | float
+        ):
+            raise ExperimentError("automatic decision requires numeric tune F1 scores")
+        before_f1 = float(before_f1_raw)
+        after_f1 = float(after_f1_raw)
+        delta = after_f1 - before_f1
+        if tripwire.flagged:
+            decision = "park"
+            outcome_reason = "AE4 flagged cross-firm risk"
+        elif delta > 0.0:
+            decision = "keep"
+            outcome_reason = "tune F1 improved and AE4 stayed clear"
+        elif delta < 0.0:
+            decision = "revert"
+            outcome_reason = "tune F1 regressed"
+        else:
+            decision = "park"
+            outcome_reason = "tune F1 was unchanged"
+        reason = f"automatic decision: {outcome_reason}; tune_f1_delta={delta:+.6f}"
 
     triage: dict[str, object] = {"new_suspects": 0}
     if cluster_rows is not None and gold_rows is not None:
@@ -846,7 +876,7 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - I/O or
     start_p.add_argument("--determinism-target", default=DEFAULT_SELFTEST_TARGET)
 
     finish_p = sub.add_parser("finish", parents=[common_paths])
-    finish_p.add_argument("--decision", required=True, choices=DECISIONS)
+    finish_p.add_argument("--decision", required=True, choices=(*DECISIONS, AUTO_DECISION))
     finish_p.add_argument("--reason", required=True)
     finish_p.add_argument("--commit-sha", default=None)
 

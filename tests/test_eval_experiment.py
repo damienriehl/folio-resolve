@@ -33,7 +33,9 @@ from folio_eval.experiment import (
 GOLD_SURFACES = ("Fund Formation", "Escrow Services", "Carry Waterfall")
 
 
-def outcome(item_id: str, *, tp: int = 1, fp: int = 0, fn: int = 0, exact: bool = True) -> ItemOutcome:
+def outcome(
+    item_id: str, *, tp: int = 1, fp: int = 0, fn: int = 0, exact: bool = True
+) -> ItemOutcome:
     return ItemOutcome(item_id=item_id, tp=tp, fp=fp, fn=fn, exact=exact)
 
 
@@ -95,7 +97,9 @@ def test_pair_outcomes_drops_items_missing_from_either_side() -> None:
 # --------------------------------------------------------------------------------------
 
 
-def test_start_attempt_refuses_a_hypothesis_that_leaks_a_gold_surface_string(tmp_path: Path) -> None:
+def test_start_attempt_refuses_a_hypothesis_that_leaks_a_gold_surface_string(
+    tmp_path: Path,
+) -> None:
     from folio_eval.clusters import SurfaceLeakError
 
     pending_path = tmp_path / "pending.json"
@@ -312,10 +316,89 @@ def test_dry_run_attempt_produces_a_complete_log_record(tmp_path: Path) -> None:
     assert record.gold_version == 1 and record.ontology_hash == "a" * 64
     assert record.tripwire["flagged"] is False
     assert set(record.to_json()) == {
-        "record_type", "attempt_id", "iteration", "gold_version", "ontology_hash", "config_hash",
-        "commit_sha", "hypothesis", "cluster_targeted", "cluster_size", "scores_before",
-        "scores_after", "tripwire", "triage", "decision", "reason", "recorded_at",
+        "record_type",
+        "attempt_id",
+        "iteration",
+        "gold_version",
+        "ontology_hash",
+        "config_hash",
+        "commit_sha",
+        "hypothesis",
+        "cluster_targeted",
+        "cluster_size",
+        "scores_before",
+        "scores_after",
+        "tripwire",
+        "triage",
+        "decision",
+        "reason",
+        "recorded_at",
     }
+
+
+@pytest.mark.parametrize(
+    ("tune_before", "tune_after", "firm2_before", "firm2_after", "expected"),
+    [
+        (
+            [outcome("t", tp=0, fp=1, fn=1, exact=False)],
+            [outcome("t")],
+            [outcome("f")],
+            [outcome("f")],
+            "keep",
+        ),
+        ([outcome("t")], [outcome("t")], [outcome("f")], [outcome("f")], "park"),
+        (
+            [outcome("t")],
+            [outcome("t", tp=0, fp=1, fn=1, exact=False)],
+            [outcome("f")],
+            [outcome("f")],
+            "revert",
+        ),
+        (
+            [outcome("t", exact=False)],
+            [outcome("t")],
+            [outcome("f")],
+            [outcome("f", exact=False)],
+            "park",
+        ),
+    ],
+)
+def test_finish_auto_decision_follows_predeclared_gates(
+    tmp_path: Path,
+    tune_before: list[ItemOutcome],
+    tune_after: list[ItemOutcome],
+    firm2_before: list[ItemOutcome],
+    firm2_after: list[ItemOutcome],
+    expected: str,
+) -> None:
+    log_path = tmp_path / "experiments.jsonl"
+    pending_path = tmp_path / "pending.json"
+    start_attempt(
+        hypothesis="measure deterministic recall",
+        cluster_targeted="candidate_gap_unreachable",
+        cluster_size=337,
+        gold_version=3,
+        ontology_hash="a" * 64,
+        config_hash="c" * 64,
+        surfaces=GOLD_SURFACES,
+        prior_scores=(slice_of("tune", tune_before), slice_of("firm2", firm2_before)),
+        run_selftest=False,
+        experiments_log=log_path,
+        pending_path=pending_path,
+    )
+
+    record = finish_attempt(
+        decision="auto",
+        reason="",
+        surfaces=GOLD_SURFACES,
+        after_scores=(slice_of("tune", tune_after), slice_of("firm2", firm2_after)),
+        commit_sha="cafebabe",
+        experiments_log=log_path,
+        pending_path=pending_path,
+    )
+
+    assert record.decision == expected
+    assert record.reason.startswith("automatic decision:")
 
 
 def test_finish_refuses_an_unknown_decision(tmp_path: Path) -> None:
@@ -393,7 +476,9 @@ def test_start_refuses_a_second_attempt_while_one_is_pending(tmp_path: Path) -> 
         )
 
 
-def test_reverted_attempt_appends_a_revert_record_and_counts_toward_the_tally(tmp_path: Path) -> None:
+def test_reverted_attempt_appends_a_revert_record_and_counts_toward_the_tally(
+    tmp_path: Path,
+) -> None:
     log_path = tmp_path / "experiments.jsonl"
     pending_path = tmp_path / "pending.json"
     start_attempt(
@@ -516,8 +601,11 @@ def test_window_status_math_across_a_boundary(tmp_path: Path) -> None:
 
     # a boundary resets the window's attempt count without touching total_attempts
     boundary = BoundaryRecord(
-        gold_version=2, ontology_hash="a" * 64, after_attempt_count=3,
-        reason="check-in accepted 2 corrections", recorded_at="2026-07-27T02:00:00Z",
+        gold_version=2,
+        ontology_hash="a" * 64,
+        after_attempt_count=3,
+        reason="check-in accepted 2 corrections",
+        recorded_at="2026-07-27T02:00:00Z",
     )
     append_record(log_path, boundary.to_json(), surfaces=GOLD_SURFACES)
     result = compute_status(load_raw_records(log_path))
@@ -561,8 +649,12 @@ def _gold_row(item_id: str, gold_iri: str) -> object:
             "gold_iris": [gold_iri],
             "values": [
                 {
-                    "raw": "leaf", "iri": gold_iri, "origin": "own", "column": "SALI 1",
-                    "branch": "exact_preferred", "parse_branch": "plain",
+                    "raw": "leaf",
+                    "iri": gold_iri,
+                    "origin": "own",
+                    "column": "SALI 1",
+                    "branch": "exact_preferred",
+                    "parse_branch": "plain",
                 }
             ],
             "flags": [],
