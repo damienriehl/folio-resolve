@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import TypeVar
+from unittest.mock import patch
 
 from folio_resolve import (
     Concept,
@@ -240,6 +241,68 @@ def test_search_cache_returns_fresh_lists() -> None:
 
     assert engine._search_by_label("Agreement Remedy", limit=1) == expected
     assert ontology.calls == [("label", "Agreement Remedy", 1)]
+
+
+def test_score_cache_key_contains_every_scoring_input() -> None:
+    engine = MultiStrategyRecall(_ontology())
+    base = Concept(
+        iri="same",
+        label="Label",
+        definition="Definition",
+        alternative_labels=("Alias",),
+        preferred_label="Preferred",
+    )
+    variants = [
+        base,
+        Concept(**{**base.__dict__, "label": "Other label"}),
+        Concept(**{**base.__dict__, "definition": "Other definition"}),
+        Concept(**{**base.__dict__, "alternative_labels": ("Other alias",)}),
+        Concept(**{**base.__dict__, "preferred_label": "Other preferred"}),
+    ]
+
+    with patch("folio_resolve.recall.compute_relevance_score", return_value=1.0) as score:
+        engine._score({"query"}, "query", base)
+        engine._score({"other"}, "query", base)
+        engine._score({"query"}, "other query", base)
+        for concept in variants:
+            engine._score({"query"}, "query", concept)
+
+    assert score.call_count == 7
+
+
+def test_score_cache_is_lru_bounded() -> None:
+    engine = MultiStrategyRecall(_ontology(), score_cache_capacity=2)
+    concept = Concept(iri="concept", label="Label")
+
+    with patch("folio_resolve.recall.compute_relevance_score", return_value=1.0) as score:
+        engine._score({"first"}, "first", concept)
+        engine._score({"second"}, "second", concept)
+        engine._score({"first"}, "first", concept)
+        engine._score({"third"}, "third", concept)
+        engine._score({"second"}, "second", concept)
+
+    assert score.call_count == 4
+
+
+def test_score_cache_can_be_disabled() -> None:
+    engine = MultiStrategyRecall(_ontology(), score_cache_capacity=0)
+    concept = Concept(iri="concept", label="Label")
+
+    with patch("folio_resolve.recall.compute_relevance_score", return_value=1.0) as score:
+        engine._score({"query"}, "query", concept)
+        engine._score({"query"}, "query", concept)
+
+    assert score.call_count == 2
+
+
+def test_score_cache_does_not_affect_engine_equality() -> None:
+    ontology = _ontology()
+    first = MultiStrategyRecall(ontology)
+    second = MultiStrategyRecall(ontology)
+
+    first._score({"query"}, "query", Concept(iri="concept", label="Label"))
+
+    assert first == second
 
 
 def test_pipeline_recall_off_is_exact_existing_output_and_on_is_additive() -> None:

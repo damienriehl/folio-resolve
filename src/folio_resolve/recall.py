@@ -37,6 +37,7 @@ class MultiStrategyRecall:
     ancestor_depth: int = 3
     ancestor_decay: float = 0.85
     search_cache_capacity: int = 256
+    score_cache_capacity: int = 4096
     _label_cache: OrderedDict[tuple[str, int], tuple[tuple[Concept, float], ...]] = field(
         default_factory=OrderedDict, init=False, repr=False, compare=False
     )
@@ -46,6 +47,9 @@ class MultiStrategyRecall:
     _definition_cache: OrderedDict[tuple[str, int], tuple[tuple[Concept, float], ...]] = field(
         default_factory=OrderedDict, init=False, repr=False, compare=False
     )
+    _score_cache: OrderedDict[
+        tuple[frozenset[str], str, str, str | None, tuple[str, ...], str | None], float
+    ] = field(default_factory=OrderedDict, init=False, repr=False, compare=False)
 
     def recall(self, text: str) -> list[RecallResult]:
         query_content = content_words(text) or set(tokenize(text))
@@ -174,9 +178,21 @@ class MultiStrategyRecall:
         if len(cache) > self.search_cache_capacity:
             cache.popitem(last=False)
 
-    @staticmethod
-    def _score(query_content: set[str], query: str, concept: Concept) -> float:
-        return compute_relevance_score(
+    def _score(self, query_content: set[str], query: str, concept: Concept) -> float:
+        key = (
+            frozenset(query_content),
+            query,
+            concept.label,
+            concept.definition,
+            concept.alternative_labels,
+            concept.preferred_label,
+        )
+        cached = self._score_cache.get(key)
+        if cached is not None:
+            self._score_cache.move_to_end(key)
+            return cached
+
+        score = compute_relevance_score(
             query_content,
             query,
             concept.label,
@@ -184,3 +200,9 @@ class MultiStrategyRecall:
             synonyms=list(concept.alternative_labels),
             preferred_label=concept.preferred_label,
         )
+        if self.score_cache_capacity > 0:
+            self._score_cache[key] = score
+            self._score_cache.move_to_end(key)
+            if len(self._score_cache) > self.score_cache_capacity:
+                self._score_cache.popitem(last=False)
+        return score
