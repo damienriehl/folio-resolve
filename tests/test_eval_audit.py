@@ -1075,6 +1075,9 @@ def test_v2_sheet_renders_an_actionable_mapping_workspace(v2_gold: tuple[Any, li
     assert 'id="status-filter"' in html
     assert 'id="previous-row"' in html and 'id="next-row"' in html
     assert 'id="download"' in html
+    assert '<option value="undecided">Undecided</option>' in html
+    assert html.index('<option value="undecided">') < html.index('<option value="needs-eye">')
+    assert 'class="secondary mark-reviewed"' in html
     assert "localStorage" in html
     assert "drawMappingLines" in html
     assert "scheduleMappingLines" in html
@@ -1114,6 +1117,15 @@ def test_v2_sheet_draft_key_tracks_the_decision_shaping_packet(
     original_key = render_sheet_v2(packet).split('data-packet-key="', 1)[1].split('"', 1)[0]
     changed_key = render_sheet_v2(changed_packet).split('data-packet-key="', 1)[1].split('"', 1)[0]
     assert original_key != changed_key
+
+
+def test_v2_sheet_warns_when_suspect_rows_overflow(v2_gold: tuple[Any, list[Any]]) -> None:
+    build, rows = v2_gold
+    packet = replace(v2_packet(build, rows), overflow={"candidate tail": 7})
+    html = render_sheet_v2(packet)
+
+    assert "More suspect rows remain." in html
+    assert "candidate tail: 7" in html
 
 
 def test_v2_prefilled_ruling_is_carried_forward(v2_gold: tuple[Any, list[Any]]) -> None:

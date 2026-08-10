@@ -606,6 +606,7 @@ body.eval-workspace { padding: 0; overflow: hidden; font-family: Inter, ui-sans-
 .mapping-pane .taglist .concept:hover, .mapping-pane .taglist .concept.concept-selected {
   border-color: #60a5fa; background: #eff6ff; color: #1e3a8a; }
 .mapping-pane .row-note { margin-top: .8rem; }
+.mark-reviewed { width: 100%; margin: .2rem 0 .8rem; }
 .concept-inspector { position: absolute; z-index: 3; right: .8rem; top: 3.85rem; width: calc(62% - 1.6rem);
                      max-height: 9.5rem; overflow: auto; border: 1px solid #93c5fd;
                      border-left: 4px solid #3b82f6; border-radius: 7px; background: var(--card);
@@ -801,10 +802,13 @@ function updateProgress() {
     const isDecided = item.dataset.reviewed === 'true' || item.dataset.decided === 'true';
     item.dataset.currentlyDecided = String(isDecided);
     const state = item.querySelector('.item-state');
+    const row = rowById(item.getAttribute('data-target'));
+    const confirm = row ? row.querySelector('.mark-reviewed') : null;
     if (isDecided) {
       decided += 1;
       if (state) { state.textContent = '\u2713'; }
     }
+    if (confirm) { confirm.textContent = isDecided ? 'Reviewed \u2713' : 'Mark reviewed'; }
   });
   const total = navItems.length;
   document.getElementById('progress-count').textContent = decided + ' / ' + total + ' reviewed';
@@ -953,6 +957,21 @@ document.querySelector('.review-sidebar').addEventListener('click', function (ev
   if (item) { activate(item.getAttribute('data-target')); }
 });
 stage.addEventListener('click', function (event) {
+  const confirm = event.target.closest('.mark-reviewed');
+  if (confirm) {
+    const row = confirm.closest('.row[data-decision-id]');
+    const nav = row ? navById(row.getAttribute('data-decision-id')) : null;
+    if (row && nav && rowComplete(row)) {
+      nav.dataset.reviewed = 'true';
+      const decisions = refresh();
+      persistDraft(decisions);
+      updateProgress();
+      applyFilters();
+    } else {
+      confirm.textContent = 'Answer every decision first';
+    }
+    return;
+  }
   const concept = event.target.closest('li[data-iri], [data-concept-iri]');
   if (!concept || !concept.closest('.mapping-pane')) { return; }
   if (event.target.matches('input, label')) {
@@ -1715,6 +1734,7 @@ def _render_row_v2(row: PacketRow, *, current_version: int = 0) -> str:
         f"<header><h3>{_esc(row.surface_label)}</h3><div>{''.join(header_bits)}</div></header>"
         '<div class="mapping-pane"><p class="pane-heading">Mapped FOLIO concepts · decide each</p>'
         + proposed
+        + '<button class="secondary mark-reviewed" type="button">Mark reviewed</button>'
         + '</div><div class="detail-pane"><p class="pane-heading">Input evidence and context</p>'
         + "".join(detail)
         + "</div>"
@@ -1817,6 +1837,20 @@ def _improvement_banner(packet: Packet) -> str:
     )
 
 
+def _overflow_banner(packet: Packet) -> str:
+    """Make a capped suspect queue impossible to mistake for the complete audit."""
+    if not packet.overflow:
+        return ""
+    spilled = ", ".join(
+        f"{_esc(reason)}: {count}" for reason, count in sorted(packet.overflow.items())
+    )
+    return (
+        '<p class="overflow"><strong>More suspect rows remain.</strong> Beyond the '
+        f'{_esc(packet.meta.get("suspect_cap", 50))}-row cap, held for the next batch — '
+        f"{spilled}.</p>"
+    )
+
+
 def _metrics_table(metrics: Mapping[str, object]) -> str:
     """v1 vs v2 on the numbers that moved: the whole reason gold was re-derived."""
     rows_wanted = (
@@ -1869,6 +1903,7 @@ def render_sheet_v2(packet: Packet) -> str:
     guidance = _pairing_banner(packet) if packet.section("pairing") else ""
     if packet.section("improvement"):
         guidance += _improvement_banner(packet)
+    guidance += _overflow_banner(packet)
     baseline_id = meta.get("current_gold_id") or meta.get("gold_id") or meta.get("parent_gold_id")
     packet_fingerprint = hashlib.sha256(
         json.dumps(
@@ -1910,7 +1945,7 @@ def render_sheet_v2(packet: Packet) -> str:
         '<input id="review-search" type="search" placeholder="Search input labels or paths" '
         'aria-label="Search evaluation items">'
         '<select id="status-filter" aria-label="Filter evaluation items by status">'
-        '<option value="needs-eye">Needs your eye</option><option value="undecided">Undecided</option>'
+        '<option value="undecided">Undecided</option><option value="needs-eye">Needs your eye</option>'
         '<option value="all">All items</option><option value="decided">Reviewed</option></select>'
         '<button class="secondary" id="previous-row" type="button">↑ Previous</button>'
         '<button class="secondary" id="next-row" type="button">↓ Next</button>'
