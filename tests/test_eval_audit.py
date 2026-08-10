@@ -1070,7 +1070,18 @@ def test_v2_sheet_renders_an_actionable_mapping_workspace(v2_gold: tuple[Any, li
     assert 'data-review-workspace="folio-eval-v1"' in html
     assert 'aria-label="Evaluation items"' in html
     assert 'id="mapping-lines"' in html
-    assert 'id="concept-inspector"' in html
+    assert 'class="level-pane"' in html
+    assert "pane-resizer" in html
+    assert 'data-level-id="L1"' in html
+    assert 'data-level-id="L2"' in html
+    assert 'data-level-id="L3"' in html
+    assert "Mapped outputs" in html
+    assert "Add FOLIO concept" in html
+    assert "level_mappings" in html
+    assert "level_notes" in html
+    assert "mapping_options" in html
+    assert "initPaneResizers" in html
+    assert 'class="concept-inspector"' in html
     assert 'id="review-search"' in html
     assert 'id="status-filter"' in html
     assert 'id="previous-row"' in html and 'id="next-row"' in html
@@ -1092,6 +1103,32 @@ def test_v2_sheet_renders_an_actionable_mapping_workspace(v2_gold: tuple[Any, li
     assert "function rowComplete(row)" in html
     assert "saved.version >= 3" in html
     assert html.count("document.addEventListener('change'") == 1
+
+
+def test_v2_sheet_restores_folded_level_assignments_and_notes(
+    v2_gold: tuple[Any, list[Any]],
+) -> None:
+    build, rows = v2_gold
+    packet = v2_packet(build, rows)
+    target = next(row for row in packet.rows if row.gold and row.section != "pairing")
+    iri = str(target.gold[0]["iri"])
+    folded = {
+        "gold_version": 3,
+        "gold_id": "v3-test",
+        "level_mappings": {"L1": [iri]},
+        "level_notes": {"L1": "Keep this level-specific explanation."},
+        "mapping_options": {"unassigned": []},
+    }
+    updated = replace(target, extra={**target.extra, "folded": folded, "baseline": folded})
+    packet = replace(
+        packet,
+        rows=tuple(updated if row.decision_id == target.decision_id else row for row in packet.rows),
+    )
+
+    html = render_sheet_v2(packet)
+
+    assert f'data-iri="{iri}" value="L1" checked' in html
+    assert "Keep this level-specific explanation." in html
 
 
 def test_v2_sheet_draft_key_tracks_the_live_gold_baseline(v2_gold: tuple[Any, list[Any]]) -> None:
