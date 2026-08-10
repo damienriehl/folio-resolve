@@ -1381,6 +1381,63 @@ def test_real_packet_confirming_all_prechecked_heuristic_pairings_is_a_no_op(
     print(f"\n[dry-run] all-heuristic confirm changed_items = {result.counts['changed_items']}")
 
 
+def test_granular_fold_applies_per_level_mappings_and_preserves_unassigned(
+    v2_gold: tuple[Any, list[Any]],
+) -> None:
+    build, rows = v2_gold
+    packet = v2_packet(build, rows)
+    row = packet.section("consistency")[0]
+    retained = str(row.gold[0]["iri"])
+    added = "https://folio.openlegalstandard.org/R-added"
+
+    result = fold_granular_decisions(
+        rows,
+        {
+            row.decision_id: {
+                "level_mappings": {"L1": [retained], "L2": [added]},
+                "mapping_options": {"unassigned": []},
+                "level_notes": {"L2": "This belongs to the second input level."},
+            }
+        },
+        packet=packet,
+        ontology_sha256=ONTOLOGY_SHA,
+        now="2026-08-10T00:00:00Z",
+    )
+
+    output = next(payload for payload in result.rows if payload["item_id"] == row.item_id)
+    assert output["gold_iris"] == sorted([retained, added])
+    assert result.counts["level_mapping_decisions"] == 1
+    assert result.notes[row.decision_id]["level_notes"] == {
+        "L2": "This belongs to the second input level."
+    }
+
+    rejected = fold_granular_decisions(
+        rows,
+        {
+            row.decision_id: {
+                "gold": {retained: "remove"},
+                "level_mappings": {"L1": [retained, added]},
+                "mapping_options": {"unassigned": []},
+            }
+        },
+        packet=packet,
+        ontology_sha256=ONTOLOGY_SHA,
+        now="2026-08-10T00:00:00Z",
+    )
+    rejected_output = next(
+        payload for payload in rejected.rows if payload["item_id"] == row.item_id
+    )
+    assert rejected_output["gold_iris"] == [added]
+
+    with pytest.raises(ValueError, match="invalid canonical FOLIO IRI"):
+        fold_granular_decisions(
+            rows,
+            {row.decision_id: {"level_mappings": {"L1": ["javascript:bad"]}}},
+            packet=packet,
+            ontology_sha256=ONTOLOGY_SHA,
+        )
+
+
 def test_granular_fold_records_per_candidate_rejections(v2_gold: tuple[Any, list[Any]]) -> None:
     """A 'not gold' verdict becomes rejection memory, so the same proposal never resurfaces."""
     build, rows = v2_gold

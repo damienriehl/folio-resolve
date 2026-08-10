@@ -1667,6 +1667,10 @@ def _applied_baseline(row: PacketRow, record: Mapping[str, object]) -> dict[str,
         "note": str(record.get("note", "") or ""),
         "gold_note": str(record.get("gold_note", "") or ""),
         "pipeline_note": str(record.get("pipeline_note", "") or ""),
+        "level_mappings": record.get("level_mappings") or {},
+        "level_notes": record.get("level_notes") or {},
+        "mapping_options": record.get("mapping_options") or {},
+        "added_mappings": record.get("added_mappings") or [],
     }
 
 
@@ -2554,7 +2558,7 @@ class FoldResult:
     records: tuple[DecisionRecord, ...]
     counts: Mapping[str, int]
     gold_text: str
-    notes: Mapping[str, Mapping[str, str]] = field(default_factory=dict)
+    notes: Mapping[str, Mapping[str, object]] = field(default_factory=dict)
 
 
 def _resolution_targets(row: PacketRow) -> tuple[str, ...]:
@@ -2717,9 +2721,9 @@ def fold_decisions(
 DECISION_NOTE_KEYS = ("note", "gold_note", "pipeline_note")
 
 
-def _notes(decision: Mapping[str, object], decision_id: str) -> dict[str, str]:
+def _notes(decision: Mapping[str, object], decision_id: str) -> dict[str, object]:
     """The note fields on one decision. Anything non-string is a malformed decisions file."""
-    out: dict[str, str] = {}
+    out: dict[str, object] = {}
     for key in DECISION_NOTE_KEYS:
         raw = decision.get(key)
         if raw is None:
@@ -2731,7 +2735,49 @@ def _notes(decision: Mapping[str, object], decision_id: str) -> dict[str, str]:
         text = raw.strip()
         if text:
             out[key] = text
+    level_notes = decision.get("level_notes")
+    if level_notes is not None:
+        if not isinstance(level_notes, Mapping):
+            raise ValueError(f"decision {decision_id}: level_notes must be an object")
+        cleaned: dict[str, str] = {}
+        for level, note in level_notes.items():
+            if not isinstance(note, str):
+                raise ValueError(f"decision {decision_id}: level note {level} must be a string")
+            if note.strip():
+                cleaned[str(level)] = note.strip()
+        if cleaned:
+            out["level_notes"] = cleaned
     return out
+
+
+def _level_mapping_result(
+    decision: Mapping[str, object], decision_id: str
+) -> set[str] | None:
+    """Aggregate per-level assignments without discarding mappings left explicitly unassigned."""
+    mappings = decision.get("level_mappings")
+    options = decision.get("mapping_options")
+    if mappings is None and options is None:
+        return None
+    if mappings is not None and not isinstance(mappings, Mapping):
+        raise ValueError(f"decision {decision_id}: level_mappings must be an object")
+    if options is not None and not isinstance(options, Mapping):
+        raise ValueError(f"decision {decision_id}: mapping_options must be an object")
+    result: set[str] = set()
+    def mapping_iri(raw: object) -> str:
+        iri = str(raw)
+        if not re.fullmatch(r"https://folio\.openlegalstandard\.org/[A-Za-z0-9_-]+", iri):
+            raise ValueError(f"decision {decision_id}: invalid canonical FOLIO IRI {iri!r}")
+        return iri
+
+    for iris in (mappings or {}).values():
+        if not isinstance(iris, (list, tuple)):
+            raise ValueError(f"decision {decision_id}: each level mapping must be a list of IRIs")
+        result.update(mapping_iri(iri) for iri in iris)
+    unassigned = (options or {}).get("unassigned", [])
+    if not isinstance(unassigned, (list, tuple)):
+        raise ValueError(f"decision {decision_id}: mapping_options.unassigned must be a list")
+    result.update(mapping_iri(iri) for iri in unassigned)
+    return result
 
 
 def _verdicts(decision: Mapping[str, object], key: str, allowed: frozenset[str]) -> dict[str, str]:
@@ -2851,8 +2897,9 @@ def fold_granular_decisions(
         "pairing_alternative": 0,
         "pairing_gold_edited": 0,
         "notes_recorded": 0,
+        "level_mapping_decisions": 0,
     }
-    notes: dict[str, Mapping[str, str]] = {}
+    notes: dict[str, Mapping[str, object]] = {}
 
     for decision_id in sorted(decisions):
         decision = decisions[decision_id]
@@ -2870,6 +2917,13 @@ def fold_granular_decisions(
         counts["pipeline_elevated"] += sum(1 for v in pipeline_verdicts.values() if v == "elevate")
         counts["pipeline_rejected"] += sum(1 for v in pipeline_verdicts.values() if v == "not_gold")
         elevated = {iri for iri, verdict in pipeline_verdicts.items() if verdict == "elevate"}
+        level_mapping_result = _level_mapping_result(decision, decision_id)
+        if level_mapping_result is not None:
+            counts["level_mapping_decisions"] += 1
+            rejected_mappings = {
+                iri for iri, verdict in gold_verdicts.items() if verdict == "remove"
+            } | {iri for iri, verdict in pipeline_verdicts.items() if verdict == "not_gold"}
+            level_mapping_result.difference_update(rejected_mappings)
         offered = tuple(sorted(str(entry["iri"]) for entry in row.pipeline))
         resulting: tuple[str, ...] = ()
         action = "accept"
@@ -2941,7 +2995,9 @@ def fold_granular_decisions(
         else:
             current = {str(entry["iri"]) for entry in row.gold}
             kept = {iri for iri in current if gold_verdicts.get(iri, "keep") == "keep"}
-            resulting = tuple(sorted(kept | elevated))
+            resulting = tuple(
+                sorted(level_mapping_result if level_mapping_result is not None else kept | elevated)
+            )
             if set(resulting) != current:
                 action = "edit"
                 provenance = (
@@ -3106,6 +3162,9 @@ def write_folded_history(
                     entry[key] = value
                 else:
                     entry.pop(key, None)
+        for key in ("level_notes", "level_mappings", "mapping_options", "added_mappings"):
+            if key in decision:
+                entry[key] = decision[key]
         prior[str(decision_id)] = entry
     path = out_dir / f"folded_v{version}.json"
     _atomic_write_text(
