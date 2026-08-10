@@ -1075,6 +1075,12 @@ def test_v2_sheet_renders_an_actionable_mapping_workspace(v2_gold: tuple[Any, li
     assert 'id="status-filter"' in html
     assert 'id="previous-row"' in html and 'id="next-row"' in html
     assert 'id="download"' in html
+    assert 'id="theme-toggle"' in html
+    assert 'data-theme="light"' in html
+    assert "folio-eval-theme" in html
+    assert "setTheme" in html
+    assert "--tag-bg:" in html
+    assert "background: var(--tag-bg)" in html
     assert '<option value="undecided">Undecided</option>' in html
     assert html.index('<option value="undecided">') < html.index('<option value="needs-eye">')
     assert 'class="secondary mark-reviewed"' in html

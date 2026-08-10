@@ -69,13 +69,18 @@ _STYLE = """
 :root {
   --bg: #fbfaf7; --fg: #16150f; --muted: #5d5a4e; --line: #ddd8c8;
   --card: #ffffff; --accent: #7a4a1e; --good: #1f6b3a; --warn: #8a2f2f;
-  --code: #f2efe6;
+  --code: #f2efe6; --tag-bg: #e9e2d3; --selected-bg: #dbeafe; --selected-fg: #1e3a8a;
+}
+:root[data-theme="dark"] {
+  --bg: #14150f; --fg: #eceadf; --muted: #b5b09f; --line: #45483a;
+  --card: #1c1e16; --accent: #e5ad73; --good: #8dcca2; --warn: #ee9a9a;
+  --code: #292c22; --tag-bg: #34382c; --selected-bg: #1e3a5f; --selected-fg: #dbeafe;
 }
 @media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #14150f; --fg: #eceadf; --muted: #a09c8c; --line: #34362b;
-    --card: #1c1e16; --accent: #d9a066; --good: #7fbf95; --warn: #e08b8b;
-    --code: #23261c;
+  :root:not([data-theme]) {
+    --bg: #14150f; --fg: #eceadf; --muted: #b5b09f; --line: #45483a;
+    --card: #1c1e16; --accent: #e5ad73; --good: #8dcca2; --warn: #ee9a9a;
+    --code: #292c22; --tag-bg: #34382c; --selected-bg: #1e3a5f; --selected-fg: #dbeafe;
   }
 }
 * { box-sizing: border-box; }
@@ -96,8 +101,9 @@ p.lede, p.note { color: var(--muted); margin: .2rem 0 1rem; }
 .row header { display: flex; flex-wrap: wrap; gap: .5rem; align-items: baseline;
               justify-content: space-between; }
 .tag { font: 11px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--muted);
-       border: 1px solid var(--line); border-radius: 999px; padding: .1rem .55rem; }
-.tag.reason { color: var(--accent); border-color: var(--accent); }
+       border: 1px solid var(--line); border-radius: 999px; padding: .12rem .58rem;
+       background: var(--tag-bg); font-weight: 600; }
+.tag.reason { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
 .cols { display: grid; grid-template-columns: 1fr 1fr; gap: .9rem; margin: .6rem 0; }
 @media (max-width: 46rem) { .cols { grid-template-columns: 1fr; } }
 .col h4 { margin: 0 0 .25rem; font-size: .82rem; text-transform: uppercase;
@@ -565,7 +571,7 @@ body.eval-workspace { padding: 0; overflow: hidden; font-family: Inter, ui-sans-
                border-radius: 6px; background: transparent; color: var(--fg); text-align: left;
                line-height: 1.25; cursor: pointer; }
 .review-item:hover { background: var(--code); }
-.review-item.active { border-color: #60a5fa; background: #dbeafe; color: #1e3a8a; }
+.review-item.active { border-color: #60a5fa; background: var(--selected-bg); color: var(--selected-fg); }
 .review-item[data-decided="true"] .item-state { color: var(--good); }
 .review-item[data-needs-eye="true"] .item-state { color: var(--warn); }
 .review-item[hidden] { display: none; }
@@ -600,11 +606,11 @@ body.eval-workspace { padding: 0; overflow: hidden; font-family: Inter, ui-sans-
                               border-bottom-color: var(--line); border-radius: 5px;
                               padding: .5rem; cursor: pointer; }
 .mapping-pane ul.grade > li:hover, .mapping-pane ul.grade > li.concept-selected {
-  border-color: #60a5fa; background: #eff6ff; }
+  border-color: #60a5fa; background: var(--selected-bg); color: var(--selected-fg); }
 .mapping-pane .pairing { grid-template-columns: 1fr; }
 .mapping-pane .taglist .concept { cursor: pointer; }
 .mapping-pane .taglist .concept:hover, .mapping-pane .taglist .concept.concept-selected {
-  border-color: #60a5fa; background: #eff6ff; color: #1e3a8a; }
+  border-color: #60a5fa; background: var(--selected-bg); color: var(--selected-fg); }
 .mapping-pane .row-note { margin-top: .8rem; }
 .mark-reviewed { width: 100%; margin: .2rem 0 .8rem; }
 .concept-inspector { position: absolute; z-index: 3; right: .8rem; top: 3.85rem; width: calc(62% - 1.6rem);
@@ -725,6 +731,21 @@ const draftKey = 'folio-eval-draft:' + workspace.getAttribute('data-packet-key')
 let activeId = null;
 let mappingFrame = 0;
 let draftTimer = 0;
+const themeKey = 'folio-eval-theme';
+
+function setTheme(theme) {
+  const selected = theme === 'dark' ? 'dark' : 'light';
+  document.documentElement.dataset.theme = selected;
+  const toggle = document.getElementById('theme-toggle');
+  if (toggle) { toggle.textContent = selected === 'dark' ? 'Light mode' : 'Dark mode'; }
+  try { localStorage.setItem(themeKey, selected); } catch (error) { /* preference is optional */ }
+  scheduleMappingLines();
+}
+function restoreTheme() {
+  let selected = 'light';
+  try { selected = localStorage.getItem(themeKey) || 'light'; } catch (error) { /* stay light */ }
+  setTheme(selected);
+}
 
 function rowById(id) { return rowsById.get(id); }
 function navById(id) { return navByDecisionId.get(id); }
@@ -986,6 +1007,9 @@ document.getElementById('previous-row').addEventListener('click', function () { 
 document.getElementById('next-row').addEventListener('click', function () { move(1); });
 document.getElementById('download').addEventListener('click', downloadDecisions);
 document.getElementById('copy').addEventListener('click', copyDecisions);
+document.getElementById('theme-toggle').addEventListener('click', function () {
+  setTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark');
+});
 document.addEventListener('change', function (event) {
   const row = event.target.closest('.row[data-decision-id]');
   const nav = row ? navById(row.getAttribute('data-decision-id')) : null;
@@ -1020,6 +1044,7 @@ window.addEventListener('beforeunload', function () { flushDraft(); });
 document.querySelector('.review-sidebar').addEventListener('scroll', scheduleMappingLines, {passive: true});
 stage.addEventListener('scroll', scheduleMappingLines, {passive: true, capture: true});
 
+restoreTheme();
 restoreDraft();
 refresh();
 updateProgress();
@@ -1846,7 +1871,7 @@ def _overflow_banner(packet: Packet) -> str:
     )
     return (
         '<p class="overflow"><strong>More suspect rows remain.</strong> Beyond the '
-        f'{_esc(packet.meta.get("suspect_cap", 50))}-row cap, held for the next batch — '
+        f"{_esc(packet.meta.get('suspect_cap', 50))}-row cap, held for the next batch — "
         f"{spilled}.</p>"
     )
 
@@ -1930,7 +1955,7 @@ def render_sheet_v2(packet: Packet) -> str:
         {key: value for key, value in meta.items() if key != "metrics"}, indent=2, sort_keys=True
     )
     return (
-        '<!doctype html>\n<html lang="en"><head><meta charset="utf-8">'
+        '<!doctype html>\n<html lang="en" data-theme="light"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width, initial-scale=1">'
         "<title>folio-resolve — audit gate (gold v2, per-cell)</title>"
         f'<style>{_STYLE_V2}</style></head><body class="eval-workspace"><main '
@@ -1950,6 +1975,7 @@ def render_sheet_v2(packet: Packet) -> str:
         '<button class="secondary" id="previous-row" type="button">↑ Previous</button>'
         '<button class="secondary" id="next-row" type="button">↓ Next</button>'
         '<span class="spacer"></span><span class="draft-state" id="draft-state">Draft not yet saved</span>'
+        '<button class="secondary" id="theme-toggle" type="button">Dark mode</button>'
         '<button class="secondary" id="download" type="button">Download JSON</button>'
         '<button id="copy" type="button">Copy decisions</button></div>'
         '<details class="actions"><summary>Decision JSON, audit metadata, and section guidance '
