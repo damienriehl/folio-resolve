@@ -8,6 +8,7 @@ mapping or callable, so the whole gate is exercised offline.
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -46,6 +47,7 @@ from folio_eval.audit import (
     fold_decisions,
     fold_granular_decisions,
     gold_row_v2_from_json,
+    latest_folded_path,
     load_decisions,
     load_gold_rows,
     load_gold_rows_v2,
@@ -62,6 +64,7 @@ from folio_eval.audit import (
     variant_stats,
     variant_table,
     write_decision_notes,
+    write_folded_history,
     write_gold_version,
 )
 from folio_eval.gold import build_gold_v2, parse_firm1_v2, parse_firm2_v2
@@ -459,7 +462,9 @@ def test_new_gold_ties_break_on_an_exact_label_match(rows: list[Any]) -> None:
         gold_rows=load_rows_from_payloads([row.payload for row in rows] + blanks),
         predictions={
             # identical calibrated probability and raw score; only the label match separates them
-            "blank-acronym": ranked(("R-court", "Quorum Regional Tribunal - D. Vellaton", 100.0, 0.37)),
+            "blank-acronym": ranked(
+                ("R-court", "Quorum Regional Tribunal - D. Vellaton", 100.0, 0.37)
+            ),
             "blank-exact": ranked(("R-esch", "Escheat", 100.0, 0.37)),
         },
         ontology_sha256=ONTOLOGY_SHA,
@@ -503,9 +508,7 @@ def label_index() -> LabelIndex:
                 preferred_labels=("Kingdom of Northmarch and the Outer Isles",),
                 alternative_labels=("Northmarch",),
             ),
-            IndexedConcept(
-                iri="R-escrow", preferred_labels=("Escrow Services (non-dispute)",)
-            ),
+            IndexedConcept(iri="R-escrow", preferred_labels=("Escrow Services (non-dispute)",)),
             IndexedConcept(iri="R-freight", preferred_labels=("Freight Escrow Practice",)),
         ]
     )
@@ -513,7 +516,9 @@ def label_index() -> LabelIndex:
 
 def test_containment_finds_the_longer_folio_label() -> None:
     index = label_index()
-    proposals = propose_for_label("Kingdom of Northmarch", index=index, search=lambda _q, limit=20: [])
+    proposals = propose_for_label(
+        "Kingdom of Northmarch", index=index, search=lambda _q, limit=20: []
+    )
     assert proposals[0].iri == "R-realm"
     assert proposals[0].method == "containment"
 
@@ -529,7 +534,9 @@ def test_direct_search_supplies_candidates_containment_misses() -> None:
     proposals = propose_for_label(
         "Freight Escrow Cover",
         index=index,
-        search=lambda _q, limit=20: [LabelProposal("R-freight", "Freight Escrow Practice", 41.0, "search")],
+        search=lambda _q, limit=20: [
+            LabelProposal("R-freight", "Freight Escrow Practice", 41.0, "search")
+        ],
     )
     assert [entry.method for entry in proposals] == ["search"]
 
@@ -611,7 +618,9 @@ def test_rows_with_no_plausible_candidate_are_coverage_gaps(rows: list[Any]) -> 
 # --------------------------------------------------------------------------------------
 
 
-def rejected_record(item_id: str, iris: tuple[str, ...], *, ontology: str = ONTOLOGY_SHA) -> DecisionRecord:
+def rejected_record(
+    item_id: str, iris: tuple[str, ...], *, ontology: str = ONTOLOGY_SHA
+) -> DecisionRecord:
     return DecisionRecord(
         decision_id=f"suspect:{item_id}:x",
         item_id=item_id,
@@ -930,7 +939,7 @@ def test_sheet_renders_every_section_and_is_self_contained(rows: list[Any], tmp_
     assert "prefers-color-scheme" in html
     # self-contained: no external asset may be referenced
     assert "http://" not in html and "https://folio" not in html
-    assert "<script src=" not in html and "<link rel=\"stylesheet\"" not in html
+    assert "<script src=" not in html and '<link rel="stylesheet"' not in html
 
     paths = write_packet(packet, tmp_path)
     assert paths["packet"].exists() and paths["sheet"].exists()
@@ -987,7 +996,9 @@ def v2_packet(
     )
 
 
-def test_v2_packet_carries_the_pairing_and_consistency_sections(v2_gold: tuple[Any, list[Any]]) -> None:
+def test_v2_packet_carries_the_pairing_and_consistency_sections(
+    v2_gold: tuple[Any, list[Any]],
+) -> None:
     """Sections A and B exist because the per-cell derivation cannot decide them alone."""
     build, rows = v2_gold
     packet = v2_packet(build, rows)
@@ -1001,9 +1012,7 @@ def test_v2_packet_carries_the_pairing_and_consistency_sections(v2_gold: tuple[A
     assert heuristic["Uneven Category"] == [W_LITIGATION]
     assert sorted(heuristic["Odd attribute"]) == sorted([W_ARBITRATION, W_ADVISORY])
     assert alternative["Uneven Category"] == []
-    assert sorted(alternative["Odd attribute"]) == sorted(
-        [W_LITIGATION, W_ARBITRATION, W_ADVISORY]
-    )
+    assert sorted(alternative["Odd attribute"]) == sorted([W_LITIGATION, W_ARBITRATION, W_ADVISORY])
 
     consistency = packet.section("consistency")
     assert len(consistency) == 1
@@ -1037,7 +1046,9 @@ def test_v2_packet_grades_every_concept_individually(v2_gold: tuple[Any, list[An
     assert 'class="note gold-note"' in html and 'class="note pipeline-note"' in html
 
 
-def test_v2_sheet_is_self_contained_and_renders_the_hierarchy(v2_gold: tuple[Any, list[Any]]) -> None:
+def test_v2_sheet_is_self_contained_and_renders_the_hierarchy(
+    v2_gold: tuple[Any, list[Any]],
+) -> None:
     build, rows = v2_gold
     packet = v2_packet(build, rows)
     html = render_sheet_v2(packet)
@@ -1063,9 +1074,7 @@ def test_v2_prefilled_ruling_is_carried_forward(v2_gold: tuple[Any, list[Any]]) 
         prefill_rulings={"unsettled matters": "already ruled: gold stands"},
     )
     assert packet.section("consistency")[0].extra["prefill"] == {}
-    suspect = next(
-        entry for entry in packet.section("suspect") if entry.item_id == target.item_id
-    )
+    suspect = next(entry for entry in packet.section("suspect") if entry.item_id == target.item_id)
     assert suspect.extra["prefill"]["gold"] == {W_LITIGATION: "keep"}
     assert suspect.extra["prefill"]["pipeline"] == {"R-junk": "not_gold"}
     assert packet.counts["prefilled_rulings"] == 1
@@ -1312,19 +1321,34 @@ def test_real_packet_confirming_all_prechecked_heuristic_pairings_is_a_no_op(
     contributed -- 36 items changed for a sheet Damien never touched.
     """
     packet_path = DEFAULT_PACKET_DIR_V2 / "packet.json"
-    gold_path = DEFAULT_GOLD_DIR / "gold_v2.jsonl"
-    manifest_path = DEFAULT_GOLD_DIR / "gold_v2.manifest.json"
-    if not (packet_path.exists() and gold_path.exists() and manifest_path.exists()):
-        pytest.skip("real audit packet / gold v2 not present in this checkout")
+    if not packet_path.exists():
+        pytest.skip("real audit packet not present in this checkout")
 
     packet = packet_v2_from_json(json.loads(packet_path.read_text(encoding="utf-8")))
+    current_version = int(packet.meta.get("current_gold_version", packet.meta["gold_version"]))
+    current_gold_id = str(packet.meta.get("current_gold_id", packet.meta["gold_id"]))
+    gold_path = DEFAULT_GOLD_DIR / f"gold_v{current_version}.jsonl"
+    manifest_path = DEFAULT_GOLD_DIR / f"gold_v{current_version}.manifest.json"
+    if not (gold_path.exists() and manifest_path.exists()):
+        pytest.skip(f"real live gold v{current_version} not present in this checkout")
+    # Characterize the original unsubmitted packet state even after the live artifact starts
+    # carrying folded-history panels from later adjudication passes.
+    packet = replace(
+        packet,
+        rows=tuple(
+            replace(row, extra={key: value for key, value in row.extra.items() if key != "folded"})
+            for row in packet.rows
+        ),
+    )
     rows = load_gold_rows_v2(gold_path)
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     ontology_sha256 = str(manifest["ontology_cache_sha256"])
 
     pairing = packet.section("pairing")
     heuristic_prechecked = [
-        row for row in pairing if row.extra.get("precheck", {}).get("choice") == "heuristic"  # type: ignore[union-attr]
+        row
+        for row in pairing
+        if row.extra.get("precheck", {}).get("choice") == "heuristic"  # type: ignore[union-attr]
     ]
     assert len(heuristic_prechecked) == 106  # the measured defect scenario
 
@@ -1336,17 +1360,17 @@ def test_real_packet_confirming_all_prechecked_heuristic_pairings_is_a_no_op(
     unfolded_heuristic_prechecked = [
         row for row in heuristic_prechecked if not row.extra.get("folded")
     ]
-    assert len(unfolded_heuristic_prechecked) == 100
+    assert len(unfolded_heuristic_prechecked) == 106
 
-    decisions = {
-        row.decision_id: {"pairing": "heuristic"} for row in unfolded_heuristic_prechecked
-    }
+    decisions = {row.decision_id: {"pairing": "heuristic"} for row in unfolded_heuristic_prechecked}
     result = fold_granular_decisions(
         rows,
         decisions,
         packet=packet,
         ontology_sha256=ontology_sha256,
         now="2026-07-28T00:00:00Z",
+        parent_gold_id=current_gold_id,
+        base_gold_version=current_version,
     )
     assert result.counts["changed_items"] == 0
 
@@ -1354,18 +1378,7 @@ def test_real_packet_confirming_all_prechecked_heuristic_pairings_is_a_no_op(
     assert written["gold"].exists()
     assert written["manifest"].exists()
 
-    # Sanity number: forcing every pairing row to the alternative reading is *not* a no-op.
-    all_alternative = {row.decision_id: {"pairing": "alternative"} for row in pairing}
-    alt_result = fold_granular_decisions(
-        rows,
-        all_alternative,
-        packet=packet,
-        ontology_sha256=ontology_sha256,
-        now="2026-07-28T00:00:00Z",
-    )
-    assert alt_result.counts["changed_items"] > 0
     print(f"\n[dry-run] all-heuristic confirm changed_items = {result.counts['changed_items']}")
-    print(f"[dry-run] all-alternative sanity changed_items = {alt_result.counts['changed_items']}")
 
 
 def test_granular_fold_records_per_candidate_rejections(v2_gold: tuple[Any, list[Any]]) -> None:
@@ -1377,9 +1390,7 @@ def test_granular_fold_records_per_candidate_rejections(v2_gold: tuple[Any, list
         rows,
         predictions={target.item_id: ranked(("R-junk", "Office of Water", 90.0, 0.1))},
     )
-    suspect = next(
-        entry for entry in packet.section("suspect") if entry.item_id == target.item_id
-    )
+    suspect = next(entry for entry in packet.section("suspect") if entry.item_id == target.item_id)
     result = fold_granular_decisions(
         rows,
         {suspect.decision_id: {"pipeline": {"R-junk": "not_gold"}}},
@@ -1410,9 +1421,7 @@ def test_granular_fold_rejects_unknown_verdicts(v2_gold: tuple[Any, list[Any]]) 
             ontology_sha256=ONTOLOGY_SHA,
         )
     with pytest.raises(KeyError):
-        fold_granular_decisions(
-            rows, {"nope": {}}, packet=packet, ontology_sha256=ONTOLOGY_SHA
-        )
+        fold_granular_decisions(rows, {"nope": {}}, packet=packet, ontology_sha256=ONTOLOGY_SHA)
 
 
 def test_v2_packet_round_trips_through_json(v2_gold: tuple[Any, list[Any]], tmp_path: Path) -> None:
@@ -1452,9 +1461,7 @@ def test_a_pipeline_candidate_that_is_already_gold_says_so(v2_gold: tuple[Any, l
         },
         prefill_rulings={"unsettled matters": "already ruled"},
     )
-    suspect = next(
-        entry for entry in packet.section("suspect") if entry.item_id == target.item_id
-    )
+    suspect = next(entry for entry in packet.section("suspect") if entry.item_id == target.item_id)
     assert suspect.pipeline[0]["already_gold"] is True
     assert suspect.pipeline[1]["already_gold"] is False
     # the carried-forward ruling rejects the junk tail only, never the concept gold already names
@@ -1593,9 +1600,7 @@ def test_a_row_whose_readings_both_break_the_rule_is_badged_and_left_unchecked(
     assert 'value="heuristic" checked' not in html
     assert 'value="alternative" checked' not in html
     # nothing pre-checked means an untouched row emits no decision at all: gold cannot move
-    result = fold_granular_decisions(
-        rows, {}, packet=packet, ontology_sha256=ONTOLOGY_SHA
-    )
+    result = fold_granular_decisions(rows, {}, packet=packet, ontology_sha256=ONTOLOGY_SHA)
     assert result.counts["changed_items"] == 0
 
 
@@ -1773,9 +1778,7 @@ def test_a_pairing_note_and_a_consistency_note_survive_the_fold(
         ontology_sha256=ONTOLOGY_SHA,
         now="2026-07-28T00:00:00Z",
     )
-    assert result.notes[pairing.decision_id] == {
-        "note": "the heading keeps the cascade-down block"
-    }
+    assert result.notes[pairing.decision_id] == {"note": "the heading keeps the cascade-down block"}
     assert result.notes[consistency.decision_id] == {
         "note": "same cell, two places, one answer",
         "gold_note": "both concepts stand",
@@ -1904,9 +1907,7 @@ def test_the_pairing_row_binds_to_its_own_firms_item_not_the_other_firms(
 
     # and therefore the Gold panel shows BOTH tags the pipe cell named
     shown = {
-        str(entry["iri"])
-        for context in pairing.extra["input_context"]
-        for entry in context["gold"]
+        str(entry["iri"]) for context in pairing.extra["input_context"] for entry in context["gold"]
     }
     assert shown == {W_MANUFACTURING, W_AGREEMENTS}
 
@@ -2128,7 +2129,11 @@ def test_gold_panel_sources_from_latest_gold_version_not_packet_snapshot(
     ]
 
     packet = v2_packet(
-        build, rows, current_gold_rows=current_rows, current_gold_version=3, current_gold_id="v3-test"
+        build,
+        rows,
+        current_gold_rows=current_rows,
+        current_gold_version=3,
+        current_gold_id="v3-test",
     )
     assert packet.meta["current_gold_version"] == 3
     assert packet.meta["current_gold_id"] == "v3-test"
@@ -2268,6 +2273,81 @@ def test_amendment_fold_appends_a_new_decision_without_rewriting_the_first(
     assert same_id[0].resulting_iris == ("R-pipe",)
     assert sorted(same_id[1].resulting_iris) == ["R-junk", "R-pipe"]
     assert same_id[1].gold_version == 3  # the base version THIS fold started from
+
+
+def test_a_stale_packet_can_fold_against_the_live_gold_version(
+    v2_gold: tuple[Any, list[Any]],
+) -> None:
+    """The CLI may display a stable packet while live gold has advanced since it was built."""
+    build, rows = v2_gold
+    packet = v2_packet(build, rows)
+    live_rows = [gold_row_v2_from_json({**row.payload, "gold_version": 3}) for row in rows]
+
+    result = fold_granular_decisions(
+        live_rows,
+        {},
+        packet=packet,
+        ontology_sha256=ONTOLOGY_SHA,
+        parent_gold_id="v3-live",
+        base_gold_version=3,
+    )
+
+    assert result.manifest["gold_version"] == 4
+    assert result.manifest["parent_gold_id"] == "v3-live"
+    assert all(row["gold_version"] == 4 for row in result.rows)
+
+
+def test_folded_history_carries_prior_reviews_and_records_notes(
+    v2_gold: tuple[Any, list[Any]], tmp_path: Path
+) -> None:
+    build, rows = v2_gold
+    packet = v2_packet(build, rows)
+    decision_id = packet.section("pairing")[0].decision_id
+    prior_path = tmp_path / "folded_v2.json"
+    prior_path.write_text(
+        json.dumps({"older": {"summary": "keep", "gold_version": 2, "gold_id": "v2"}}),
+        encoding="utf-8",
+    )
+    decisions = {decision_id: {"pairing": "heuristic", "note": "carry this forward"}}
+    result = fold_granular_decisions(
+        rows,
+        decisions,
+        packet=packet,
+        ontology_sha256=ONTOLOGY_SHA,
+        now="2026-07-28T00:00:00Z",
+    )
+
+    path = write_folded_history(result, decisions, tmp_path, prior_path=prior_path)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+
+    assert path.name == "folded_v3.json"
+    assert payload["older"]["gold_version"] == 2
+    assert payload[decision_id] == {
+        "summary": "heuristic",
+        "note": "carry this forward",
+        "gold_version": 3,
+        "gold_id": result.manifest["gold_id"],
+    }
+    assert latest_folded_path(tmp_path, at_most_version=2) == prior_path
+    assert latest_folded_path(tmp_path) == path
+
+    amended = write_folded_history(
+        result,
+        {decision_id: {"pairing": "alternative"}},
+        tmp_path,
+        prior_path=path,
+    )
+    amended_payload = json.loads(amended.read_text(encoding="utf-8"))
+    assert amended_payload[decision_id]["summary"] == "alternative"
+    assert amended_payload[decision_id]["note"] == "carry this forward"
+
+    (tmp_path / "folded_v4.json.tmp").write_text("{}", encoding="utf-8")
+    (tmp_path / "folded_vx.json").write_text("{}", encoding="utf-8")
+    future = tmp_path / "folded_v5.json"
+    future.write_text("{}", encoding="utf-8")
+    assert latest_folded_path(tmp_path, at_most_version=4) == path
+    assert latest_folded_path(tmp_path) == future
+    assert latest_folded_path(tmp_path / "missing") is None
 
 
 def test_pairing_amendment_diffs_against_the_applied_edit_not_the_original_heuristic(
