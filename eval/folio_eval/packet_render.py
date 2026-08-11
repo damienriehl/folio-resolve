@@ -675,6 +675,7 @@ function verdicts(row, selector) {
   });
   return out;
 }
+const baselineCache = new WeakMap();
 // A row already folded into gold carries its live state as a data-baseline JSON attribute
 // (gold/pipeline verdicts, the pairing reading, and the three note fields). No input is ever
 // disabled -- every row stays fully answerable -- but a re-submission that leaves the row exactly
@@ -682,9 +683,17 @@ function verdicts(row, selector) {
 // Copy-decisions JSON and a genuine amendment is the only entry that survives (Damien, 2026-07-28:
 // "let me add notes and change items even where you think things are settled").
 function baselineOf(row) {
+  if (baselineCache.has(row)) { return baselineCache.get(row); }
   const raw = row.getAttribute('data-baseline');
-  if (!raw) { return null; }
-  try { return JSON.parse(raw); } catch (e) { return null; }
+  if (!raw) { baselineCache.set(row, null); return null; }
+  try {
+    const baseline = JSON.parse(raw);
+    baselineCache.set(row, baseline);
+    return baseline;
+  } catch (e) {
+    baselineCache.set(row, null);
+    return null;
+  }
 }
 function diffMap(current, base) {
   const out = {};
@@ -871,6 +880,9 @@ function applyDecision(id, decision) {
       if (field && typeof decision[pair[0]] === 'string') { field.value = decision[pair[0]]; }
     });
   if (decision.level_mappings && typeof decision.level_mappings === 'object') {
+    row.querySelectorAll('input[data-level-map], input[data-unassigned]').forEach(function (field) {
+      field.checked = false;
+    });
     Object.keys(decision.level_mappings).forEach(function (level) {
       decision.level_mappings[level].forEach(function (iri) {
         const field = row.querySelector('input[data-level-map][value="' + CSS.escape(level)
@@ -1376,7 +1388,7 @@ def _level_pane(row: PacketRow) -> str:
             f'<span class="level-number">L{index}</span><strong>{_esc(label)}</strong>'
             f'<textarea class="note level-note" rows="2" name="level-note|{_esc(row.decision_id)}|L{index}" '
             f'aria-label="note on L{index} mapping" placeholder="note on this level&rsquo;s mappings (optional)">'
-            f'{_esc(notes.get(f"L{index}", ""))}</textarea>'
+            f"{_esc(notes.get(f'L{index}', ''))}</textarea>"
             "</section>"
         )
     return (
@@ -1386,34 +1398,75 @@ def _level_pane(row: PacketRow) -> str:
     )
 
 
+def _system_level_mappings(row: PacketRow) -> Mapping[str, object]:
+    """Read the packet builder's atomized matcher/workbook baseline."""
+    raw = row.extra.get("system_level_mappings")
+    return raw if isinstance(raw, Mapping) else {}
+
+
+def _explicit_level_mappings(row: PacketRow) -> Mapping[str, object] | None:
+    """Return a human-folded mapping when one exists; even an empty object is authoritative."""
+    if "level_mappings" in row.extra:
+        raw = row.extra.get("level_mappings")
+        return raw if isinstance(raw, Mapping) else {}
+    folded = row.extra.get("folded")
+    if isinstance(folded, Mapping) and "level_mappings" in folded:
+        raw = folded.get("level_mappings")
+        return raw if isinstance(raw, Mapping) else {}
+    return None
+
+
+def _review_baseline(row: PacketRow) -> Mapping[str, object]:
+    """One canonical baseline for rendering controls and diff-only decision export."""
+    raw = row.extra.get("baseline")
+    if isinstance(raw, Mapping):
+        return raw
+    if row.section == "pairing":
+        return {}
+    gold = tuple(row.gold) or tuple(_records(row.extra.get("gold_ref")))
+    pipeline = tuple(row.pipeline)
+    if not pipeline:
+        pipeline_ref = row.extra.get("pipeline_ref")
+        if isinstance(pipeline_ref, Mapping):
+            pipeline = tuple(_records(pipeline_ref.get("candidates")))
+    return {
+        "gold": {str(entry.get("iri", "")): "keep" for entry in gold},
+        "pipeline": {str(entry.get("iri", "")): "not_gold" for entry in pipeline},
+        "level_mappings": _system_level_mappings(row),
+    }
+
+
 def _level_assignment_controls(row: PacketRow, entry: Mapping[str, object]) -> str:
-    """Expose aggregate mappings honestly: attributed when known, otherwise quick choices."""
+    """Expose the system's atomized input-level mapping, with human-editable assignments."""
     levels = _input_levels(row)
     if not levels:
         return ""
     iri = str(entry.get("iri", ""))
     folded = row.extra.get("folded")
     folded_map = folded if isinstance(folded, Mapping) else {}
-    known_raw = row.extra.get("level_mappings") or folded_map.get("level_mappings")
-    known = known_raw if isinstance(known_raw, Mapping) else {}
+    explicit = _explicit_level_mappings(row)
+    known = explicit if explicit is not None else _system_level_mappings(row)
     options_raw = folded_map.get("mapping_options")
     options = options_raw if isinstance(options_raw, Mapping) else {}
     unassigned = iri in _strings(options.get("unassigned"))
     labels = "".join(
         f'<label class="level-choice"><input type="checkbox" data-level-map '
         f'data-iri="{_esc(iri)}" value="L{index}"'
-        f'{" checked" if iri in _strings(known.get(f"L{index}")) else ""}>'
-        f' Option {chr(64 + index)} · L{index}</label>'
-        for index in range(1, len(levels) + 1)
+        f"{' checked' if iri in _strings(known.get(f'L{index}')) else ''}>"
+        f" L{index} · {_esc(level_label)}</label>"
+        for index, level_label in enumerate(levels, start=1)
     )
     has_known = any(iri in _strings(known.get(f"L{index}")) for index in range(1, len(levels) + 1))
-    state = "System-attributed mapping" if has_known else "Aggregate mapping · choose"
+    if explicit is not None:
+        state = "Reviewed level mapping" if has_known or unassigned else "No reviewed mapping"
+    else:
+        state = "System level mapping" if has_known else "No system level mapping · choose"
     return (
         f'<div class="level-choices"><span class="mapping-state">{state}:</span>'
         + labels
         + f'<label class="level-choice"><input type="checkbox" data-unassigned data-iri="{_esc(iri)}"'
         + (" checked" if unassigned else "")
-        + '> Unassigned</label>'
+        + "> Unassigned</label>"
         + '<button class="secondary remove-mapping" type="button">Remove</button></div>'
     )
 
@@ -1902,36 +1955,21 @@ def _row_note(row: PacketRow, *, initial: str = "") -> str:
     )
 
 
-def _proposed_panel(row: PacketRow) -> str:
+def _proposed_panel(row: PacketRow, *, baseline: Mapping[str, object]) -> str:
     prefill_raw = row.extra.get("prefill")
     prefill: Mapping[str, object] = prefill_raw if isinstance(prefill_raw, Mapping) else {}
     folded_raw = row.extra.get("folded")
     folded: Mapping[str, object] = folded_raw if isinstance(folded_raw, Mapping) else {}
-    baseline_raw = row.extra.get("baseline")
-    if not isinstance(baseline_raw, Mapping) and row.section != "pairing":
-        baseline_gold = tuple(row.gold) or tuple(_records(row.extra.get("gold_ref")))
-        baseline_pipeline = tuple(row.pipeline)
-        if not baseline_pipeline:
-            pipeline_ref = row.extra.get("pipeline_ref")
-            if isinstance(pipeline_ref, Mapping):
-                baseline_pipeline = tuple(_records(pipeline_ref.get("candidates")))
-        baseline_raw = {
-            "gold": {str(entry.get("iri", "")): "keep" for entry in baseline_gold},
-            "pipeline": {
-                str(entry.get("iri", "")): "not_gold" for entry in baseline_pipeline
-            },
-        }
-    baseline: Mapping[str, object] = baseline_raw if isinstance(baseline_raw, Mapping) else {}
-    # A row already folded pre-fills from what is actually live in gold (the baseline), which
-    # takes precedence over an older carried-forward ruling — it is newer and it is the truth.
-    gold_prefill = _mapping(baseline.get("gold")) or _mapping(prefill.get("gold"))
-    pipe_prefill = _mapping(baseline.get("pipeline")) or _mapping(prefill.get("pipeline"))
     gold_entries = tuple(row.gold) or tuple(_records(row.extra.get("gold_ref")))
     pipeline_entries = tuple(row.pipeline)
     if not pipeline_entries:
         pipeline_ref = row.extra.get("pipeline_ref")
         if isinstance(pipeline_ref, Mapping):
             pipeline_entries = tuple(_records(pipeline_ref.get("candidates")))
+    # A row already folded pre-fills from what is actually live in gold (the baseline), which
+    # takes precedence over an older carried-forward ruling — it is newer and it is the truth.
+    gold_prefill = _mapping(baseline.get("gold")) or _mapping(prefill.get("gold"))
+    pipe_prefill = _mapping(baseline.get("pipeline")) or _mapping(prefill.get("pipeline"))
     body: list[str] = []
     if row.section == "pairing":
         body.append(_pairing_readings(row))
@@ -2041,7 +2079,8 @@ def _render_row_v2(row: PacketRow, *, current_version: int = 0) -> str:
     # arriving pre-filled (``_proposed_panel`` reads ``row.extra["baseline"]``) and in carrying the
     # ``data-baseline`` JSON below, which the sheet's own JS diffs a re-submission against so an
     # untouched row still folds to nothing.
-    proposed = _proposed_panel(row)
+    baseline_raw = _review_baseline(row)
+    proposed = _proposed_panel(row, baseline=baseline_raw)
     add_concept = (
         '<section class="add-concept"><strong>Add FOLIO concept</strong>'
         '<p class="note">Paste a FOLIO URL/IRI and label, then assign it to one or more levels.</p>'
@@ -2052,11 +2091,8 @@ def _render_row_v2(row: PacketRow, *, current_version: int = 0) -> str:
     )
     detail.append(f'<p class="note mono">{_esc(row.decision_id)}</p>')
 
-    baseline_raw = row.extra.get("baseline")
     baseline_attr = (
-        f' data-baseline="{_esc(json.dumps(baseline_raw, sort_keys=True))}"'
-        if isinstance(baseline_raw, Mapping)
-        else ""
+        f' data-baseline="{_esc(json.dumps(baseline_raw, sort_keys=True))}"' if baseline_raw else ""
     )
     return (
         f'<article class="row lvl {level_class}{" applied" if folded else ""}" '
