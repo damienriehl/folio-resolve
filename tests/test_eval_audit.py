@@ -1148,6 +1148,11 @@ def test_v2_sheet_renders_an_actionable_mapping_workspace(v2_gold: tuple[Any, li
     assert "Option C" not in html
     assert "L1 ·" in html and "L2 ·" in html and "L3 ·" in html
     assert "System level mapping" in html
+    assert "See all levels" in html
+    assert 'data-level-filter="L1"' in html
+    assert 'class="concept-details"' in html
+    assert "Undo remove" in html
+    assert "applyLevelFilter" in html
     assert "Mapped outputs" in html
     assert "Add FOLIO concept" in html
     assert "level_mappings" in html

@@ -599,8 +599,13 @@ body.eval-workspace { padding: 0; overflow: hidden; font-family: Inter, ui-sans-
                                   white-space: nowrap; font-size: .92rem; }
 .level-pane, .mapping-pane, .detail-pane { min-width: 0; min-height: 0; overflow: auto; padding: .8rem; }
 .level-pane { background: var(--bg); border-right: 1px solid var(--line); }
+.level-filter-all { width: 100%; margin: 0 0 .55rem; }
 .level-node { position: relative; margin: 0 0 .65rem; padding: .65rem; border: 1px solid var(--line);
               border-radius: 7px; background: var(--card); }
+.level-filter-button { display: block; width: 100%; padding: 0; border: 0; background: transparent;
+                       color: inherit; text-align: left; cursor: pointer; }
+.level-node:has(.level-filter-button:hover), .level-node:has(.level-filter-button.level-filter-active) {
+  border-color: #60a5fa; background: var(--selected-bg); }
 .level-node strong { display: block; font-size: .82rem; }
 .level-node .level-number { color: var(--muted); font-size: .66rem; font-weight: 700; }
 .level-node textarea { margin-top: .45rem; min-height: 3.25rem; }
@@ -613,7 +618,19 @@ body.eval-workspace { padding: 0; overflow: hidden; font-family: Inter, ui-sans-
 .mapping-pane .block { margin: 0 0 .7rem; background: var(--card); }
 .mapping-pane ul.grade > li { position: relative; border: 1px solid transparent;
                               border-bottom-color: var(--line); border-radius: 5px;
-                              padding: .5rem; cursor: pointer; }
+                              padding: .38rem .45rem; cursor: pointer; }
+.mapping-pane ul.grade > li[hidden] { display: none; }
+.concept-row-head { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .35rem;
+                    align-items: center; }
+.concept-row-head > div:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis;
+                                      white-space: nowrap; }
+.concept-row-head .verdict { margin: 0; white-space: nowrap; }
+.concept-details { margin-top: .18rem; }
+.concept-details > summary { color: var(--muted); font-size: .67rem; cursor: pointer; }
+.concept-details[open] > summary { margin-bottom: .35rem; }
+.concept-details .def { margin: .2rem 0; }
+.mapping-summary { display: inline-flex; gap: .2rem; margin-left: .3rem; }
+.mapping-summary .tag { font-size: .61rem; }
 .mapping-pane ul.grade > li:hover, .mapping-pane ul.grade > li.concept-selected {
   border-color: #60a5fa; background: var(--selected-bg); color: var(--selected-fg); }
 .mapping-pane .pairing { grid-template-columns: 1fr; }
@@ -627,6 +644,7 @@ body.eval-workspace { padding: 0; overflow: hidden; font-family: Inter, ui-sans-
                 font-size: .66rem; cursor: pointer; }
 .mapping-state { color: var(--muted); font-size: .67rem; }
 .mapping-removed { opacity: .55; text-decoration: line-through; }
+.mapping-removed .remove-mapping { font-weight: 700; color: var(--good); border-color: var(--good); }
 .add-concept { margin: .75rem 0; padding: .65rem; border: 1px dashed var(--line); border-radius: 7px; }
 .add-concept-fields { display: grid; grid-template-columns: minmax(8rem, 1fr) minmax(12rem, 2fr) auto;
                       gap: .35rem; margin-top: .4rem; }
@@ -828,10 +846,11 @@ function addConceptRow(row, label, iri) {
   }
   const li = document.createElement('li');
   li.dataset.iri = iri; li.dataset.label = label; li.dataset.kind = 'gold'; li.dataset.added = 'true';
+  const head = document.createElement('div'); head.className = 'concept-row-head';
   const title = document.createElement('div');
   const strong = document.createElement('strong'); strong.textContent = label + ' ';
   const code = document.createElement('code'); code.textContent = iri.split('/').pop();
-  title.append(strong, code); li.appendChild(title);
+  title.append(strong, code); head.appendChild(title);
   const verdict = document.createElement('div'); verdict.className = 'verdict';
   ['keep', 'remove'].forEach(function (value) {
     const choice = document.createElement('label');
@@ -841,22 +860,29 @@ function addConceptRow(row, label, iri) {
     choice.append(radio, ' ' + (value === 'keep' ? 'Keep gold' : 'Remove from gold'));
     verdict.appendChild(choice);
   });
-  li.appendChild(verdict);
+  head.appendChild(verdict); li.appendChild(head);
+  const details = document.createElement('details'); details.className = 'concept-details';
+  const summary = document.createElement('summary'); summary.append('Mapping: ');
+  const summaryText = document.createElement('span'); summaryText.className = 'mapping-summary-text';
+  summaryText.textContent = 'Choose level'; summary.append(summaryText, ' · expand'); details.appendChild(summary);
   const choices = document.createElement('div'); choices.className = 'level-choices';
   const state = document.createElement('span'); state.className = 'mapping-state';
   state.textContent = 'New mapping · choose:'; choices.appendChild(state);
-  row.querySelectorAll('.level-node').forEach(function (node, index) {
+  row.querySelectorAll('.level-node').forEach(function (node) {
     const choice = document.createElement('label'); choice.className = 'level-choice';
     const checkbox = document.createElement('input'); checkbox.type = 'checkbox';
     checkbox.dataset.levelMap = ''; checkbox.dataset.iri = iri; checkbox.value = node.dataset.levelId;
-    choice.append(checkbox, ' Option ' + String.fromCharCode(65 + index) + ' · ' + node.dataset.levelId);
+    const levelLabel = node.querySelector('strong')?.textContent || '';
+    choice.append(checkbox, ' ' + node.dataset.levelId + ' · ' + levelLabel);
     choices.appendChild(choice);
   });
   const unassignedChoice = document.createElement('label'); unassignedChoice.className = 'level-choice';
   const unassigned = document.createElement('input'); unassigned.type = 'checkbox';
   unassigned.dataset.unassigned = ''; unassigned.dataset.iri = iri;
   unassignedChoice.append(unassigned, ' Unassigned'); choices.appendChild(unassignedChoice);
-  li.appendChild(choices); list.appendChild(li); return li;
+  const remove = document.createElement('button'); remove.className = 'secondary remove-mapping';
+  remove.type = 'button'; remove.textContent = 'Remove'; choices.appendChild(remove);
+  details.appendChild(choices); li.appendChild(details); list.appendChild(li); return li;
 }
 function applyDecision(id, decision) {
   const row = rowById(id);
@@ -903,6 +929,7 @@ function applyDecision(id, decision) {
       if (field) { field.checked = true; }
     });
   }
+  row.querySelectorAll('.mapping-pane li[data-iri]').forEach(refreshMappingSummary);
 }
 function rowComplete(row) {
   const radios = Array.from(row.querySelectorAll('input[type=radio][name]'));
@@ -1016,7 +1043,7 @@ function drawMappingLines() {
   }
   const bounds = shell.getBoundingClientRect();
   let paths = '';
-  row.querySelectorAll('input[data-level-map]:checked').forEach(function (input) {
+  row.querySelectorAll('.mapping-pane li[data-iri]:not([hidden]) input[data-level-map]:checked').forEach(function (input) {
     const startNode = row.querySelector('[data-level-id="' + CSS.escape(input.value) + '"]');
     const target = input.closest('li[data-iri]');
     if (!startNode || !target) { return; }
@@ -1068,6 +1095,54 @@ function scheduleMappingLines() {
     drawMappingLines();
   });
 }
+function currentLevelFilter(row) { return row && row.dataset.levelFilterState || 'all'; }
+function applyLevelFilter(row, level) {
+  if (!row) { return; }
+  row.dataset.levelFilterState = level || 'all';
+  const selected = currentLevelFilter(row);
+  row.querySelectorAll('[data-level-filter]').forEach(function (control) {
+    control.classList.toggle('level-filter-active', control.dataset.levelFilter === selected);
+    control.setAttribute('aria-pressed', String(control.dataset.levelFilter === selected));
+  });
+  row.querySelectorAll('.mapping-pane li[data-iri]').forEach(function (li) {
+    li.hidden = selected !== 'all'
+      && !li.querySelector('input[data-level-map][value="' + CSS.escape(selected) + '"]:checked');
+  });
+  scheduleMappingLines();
+}
+function refreshMappingSummary(li) {
+  if (!li) { return; }
+  const summary = li.querySelector('.mapping-summary-text');
+  if (!summary) { return; }
+  const levels = Array.from(li.querySelectorAll('input[data-level-map]:checked'))
+    .map(function (input) { return input.value; });
+  const unassigned = Boolean(li.querySelector('input[data-unassigned]:checked'));
+  summary.textContent = levels.length ? levels.join(' · ') : (unassigned ? 'Unassigned' : 'Choose level');
+}
+function mappingState(li) {
+  return {
+    levels: Array.from(li.querySelectorAll('input[data-level-map]:checked')).map(function (input) {
+      return input.value;
+    }),
+    unassigned: Boolean(li.querySelector('input[data-unassigned]:checked')),
+    verdict: li.querySelector('input[type=radio]:checked')?.value || ''
+  };
+}
+function restoreMappingState(li, state) {
+  const levels = Array.isArray(state.levels) ? state.levels : [];
+  li.querySelectorAll('input[data-level-map]').forEach(function (input) {
+    input.checked = levels.includes(input.value);
+  });
+  const unassigned = li.querySelector('input[data-unassigned]');
+  if (unassigned) { unassigned.checked = Boolean(state.unassigned); }
+  const verdict = li.querySelector('input[type=radio][value="' + CSS.escape(state.verdict || '') + '"]');
+  if (verdict) { verdict.checked = true; }
+}
+function setMappingRemoved(li, removed) {
+  li.classList.toggle('mapping-removed', removed);
+  li.querySelector('.remove-mapping').textContent = removed ? 'Undo remove' : 'Remove';
+  refreshMappingSummary(li);
+}
 function activate(id, options) {
   const row = rowById(id);
   const nav = navById(id);
@@ -1079,7 +1154,7 @@ function activate(id, options) {
   if (!options || options.scroll !== false) { nav.scrollIntoView({block: 'nearest'}); }
   const firstConcept = row.querySelector('.mapping-pane li[data-iri], .mapping-pane [data-concept-iri]');
   showConcept(firstConcept);
-  scheduleMappingLines();
+  applyLevelFilter(row, 'all');
 }
 function visibleItems() { return navItems.filter(function (item) { return !item.hidden; }); }
 function move(delta) {
@@ -1149,6 +1224,12 @@ document.querySelector('.review-sidebar').addEventListener('click', function (ev
   if (item) { activate(item.getAttribute('data-target')); }
 });
 stage.addEventListener('click', function (event) {
+  const levelFilter = event.target.closest('[data-level-filter]');
+  if (levelFilter) {
+    if (event.target.matches('textarea, input')) { return; }
+    applyLevelFilter(levelFilter.closest('.row[data-decision-id]'), levelFilter.dataset.levelFilter);
+    return;
+  }
   const add = event.target.closest('.add-mapping');
   if (add) {
     const row = add.closest('.row[data-decision-id]');
@@ -1169,12 +1250,20 @@ stage.addEventListener('click', function (event) {
   const remove = event.target.closest('.remove-mapping');
   if (remove) {
     const li = remove.closest('li[data-iri]');
-    li.classList.add('mapping-removed');
-    li.querySelectorAll('input[data-level-map], input[data-unassigned]').forEach(function (input) {
-      input.checked = false;
-    });
-    const reject = li.querySelector('input[value="remove"], input[value="not_gold"]');
-    if (reject) { reject.checked = true; }
+    if (li.classList.contains('mapping-removed')) {
+      restoreMappingState(li, JSON.parse(li.dataset.previousState || '{}'));
+      setMappingRemoved(li, false);
+    } else {
+      li.dataset.previousState = JSON.stringify(mappingState(li));
+      li.querySelectorAll('input[data-level-map], input[data-unassigned]').forEach(function (input) {
+        input.checked = false;
+      });
+      const reject = li.querySelector('input[value="remove"], input[value="not_gold"]');
+      if (reject) { reject.checked = true; }
+      setMappingRemoved(li, true);
+    }
+    const mappingRow = li.closest('.row[data-decision-id]');
+    applyLevelFilter(mappingRow, currentLevelFilter(mappingRow));
     scheduleMappingLines();
     const decisions = refresh(); persistDraft(decisions); updateProgress(); applyFilters(); return;
   }
@@ -1228,12 +1317,18 @@ document.addEventListener('change', function (event) {
     const unassigned = event.target.closest('li[data-iri]').querySelector('input[data-unassigned]');
     if (unassigned) { unassigned.checked = false; }
   }
+  if (event.target.matches('input[data-level-map], input[data-unassigned]')) {
+    refreshMappingSummary(event.target.closest('li[data-iri]'));
+  }
   if (event.target.matches('input[type=radio][value="remove"], input[type=radio][value="not_gold"]')) {
     event.target.closest('li[data-iri]').querySelectorAll('input[data-level-map], input[data-unassigned]')
       .forEach(function (input) { input.checked = false; });
     scheduleMappingLines();
   }
   const decisions = refresh();
+  if (row && currentLevelFilter(row) !== 'all') {
+    applyLevelFilter(row, currentLevelFilter(row));
+  }
   persistDraft(decisions);
   updateProgress();
   applyFilters();
@@ -1258,6 +1353,7 @@ stage.addEventListener('scroll', scheduleMappingLines, {passive: true, capture: 
 
 restoreTheme();
 restoreDraft();
+document.querySelectorAll('.mapping-pane li[data-iri]').forEach(refreshMappingSummary);
 initPaneResizers();
 refresh();
 updateProgress();
@@ -1315,8 +1411,6 @@ def _grade_list(
         elif entry.get("column"):
             bits.append(f'<span class="tag">{_esc(entry["column"])}</span>')
         line = " ".join(bits)
-        if entry.get("definition"):
-            line += f'<span class="def">{_esc(entry["definition"])}</span>'
         picked = str(prefill.get(iri, "")) if isinstance(prefill, Mapping) else ""
         if not picked:
             picked = "keep" if kind == "gold" else "not_gold"
@@ -1330,8 +1424,9 @@ def _grade_list(
             f'data-label="{_esc(entry.get("label", ""))}" '
             f'data-definition="{_esc(entry.get("definition", ""))}" '
             f'data-score="{_esc(entry.get("score", ""))}" '
-            f'data-branch="{_esc(entry.get("branch", ""))}"><div>{line}</div>'
-            f'<div class="verdict">{radios}</div>{_level_assignment_controls(row, entry)}</li>'
+            f'data-branch="{_esc(entry.get("branch", ""))}"><div class="concept-row-head">'
+            f'<div>{line}</div><div class="verdict">{radios}</div></div>'
+            f"{_level_assignment_controls(row, entry)}</li>"
         )
     return '<ul class="grade">' + "".join(items) + "</ul>"
 
@@ -1385,7 +1480,9 @@ def _level_pane(row: PacketRow) -> str:
     for index, label in enumerate(levels, start=1):
         nodes.append(
             f'<section class="level-node" data-level-id="L{index}">'
-            f'<span class="level-number">L{index}</span><strong>{_esc(label)}</strong>'
+            f'<button class="level-filter-button" type="button" data-level-filter="L{index}" '
+            f'aria-label="Show mappings for L{index}"><span class="level-number">L{index}</span>'
+            f"<strong>{_esc(label)}</strong></button>"
             f'<textarea class="note level-note" rows="2" name="level-note|{_esc(row.decision_id)}|L{index}" '
             f'aria-label="note on L{index} mapping" placeholder="note on this level&rsquo;s mappings (optional)">'
             f"{_esc(notes.get(f'L{index}', ''))}</textarea>"
@@ -1393,8 +1490,8 @@ def _level_pane(row: PacketRow) -> str:
         )
     return (
         '<div class="level-pane"><p class="pane-heading">Input hierarchy · map each level</p>'
-        + "".join(nodes)
-        + "</div>"
+        '<button class="secondary level-filter-all level-filter-active" type="button" '
+        'data-level-filter="all">See all levels</button>' + "".join(nodes) + "</div>"
     )
 
 
@@ -1456,18 +1553,29 @@ def _level_assignment_controls(row: PacketRow, entry: Mapping[str, object]) -> s
         f" L{index} · {_esc(level_label)}</label>"
         for index, level_label in enumerate(levels, start=1)
     )
-    has_known = any(iri in _strings(known.get(f"L{index}")) for index in range(1, len(levels) + 1))
+    assigned = [
+        f"L{index}"
+        for index in range(1, len(levels) + 1)
+        if iri in _strings(known.get(f"L{index}"))
+    ]
+    has_known = bool(assigned)
     if explicit is not None:
         state = "Reviewed level mapping" if has_known or unassigned else "No reviewed mapping"
     else:
         state = "System level mapping" if has_known else "No system level mapping · choose"
+    summary = " · ".join(assigned) if assigned else ("Unassigned" if unassigned else "Choose level")
+    definition = str(entry.get("definition", ""))
     return (
-        f'<div class="level-choices"><span class="mapping-state">{state}:</span>'
+        '<details class="concept-details"><summary>Mapping: <span class="mapping-summary-text">'
+        + _esc(summary)
+        + "</span> · expand</summary>"
+        + (f'<span class="def">{_esc(definition)}</span>' if definition else "")
+        + f'<div class="level-choices"><span class="mapping-state">{state}:</span>'
         + labels
         + f'<label class="level-choice"><input type="checkbox" data-unassigned data-iri="{_esc(iri)}"'
         + (" checked" if unassigned else "")
         + "> Unassigned</label>"
-        + '<button class="secondary remove-mapping" type="button">Remove</button></div>'
+        + '<button class="secondary remove-mapping" type="button">Remove</button></div></details>'
     )
 
 
