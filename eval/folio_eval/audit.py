@@ -2840,6 +2840,27 @@ def _level_mapping_result(decision: Mapping[str, object], decision_id: str) -> s
     return result
 
 
+def _added_mapping_iris(decision: Mapping[str, object], decision_id: str) -> set[str]:
+    """Validate concepts added in the browser and return their canonical FOLIO IRIs."""
+    raw = decision.get("added_mappings")
+    if raw is None:
+        return set()
+    if not isinstance(raw, (list, tuple)):
+        raise ValueError(f"decision {decision_id}: added_mappings must be a list")
+    iris: set[str] = set()
+    for mapping in raw:
+        if not isinstance(mapping, Mapping):
+            raise ValueError(f"decision {decision_id}: each added mapping must be an object")
+        iri = str(mapping.get("iri", ""))
+        if not re.fullmatch(r"https://folio\.openlegalstandard\.org/[A-Za-z0-9_-]+", iri):
+            raise ValueError(f"decision {decision_id}: invalid added FOLIO IRI {iri!r}")
+        label = mapping.get("label")
+        if not isinstance(label, str) or not label.strip():
+            raise ValueError(f"decision {decision_id}: added mapping {iri!r} needs a label")
+        iris.add(iri)
+    return iris
+
+
 def _verdicts(decision: Mapping[str, object], key: str, allowed: frozenset[str]) -> dict[str, str]:
     raw = decision.get(key) or {}
     if not isinstance(raw, Mapping):
@@ -2977,6 +2998,8 @@ def fold_granular_decisions(
         counts["pipeline_elevated"] += sum(1 for v in pipeline_verdicts.values() if v == "elevate")
         counts["pipeline_rejected"] += sum(1 for v in pipeline_verdicts.values() if v == "not_gold")
         elevated = {iri for iri, verdict in pipeline_verdicts.items() if verdict == "elevate"}
+        added_iris = _added_mapping_iris(decision, decision_id)
+        human_added = {iri for iri in added_iris if gold_verdicts.get(iri) == "keep"}
         level_mapping_result = _level_mapping_result(decision, decision_id)
         if level_mapping_result is not None:
             counts["level_mapping_decisions"] += 1
@@ -3055,11 +3078,7 @@ def fold_granular_decisions(
         else:
             current = {str(entry["iri"]) for entry in row.gold}
             kept = {iri for iri in current if gold_verdicts.get(iri, "keep") == "keep"}
-            resulting = tuple(
-                sorted(
-                    level_mapping_result if level_mapping_result is not None else kept | elevated
-                )
-            )
+            resulting = tuple(sorted(kept | elevated | human_added))
             if set(resulting) != current:
                 action = "edit"
                 provenance = (
