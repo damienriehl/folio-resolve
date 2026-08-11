@@ -41,6 +41,7 @@ from folio_eval.audit import (
     Packet,
     PacketRow,
     SplitFacts,
+    _atomized_level_mappings,
     append_decisions,
     build_packet,
     build_packet_v2,
@@ -1038,12 +1039,72 @@ def test_v2_packet_grades_every_concept_individually(v2_gold: tuple[Any, list[An
     row = packet.section("consistency")[0]
     assert len(row.gold) == 2
     assert [entry["iri"] for entry in row.pipeline] == ["R-pipe", "R-junk"]
+    assert all(entry.get("origin") for entry in row.gold)
+    assert row.extra.get("system_level_mappings")
     # every pipeline candidate carries its own definition snippet, not just the leader
     assert row.pipeline[0]["definition"]
     html = render_sheet_v2(packet)
     assert 'value="keep"' in html and 'value="remove"' in html
     assert 'value="elevate"' in html and 'value="not_gold"' in html
     assert 'class="note gold-note"' in html and 'class="note pipeline-note"' in html
+
+
+def test_atomized_level_mappings_assign_exact_input_levels() -> None:
+    row = PacketRow(
+        decision_id="suspect:test",
+        section="suspect",
+        reason_class="test",
+        input_text=(
+            "Banking, Finance & Struct Fin > Insurance Finance (non-structured) > Borrower"
+        ),
+        item_id="item-1",
+        firm="Firm",
+        stratum="test",
+        stratum_id="test",
+        surface_label="Borrower",
+        ancestor_path=("Banking, Finance & Struct Fin", "Insurance Finance (non-structured)"),
+        slice_name="tune",
+        suggested_action="review",
+        gold=(
+            {
+                "iri": "https://folio.openlegalstandard.org/banking",
+                "label": "Banking Law",
+                "column": "SALI 2",
+            },
+            {
+                "iri": "https://folio.openlegalstandard.org/structured",
+                "label": "Structured Finance Law",
+                "column": "SALI 4",
+            },
+            {
+                "iri": "https://folio.openlegalstandard.org/industry",
+                "label": "Finance and Insurance Services Industry",
+                "column": "SALI 2",
+            },
+            {
+                "iri": "https://folio.openlegalstandard.org/insurance",
+                "label": "Insurance Law",
+                "column": "SALI 0 (cascade down)",
+            },
+            {
+                "iri": "https://folio.openlegalstandard.org/lending",
+                "label": "Finance and Lending Law",
+                "column": "SALI 0 (cascade down)",
+            },
+        ),
+        pipeline=({"iri": "https://folio.openlegalstandard.org/borrower", "label": "Borrower"},),
+    )
+
+    assert _atomized_level_mappings(row) == {
+        "L1": [
+            "https://folio.openlegalstandard.org/banking",
+            "https://folio.openlegalstandard.org/structured",
+            "https://folio.openlegalstandard.org/industry",
+            "https://folio.openlegalstandard.org/lending",
+        ],
+        "L2": ["https://folio.openlegalstandard.org/insurance"],
+        "L3": ["https://folio.openlegalstandard.org/borrower"],
+    }
 
 
 def test_v2_sheet_is_self_contained_and_renders_the_hierarchy(

@@ -1246,6 +1246,7 @@ def _gold_block(
             {
                 "iri": iri,
                 "label": value.raw if value else label_lookup.get(iri, ""),
+                "origin": value.origin if value else "",
                 "column": value.column if value else "",
                 "branch": value.branch if value else "",
                 "definition": definition_snippet(definitions.get(iri)),
@@ -1333,6 +1334,51 @@ def _instances_json(row: GoldRowV2) -> list[Mapping[str, object]]:
         }
         for instance in row.instances
     ]
+
+
+_LEVEL_MAPPING_GENERIC_WORDS = frozenset(
+    {"and", "of", "the", "law", "laws", "practice", "service", "services", "industry", "related"}
+)
+
+
+def _mapping_words(value: object) -> frozenset[str]:
+    return frozenset(re.findall(r"[a-z0-9]+", str(value).lower())) - _LEVEL_MAPPING_GENERIC_WORDS
+
+
+def _packet_input_levels(row: PacketRow) -> tuple[str, ...]:
+    parts = tuple(part.strip() for part in row.input_text.split(">") if part.strip())
+    return parts or tuple(part for part in (*row.ancestor_path, row.surface_label) if part)
+
+
+def _atomized_level_mappings(row: PacketRow) -> dict[str, list[str]]:
+    """Derive the pairing heuristic once, as packet data every renderer/fold can inspect."""
+    levels = _packet_input_levels(row)
+    if not levels:
+        return {}
+    level_words = tuple(_mapping_words(label) for label in levels)
+    entries_by_iri: dict[str, Mapping[str, object]] = {}
+    for entry in (*row.gold, *row.pipeline):
+        iri = str(entry.get("iri", ""))
+        if iri:
+            entries_by_iri.setdefault(iri, entry)  # gold precedes pipeline when an IRI repeats
+    mappings: dict[str, list[str]] = {}
+    for iri, entry in entries_by_iri.items():
+        column = str(entry.get("column", ""))
+        origin = str(entry.get("origin", "")).lower()
+        if column and "cascade down" not in column.lower():
+            index = 1
+        elif column:
+            concept_words = _mapping_words(entry.get("label", ""))
+            scores = [len(concept_words & words) for words in level_words]
+            index = scores.index(max(scores)) + 1 if any(scores) else 1
+        elif origin == "level1":
+            index = 1
+        elif origin == "level2":
+            index = min(2, len(levels))
+        else:
+            index = len(levels)
+        mappings.setdefault(f"L{index}", []).append(iri)
+    return mappings
 
 
 def _prefill_for(
@@ -2364,6 +2410,21 @@ def build_packet_v2(
             )
         )
 
+    # Atomized attribution is packet data, not renderer policy: every output is assigned to the
+    # input level the pairing heuristic or current leaf query produced.
+    rows = [
+        replace(
+            packet_row,
+            extra={
+                **packet_row.extra,
+                "system_level_mappings": _atomized_level_mappings(packet_row),
+            },
+        )
+        if packet_row.section != "pairing"
+        else packet_row
+        for packet_row in rows
+    ]
+
     # -- decisions already folded into a later gold version render pre-filled, not blank --------
     # Every input on these rows stays enabled (Damien, 2026-07-28: "let me add notes and change
     # items even where you think things are settled") -- ``folded`` marks the row as decided and
@@ -2750,9 +2811,7 @@ def _notes(decision: Mapping[str, object], decision_id: str) -> dict[str, object
     return out
 
 
-def _level_mapping_result(
-    decision: Mapping[str, object], decision_id: str
-) -> set[str] | None:
+def _level_mapping_result(decision: Mapping[str, object], decision_id: str) -> set[str] | None:
     """Aggregate per-level assignments without discarding mappings left explicitly unassigned."""
     mappings = decision.get("level_mappings")
     options = decision.get("mapping_options")
@@ -2763,6 +2822,7 @@ def _level_mapping_result(
     if options is not None and not isinstance(options, Mapping):
         raise ValueError(f"decision {decision_id}: mapping_options must be an object")
     result: set[str] = set()
+
     def mapping_iri(raw: object) -> str:
         iri = str(raw)
         if not re.fullmatch(r"https://folio\.openlegalstandard\.org/[A-Za-z0-9_-]+", iri):
@@ -2996,7 +3056,9 @@ def fold_granular_decisions(
             current = {str(entry["iri"]) for entry in row.gold}
             kept = {iri for iri in current if gold_verdicts.get(iri, "keep") == "keep"}
             resulting = tuple(
-                sorted(level_mapping_result if level_mapping_result is not None else kept | elevated)
+                sorted(
+                    level_mapping_result if level_mapping_result is not None else kept | elevated
+                )
             )
             if set(resulting) != current:
                 action = "edit"
