@@ -631,7 +631,10 @@ body.eval-workspace { padding: 0; overflow: hidden; font-family: Inter, ui-sans-
 .add-concept-fields { display: grid; grid-template-columns: minmax(8rem, 1fr) minmax(12rem, 2fr) auto;
                       gap: .35rem; margin-top: .4rem; }
 .add-concept input { min-width: 0; }
-.mark-reviewed { width: 100%; margin: .2rem 0 .8rem; }
+.mapping-pane .mark-reviewed { position: sticky; z-index: 5; bottom: .15rem; width: 100%;
+  margin: .65rem 0 .2rem; padding: .7rem; border-color: var(--good); background: var(--good);
+  color: white; font-weight: 750; box-shadow: 0 -4px 12px rgb(15 23 42 / .12); }
+.mapping-pane .mark-reviewed:hover { filter: brightness(1.08); }
 .concept-inspector { position: sticky; z-index: 3; top: 0; width: auto;
                      max-height: 9.5rem; overflow: auto; border: 1px solid #93c5fd;
                      border-left: 4px solid #3b82f6; border-radius: 7px; background: var(--card);
@@ -751,6 +754,8 @@ function collect() {
     if (addedMappings.length && (!baseline || !sameJson(addedMappings, baseline.added_mappings))) {
       entry.added_mappings = addedMappings;
     }
+    const nav = document.querySelector('.review-item[data-target="' + CSS.escape(id) + '"]');
+    if (nav && nav.dataset.reviewed === 'true') { entry.reviewed = true; }
     if (Object.keys(entry).length) { decisions[id] = entry; }
   });
   return decisions;
@@ -953,7 +958,7 @@ function updateProgress() {
       decided += 1;
       if (state) { state.textContent = '\u2713'; }
     }
-    if (confirm) { confirm.textContent = isDecided ? 'Reviewed \u2713' : 'Mark reviewed'; }
+    if (confirm) { confirm.textContent = isDecided ? 'Reviewed \u2713' : 'Mark reviewed & continue'; }
   });
   const total = navItems.length;
   document.getElementById('progress-count').textContent = decided + ' / ' + total + ' reviewed';
@@ -1301,6 +1306,8 @@ def _grade_list(
         if entry.get("definition"):
             line += f'<span class="def">{_esc(entry["definition"])}</span>'
         picked = str(prefill.get(iri, "")) if isinstance(prefill, Mapping) else ""
+        if not picked:
+            picked = "keep" if kind == "gold" else "not_gold"
         radios = "".join(
             f'<label><input type="radio" name="{_esc(name)}" value="{value}"'
             f"{' checked' if picked == value else ''}> {label}</label>"
@@ -1901,6 +1908,19 @@ def _proposed_panel(row: PacketRow) -> str:
     folded_raw = row.extra.get("folded")
     folded: Mapping[str, object] = folded_raw if isinstance(folded_raw, Mapping) else {}
     baseline_raw = row.extra.get("baseline")
+    if not isinstance(baseline_raw, Mapping) and row.section != "pairing":
+        baseline_gold = tuple(row.gold) or tuple(_records(row.extra.get("gold_ref")))
+        baseline_pipeline = tuple(row.pipeline)
+        if not baseline_pipeline:
+            pipeline_ref = row.extra.get("pipeline_ref")
+            if isinstance(pipeline_ref, Mapping):
+                baseline_pipeline = tuple(_records(pipeline_ref.get("candidates")))
+        baseline_raw = {
+            "gold": {str(entry.get("iri", "")): "keep" for entry in baseline_gold},
+            "pipeline": {
+                str(entry.get("iri", "")): "not_gold" for entry in baseline_pipeline
+            },
+        }
     baseline: Mapping[str, object] = baseline_raw if isinstance(baseline_raw, Mapping) else {}
     # A row already folded pre-fills from what is actually live in gold (the baseline), which
     # takes precedence over an older carried-forward ruling — it is newer and it is the truth.
@@ -2048,7 +2068,7 @@ def _render_row_v2(row: PacketRow, *, current_version: int = 0) -> str:
         + '<div class="mapping-pane"><p class="pane-heading">Mapped outputs · decide and assign</p>'
         + proposed
         + add_concept
-        + '<button class="secondary mark-reviewed" type="button">Mark reviewed</button>'
+        + '<button class="secondary mark-reviewed" type="button">Mark reviewed &amp; continue</button>'
         + '</div><div class="pane-resizer mapping-resizer" role="separator" aria-label="Resize mapped outputs pane"></div>'
         + '<div class="detail-pane"><section class="concept-inspector" aria-live="polite">'
         + '<h4>Select a mapped concept</h4><p class="note">Its definition, source, and current decision will appear here.</p></section>'

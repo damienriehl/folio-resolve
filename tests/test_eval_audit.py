@@ -1041,6 +1041,8 @@ def test_v2_packet_grades_every_concept_individually(v2_gold: tuple[Any, list[An
     html = render_sheet_v2(packet)
     assert 'value="keep"' in html and 'value="remove"' in html
     assert 'value="elevate"' in html and 'value="not_gold"' in html
+    assert 'value="keep" checked' in html
+    assert 'value="not_gold" checked' in html
     assert 'class="note gold-note"' in html and 'class="note pipeline-note"' in html
 
 
@@ -1095,6 +1097,10 @@ def test_v2_sheet_renders_an_actionable_mapping_workspace(v2_gold: tuple[Any, li
     assert '<option value="undecided">Undecided</option>' in html
     assert html.index('<option value="undecided">') < html.index('<option value="needs-eye">')
     assert 'class="secondary mark-reviewed"' in html
+    assert 'value="keep" checked' in html
+    assert "entry.reviewed = true" in html
+    assert "position: sticky" in html
+    assert "Mark reviewed &amp; continue" in html
     assert "localStorage" in html
     assert "drawMappingLines" in html
     assert "scheduleMappingLines" in html
