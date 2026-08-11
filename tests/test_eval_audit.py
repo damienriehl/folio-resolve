@@ -1442,7 +1442,7 @@ def test_real_packet_confirming_all_prechecked_heuristic_pairings_is_a_no_op(
     print(f"\n[dry-run] all-heuristic confirm changed_items = {result.counts['changed_items']}")
 
 
-def test_granular_fold_applies_per_level_mappings_and_preserves_unassigned(
+def test_granular_fold_keeps_level_attribution_separate_from_gold_membership(
     v2_gold: tuple[Any, list[Any]],
 ) -> None:
     build, rows = v2_gold
@@ -1466,7 +1466,7 @@ def test_granular_fold_applies_per_level_mappings_and_preserves_unassigned(
     )
 
     output = next(payload for payload in result.rows if payload["item_id"] == row.item_id)
-    assert output["gold_iris"] == sorted([retained, added])
+    assert output["gold_iris"] == sorted(str(entry["iri"]) for entry in row.gold)
     assert result.counts["level_mapping_decisions"] == 1
     assert result.notes[row.decision_id]["level_notes"] == {
         "L2": "This belongs to the second input level."
@@ -1477,6 +1477,7 @@ def test_granular_fold_applies_per_level_mappings_and_preserves_unassigned(
         {
             row.decision_id: {
                 "gold": {retained: "remove"},
+                "pipeline": {added: "elevate"},
                 "level_mappings": {"L1": [retained, added]},
                 "mapping_options": {"unassigned": []},
             }
@@ -1488,7 +1489,28 @@ def test_granular_fold_applies_per_level_mappings_and_preserves_unassigned(
     rejected_output = next(
         payload for payload in rejected.rows if payload["item_id"] == row.item_id
     )
-    assert rejected_output["gold_iris"] == [added]
+    assert rejected_output["gold_iris"] == sorted(
+        [added, *(str(entry["iri"]) for entry in row.gold if entry["iri"] != retained)]
+    )
+
+    added_concept = "https://folio.openlegalstandard.org/R-human-added"
+    human_added = fold_granular_decisions(
+        rows,
+        {
+            row.decision_id: {
+                "gold": {added_concept: "keep"},
+                "added_mappings": [{"iri": added_concept, "label": "Human-added concept"}],
+                "level_mappings": {"L2": [added_concept]},
+            }
+        },
+        packet=packet,
+        ontology_sha256=ONTOLOGY_SHA,
+        now="2026-08-10T00:00:00Z",
+    )
+    human_output = next(
+        payload for payload in human_added.rows if payload["item_id"] == row.item_id
+    )
+    assert added_concept in human_output["gold_iris"]
 
     with pytest.raises(ValueError, match="invalid canonical FOLIO IRI"):
         fold_granular_decisions(
