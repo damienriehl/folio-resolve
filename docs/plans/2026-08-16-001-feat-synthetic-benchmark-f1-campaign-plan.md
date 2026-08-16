@@ -40,6 +40,7 @@ The v0.4.0 release proved the loop works — the recall engine measured tune F1 
 - KD6. **Agents pre-resolve aggressively; only badged judgment rows reach Damien.** (session-settled: user-approved — chosen over routing every ambiguous row to him: at 25 rows per sitting the queue must carry only high-information decisions.) Governs R4, R10.
 - KD7. **Ranking, not retrieval, is the iteration lever.** Measured, not assumed: the label-limit probe showed more candidates slightly lower F1 while recall@10 rises — the misses live in ordering and calibration. Governs R5.
 - KD8. **The synthetic corpus doubles as a cross-stack comparison baseline: the unmodified downstream pipelines are scored on the same corpus and gold before any adoption.** (session-settled: user-directed — chosen over comparing each stack's existing metrics: today's numbers come from different tasks and different gold, so only a shared benchmark makes folio-resolve and the downstream incumbents comparable; the working hypothesis that downstream may currently score higher is testable, not assumed away.) Governs R15, R16, R17.
+- KD9. **folio-resolve's claimed incorporation of the downstream pipelines is audited, and missing parts are judged important only by measured F1 impact.** (session-settled: user-directed — chosen over trusting the extraction history: folio-resolve was built from the folio-enrich/folio-mapper pipelines in theory, but completeness was never validated in practice.) Governs R18, R19.
 
 ### Requirements
 
@@ -67,6 +68,8 @@ The v0.4.0 release proved the loop works — the recall engine measured tune F1 
 - R15. The existing folio-enrich and folio-mapper pipelines, unmodified, run the synthetic corpus and receive per-repo precision, recall, and F1 on the shared gold.
 - R16. folio-resolve and each downstream incumbent are compared on the same corpus and gold, reported per consumer.
 - R17. The comparison is the adoption round's entry gate: adoption proceeds per consumer only where the folio-resolve-backed path measures at least as well as that consumer's incumbent — improve, never degrade; a losing comparison feeds the next iteration instead of the adoption round.
+- R18. A component-parity audit maps each stage of the downstream matching pipelines (folio-enrich's annotation stages, folio-mapper's matching path) to its folio-resolve counterpart, marking each as ported, divergent, or absent — validating, not assuming, that the extraction was complete.
+- R19. Whether an absent or divergent component matters is decided by measurement, not judgment: when an incumbent beats folio-resolve on the shared benchmark (R16), the gap is attributed to specific components from the R18 map, and those become the next iteration's port candidates.
 
 **Continuity**
 
@@ -139,6 +142,7 @@ flowchart TB
 - `eval/folio_eval/clusters.py`'s surface-string check is the committability choke point for anything the synthetic loop writes.
 - The attempt-budget state under the 2026-07-27 plan's check-in rules is unverified and must be checked before the first scored Stage 1 run (R3).
 - Assumed: synthetic-F1 movement correlates with firm-F1 movement well enough to steer iterations; the firm exam at stage boundaries is the check on this assumption.
+- Assumed but unvalidated: folio-resolve incorporates the downstream matching pipelines it was extracted from. The migration was staged (folio-enrich retired only its search path to folio-resolve; its remaining annotation stages live in-repo), so R18 tests this rather than trusting it.
 
 ### Outstanding Questions
 
