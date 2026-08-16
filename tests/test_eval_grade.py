@@ -96,18 +96,32 @@ def test_vote_loader_rejects_off_dictionary_label(tmp_path: Path, dictionary: La
         load_vote_file(_vote_file(tmp_path, concepts={"Gamma": 0.8}), [item()], dictionary=dictionary)
 
 
-@pytest.mark.parametrize(
-    ("grader", "family"), [("gen-1", "family-1"), ("grader-1", "generator-family")]
-)
-def test_vote_loader_rejects_generator_self_grading(
-    tmp_path: Path, dictionary: LabelIndex, grader: str, family: str
+def test_vote_loader_rejects_matching_generator_id(
+    tmp_path: Path, dictionary: LabelIndex
 ) -> None:
     with pytest.raises(ValueError, match="own item"):
         load_vote_file(
-            _vote_file(tmp_path, concepts={"Alpha": 0.8}, grader=grader, family=family),
+            _vote_file(tmp_path, concepts={"Alpha": 0.8}, grader="gen-1"),
             [item()],
             dictionary=dictionary,
         )
+
+
+def test_vote_loader_allows_different_grader_in_generator_family(
+    tmp_path: Path, dictionary: LabelIndex
+) -> None:
+    loaded = load_vote_file(
+        _vote_file(
+            tmp_path,
+            concepts={"Alpha": 0.8},
+            grader="codex-grader",
+            family="generator-family",
+        ),
+        [item()],
+        dictionary=dictionary,
+    )
+
+    assert loaded[0].grader_id == "codex-grader"
 
 
 def test_sub_floor_agreement_routes_queue(dictionary: LabelIndex) -> None:
@@ -127,18 +141,29 @@ def test_missing_votes_routes_before_other_disagreements(dictionary: LabelIndex)
     assert outcome.close_calls[0].disagreement_class == "missing_votes"
 
 
-@pytest.mark.parametrize("duplicate", ["grader", "family"])
-def test_fold_rejects_duplicate_grader_identity(
-    dictionary: LabelIndex, duplicate: str
-) -> None:
+def test_fold_rejects_three_votes_from_same_grader(dictionary: LabelIndex) -> None:
     votes = [vote(1, {"Alpha": 0.9}), vote(2, {"Alpha": 0.9}), vote(3, {"Alpha": 0.9})]
-    if duplicate == "grader":
-        votes[1] = replace(votes[1], grader_id=votes[0].grader_id)
-    else:
-        votes[1] = replace(votes[1], model_family=votes[0].model_family)
-    expected = "duplicate grader" if duplicate == "grader" else "duplicate model_family"
-    with pytest.raises(GradeError, match=expected):
+    votes = [replace(entry, grader_id="same-grader") for entry in votes]
+    with pytest.raises(GradeError, match="duplicate grader"):
         fold_votes([item()], votes, floor=0.6, dictionary=dictionary)
+
+
+def test_fold_accepts_two_codex_and_one_claude_for_codex_generator(
+    dictionary: LabelIndex,
+) -> None:
+    generated = replace(
+        item(), provenance={"generator_id": "codex-generator", "model_family": "codex"}
+    )
+    votes = [
+        GraderVote("i1", "codex-grader-1", "codex", {"Alpha": 0.9}, "codex-generator"),
+        GraderVote("i1", "codex-grader-2", "codex", {"Alpha": 0.8}, "codex-generator"),
+        GraderVote("i1", "claude-grader", "claude", {"Alpha": 0.7}, "codex-generator"),
+    ]
+
+    row = fold_votes([generated], votes, floor=0.6, dictionary=dictionary).items[0]
+
+    assert row.verification == "deterministic"
+    assert row.gold_iris == frozenset({"R-a"})
 
 
 def test_three_empty_votes_route_empty_proposal(dictionary: LabelIndex) -> None:

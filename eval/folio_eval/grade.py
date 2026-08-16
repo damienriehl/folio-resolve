@@ -182,10 +182,10 @@ def load_vote_file(
             raise GradeError(f"unknown or duplicate vote item_id: {item_id!r}")
         if not isinstance(claimed, str):
             raise GradeError(f"vote {item_id!r} lacks generator_id_claimed")
-        generator_id, generator_family = _generator_identity(by_id[item_id])
+        generator_id, _ = _generator_identity(by_id[item_id])
         if claimed != generator_id:
             raise GradeError(f"vote {item_id!r} generator claim does not match item provenance")
-        if grader_id == generator_id or (generator_family and model_family == generator_family):
+        if grader_id == generator_id:
             raise GradeError(f"generator may not grade its own item: {item_id}")
         concepts: dict[str, float] = {}
         for label, confidence in raw["concepts"].items():
@@ -247,7 +247,11 @@ def _reason(resolved: Sequence[_ResolvedVote], floor: float) -> str:
 def fold_votes(
     items: Iterable[SyntheticItem], votes: Iterable[GraderVote], *, floor: float, dictionary: LabelIndex
 ) -> GradeOutcome:
-    """Fold independent votes; any three-grader dissent remains a close call for Damien."""
+    """Fold independent votes from distinct graders spanning at least two model families.
+
+    KTD7 requires family diversity without demanding three distinct families because the
+    deployed grader pool has two available families: Claude and Codex.
+    """
     if not 0.0 <= floor <= 1.0:
         raise ValueError("floor must be within 0..1")
     grouped: dict[str, list[GraderVote]] = {}
@@ -263,11 +267,10 @@ def fold_votes(
             continue
         item_votes = tuple(grouped.get(item.item_id, ()))
         grader_ids = [vote.grader_id for vote in item_votes]
-        model_families = [vote.model_family for vote in item_votes]
         if len(grader_ids) != len(set(grader_ids)):
             raise GradeError(f"item {item.item_id!r} has duplicate grader_id votes")
-        if len(model_families) != len(set(model_families)):
-            raise GradeError(f"item {item.item_id!r} has duplicate model_family votes")
+        if len({vote.model_family for vote in item_votes}) < 2:
+            raise GradeError(f"item {item.item_id!r} requires at least two model_family values")
         resolved = tuple(_resolve_vote(vote, dictionary) for vote in item_votes)
         set_counts = Counter(entry.iris for entry in resolved if entry.issue is None and entry.iris)
         winner = set_counts.most_common(1)[0][0] if set_counts else frozenset()
