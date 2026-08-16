@@ -38,6 +38,7 @@ from typing import Literal
 
 from .audit import SECTIONS_V2, Packet, PacketRow, SittingManifest, pairing_applied_reading_name
 from .intake import DEFAULT_DATA_DIR
+from .leakcheck import Manifest, scan_text
 
 SittingLane = Literal["firm", "synthetic"]
 
@@ -2495,7 +2496,7 @@ def write_packet_v2(packet: Packet, out_dir: Path) -> dict[str, Path]:
 def validate_sitting_output(out_dir: Path, *, lane: SittingLane) -> Path:
     """Return the canonical safe output directory, or reject the unavailable/wrong lane."""
     if lane == "synthetic":
-        raise NotImplementedError("synthetic sitting output is deferred to campaign unit U7")
+        return out_dir.resolve()
     if lane != "firm":
         raise ValueError("sitting lane must be 'firm' or 'synthetic'")
     reports_root = (DEFAULT_DATA_DIR / "reports").resolve()
@@ -2508,14 +2509,37 @@ def validate_sitting_output(out_dir: Path, *, lane: SittingLane) -> Path:
 
 
 def write_sitting_v2(
-    packet: Packet, manifest: SittingManifest, out_dir: Path, *, lane: SittingLane
+    packet: Packet,
+    manifest: SittingManifest,
+    out_dir: Path,
+    *,
+    lane: SittingLane,
+    leak_manifest: Manifest | None = None,
+    salt: bytes | None = None,
+    firm_sheet_empty: bool = True,
 ) -> dict[str, Path]:
     """Write one sitting, enforcing the U2/U7 firm-data lane boundary at the writer seam."""
     target = validate_sitting_output(out_dir, lane=lane)
+    if lane == "synthetic":
+        if not firm_sheet_empty:
+            raise ValueError("synthetic sittings require the firm sheet to be empty")
+        if len(packet.rows) > 25 or len(manifest.rows) > 25 or manifest.batch_size > 25:
+            raise ValueError("synthetic sitting batches are capped at 25 rows")
+        if leak_manifest is None or salt is None:
+            raise ValueError("synthetic sittings require a leak manifest and salt")
     sheet_path = target / f"sitting_{manifest.number}.html"
     manifest_path = target / f"sitting_{manifest.number}.json"
-    _atomic_write_text(sheet_path, render_sheet_v2(packet))
-    _atomic_write_json(manifest_path, manifest.to_json())
+    sheet_text = render_sheet_v2(packet)
+    manifest_text = json.dumps(manifest.to_json(), ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    if lane == "synthetic":
+        assert leak_manifest is not None and salt is not None
+        collisions = scan_text(sheet_text, leak_manifest, salt) + scan_text(
+            manifest_text, leak_manifest, salt
+        )
+        if collisions:
+            raise ValueError(f"synthetic sitting leak check failed: collisions={collisions}")
+    _atomic_write_text(sheet_path, sheet_text)
+    _atomic_write_text(manifest_path, manifest_text)
     return {"sheet": sheet_path, "manifest": manifest_path}
 
 

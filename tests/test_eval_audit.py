@@ -1817,19 +1817,14 @@ def test_sitting_writer_emits_round_trippable_manifest_and_v2_sheet(
     assert 'data-decision-id="row-1"' in written["sheet"].read_text(encoding="utf-8")
 
 
-def test_sitting_cli_requires_lane_and_synthetic_points_to_u7(
+def test_sitting_cli_requires_lane_and_accepts_synthetic_output(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     clusters = tmp_path / "clusters_v2.jsonl"
     with pytest.raises(SystemExit):
         audit_main(["--mode", "sitting", "--clusters", str(clusters)])
     assert "--lane is required" in capsys.readouterr().err
-    with pytest.raises(NotImplementedError, match="U7"):
-        audit_main(
-            ["--mode", "sitting", "--clusters", str(clusters), "--lane", "synthetic"]
-        )
-    with pytest.raises(NotImplementedError, match="U7"):
-        validate_sitting_output(tmp_path, lane="synthetic")
+    assert validate_sitting_output(tmp_path, lane="synthetic") == tmp_path.resolve()
 
 
 def test_sitting_manifest_round_trips_and_batches_do_not_overlap() -> None:
