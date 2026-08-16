@@ -27,6 +27,7 @@ Both files carry firm surface strings, so both stay gitignored and are delivered
 
 from __future__ import annotations
 
+import hashlib
 import html
 import json
 import os
@@ -34,7 +35,7 @@ import tempfile
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
-from .audit import Packet, PacketRow, pairing_applied_reading_name
+from .audit import SECTIONS_V2, Packet, PacketRow, pairing_applied_reading_name
 
 SECTION_TITLES: Mapping[str, tuple[str, str]] = {
     "cascade": (
@@ -68,13 +69,18 @@ _STYLE = """
 :root {
   --bg: #fbfaf7; --fg: #16150f; --muted: #5d5a4e; --line: #ddd8c8;
   --card: #ffffff; --accent: #7a4a1e; --good: #1f6b3a; --warn: #8a2f2f;
-  --code: #f2efe6;
+  --code: #f2efe6; --tag-bg: #e9e2d3; --selected-bg: #dbeafe; --selected-fg: #1e3a8a;
+}
+:root[data-theme="dark"] {
+  --bg: #14150f; --fg: #eceadf; --muted: #b5b09f; --line: #45483a;
+  --card: #1c1e16; --accent: #e5ad73; --good: #8dcca2; --warn: #ee9a9a;
+  --code: #292c22; --tag-bg: #34382c; --selected-bg: #1e3a5f; --selected-fg: #dbeafe;
 }
 @media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #14150f; --fg: #eceadf; --muted: #a09c8c; --line: #34362b;
-    --card: #1c1e16; --accent: #d9a066; --good: #7fbf95; --warn: #e08b8b;
-    --code: #23261c;
+  :root:not([data-theme]) {
+    --bg: #14150f; --fg: #eceadf; --muted: #b5b09f; --line: #45483a;
+    --card: #1c1e16; --accent: #e5ad73; --good: #8dcca2; --warn: #ee9a9a;
+    --code: #292c22; --tag-bg: #34382c; --selected-bg: #1e3a5f; --selected-fg: #dbeafe;
   }
 }
 * { box-sizing: border-box; }
@@ -95,8 +101,9 @@ p.lede, p.note { color: var(--muted); margin: .2rem 0 1rem; }
 .row header { display: flex; flex-wrap: wrap; gap: .5rem; align-items: baseline;
               justify-content: space-between; }
 .tag { font: 11px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--muted);
-       border: 1px solid var(--line); border-radius: 999px; padding: .1rem .55rem; }
-.tag.reason { color: var(--accent); border-color: var(--accent); }
+       border: 1px solid var(--line); border-radius: 999px; padding: .12rem .58rem;
+       background: var(--tag-bg); font-weight: 600; }
+.tag.reason { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
 .cols { display: grid; grid-template-columns: 1fr 1fr; gap: .9rem; margin: .6rem 0; }
 @media (max-width: 46rem) { .cols { grid-template-columns: 1fr; } }
 .col h4 { margin: 0 0 .25rem; font-size: .82rem; text-transform: uppercase;
@@ -209,9 +216,9 @@ def _iri_list(entries: Sequence[Mapping[str, object]], *, kind: str) -> str:
             bits.append(f'<span class="tag">{_esc(entry["origin"])}</span>')
         if kind != "gold" and entry.get("score") is not None:
             probability = entry.get("probability")
-            score = f'score {_esc(entry.get("score"))}'
+            score = f"score {_esc(entry.get('score'))}"
             if probability is not None:
-                score += f' · p={_esc(probability)}'
+                score += f" · p={_esc(probability)}"
             bits.append(f'<span class="tag">{score}</span>')
         if kind != "gold" and entry.get("method"):
             bits.append(f'<span class="tag">{_esc(entry["method"])}</span>')
@@ -230,6 +237,7 @@ def _variant_table(packet: Packet) -> str:
         "<thead><tr><th>variant</th><th>scored items</th><th>gold IRIs</th>"
         "<th>mean set size</th><th>tune P</th><th>tune R</th><th>tune F1</th></tr></thead>"
     )
+
     def _fmt(scores: Mapping[str, object], key: str) -> str:
         value = scores.get(key)
         return f"{float(value):.4f}" if isinstance(value, (int, float)) else "-"
@@ -310,21 +318,19 @@ def _render_row(row: PacketRow) -> str:
             '<div class="cols">'
             f'<div class="col"><h4>Gold says</h4>{_iri_list(row.gold, kind="gold")}</div>'
             f'<div class="col"><h4>{gold_title}</h4>'
-            f'{_iri_list(row.pipeline, kind="pipeline")}</div>'
+            f"{_iri_list(row.pipeline, kind='pipeline')}</div>"
             "</div>"
         )
     if row.notes_text:
         body.append(f'<div class="notes">{_esc(row.notes_text)}</div>')
     if row.extra.get("occurrences"):
-        body.append(
-            f'<p class="note">appears in {_esc(row.extra["occurrences"])} gold cell(s)</p>'
-        )
+        body.append(f'<p class="note">appears in {_esc(row.extra["occurrences"])} gold cell(s)</p>')
     body.append(f'<p class="note">{_esc(row.suggested_action)}</p>')
 
     return (
         f'<article class="row" data-section="{_esc(row.section)}" '
         f'data-decision-id="{_esc(row.decision_id)}">'
-        f'<header><h3>{_esc(row.surface_label)}</h3><div>{"".join(header_bits)}</div></header>'
+        f"<header><h3>{_esc(row.surface_label)}</h3><div>{''.join(header_bits)}</div></header>"
         + "".join(body)
         + _choices(row)
         + "</article>"
@@ -365,7 +371,7 @@ def render_sheet(packet: Packet) -> str:
     counts = json.dumps(dict(packet.counts), indent=2, sort_keys=True)
     header_meta = json.dumps(meta, indent=2, sort_keys=True)
     return (
-        "<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\">"
+        '<!doctype html>\n<html lang="en"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width, initial-scale=1">'
         "<title>folio-resolve — audit gate (gold v1)</title>"
         f"<style>{_STYLE}</style></head><body><main>"
@@ -453,6 +459,13 @@ ul.grade > li:last-child { border-bottom: 0; }
 .verdict { display: flex; flex-wrap: wrap; gap: .1rem .7rem; justify-content: flex-end; }
 .verdict label { display: inline-flex; align-items: center; gap: .3rem; cursor: pointer;
                  font-size: .84rem; white-space: nowrap; }
+.verdict label { border: 1px solid var(--line); border-radius: 999px; padding: .18rem .48rem;
+                 background: var(--bg); }
+.verdict label:has(input:checked) { font-weight: 700; box-shadow: 0 0 0 1px currentColor; }
+.verdict label:has(input[value="keep"]:checked),
+.verdict label:has(input[value="elevate"]:checked) { color: var(--good); border-color: var(--good); }
+.verdict label:has(input[value="remove"]:checked),
+.verdict label:has(input[value="not_gold"]:checked) { color: var(--warn); border-color: var(--warn); }
 .prefilled { color: var(--good); font-size: .8rem; margin: .2rem 0 0; }
 .tag.good { color: var(--good); border-color: var(--good); }
 .pairing { display: grid; grid-template-columns: 1fr 1fr; gap: .8rem; margin: .5rem 0; }
@@ -521,6 +534,153 @@ ul.iris li.tail { border-left: 3px solid transparent; padding-left: .4rem; color
 .opt.applied-reading { border-color: var(--good); background: var(--code); margin-bottom: .6rem; }
 .opt.applied-reading h4 { color: var(--good); display: flex; gap: .5rem; align-items: baseline; }
 p.note.workbook { font-size: .78rem; opacity: .85; }
+
+/* --- durable visual adjudication workspace ------------------------------------------ */
+body.eval-workspace { padding: 0; overflow: hidden; font-family: Inter, ui-sans-serif, system-ui,
+                      -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+.eval-workspace main { max-width: none; height: 100vh; display: flex; flex-direction: column; }
+.review-header { flex: 0 0 auto; border-bottom: 1px solid var(--line); background: var(--card); }
+.review-titlebar { display: flex; align-items: center; justify-content: space-between; gap: 1rem;
+                   padding: .75rem 1rem .55rem; }
+.review-titlebar h1 { font-size: 1.05rem; margin: 0; }
+.review-titlebar .lede { margin: .1rem 0 0; font-size: .78rem; }
+.review-progress { display: flex; align-items: center; gap: .55rem; white-space: nowrap; }
+.progress-track { width: 9rem; height: .4rem; overflow: hidden; border-radius: 999px;
+                  background: var(--line); }
+.progress-fill { height: 100%; width: 0; background: var(--good); transition: width .18s ease; }
+.review-toolbar { display: flex; align-items: center; gap: .5rem; padding: .5rem 1rem;
+                  border-top: 1px solid var(--line); background: var(--bg); }
+.review-toolbar input, .review-toolbar select { width: auto; min-width: 10rem; height: 2rem;
+  border: 1px solid var(--line); border-radius: 6px; background: var(--card); color: var(--fg);
+  padding: .25rem .55rem; font: inherit; font-size: .78rem; }
+.review-toolbar input { flex: 1; max-width: 28rem; }
+.review-toolbar button { padding: .34rem .65rem; font-size: .76rem; }
+.review-toolbar .spacer { flex: 1; }
+.draft-state { font-size: .74rem; color: var(--muted); }
+.workspace-shell { --sidebar-width: 19rem; position: relative; display: grid;
+                   grid-template-columns: var(--sidebar-width) .35rem minmax(0, 1fr);
+                   min-height: 0; flex: 1; background: var(--bg); }
+.review-sidebar { min-height: 0; overflow: auto; border-right: 1px solid var(--line);
+                  background: var(--card); padding: .65rem; z-index: 2; }
+.sidebar-label { margin: .1rem .35rem .55rem; color: var(--muted); font-size: .68rem;
+                 font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+.nav-group { margin: 0 0 .85rem; }
+.nav-group-title { display: flex; justify-content: space-between; gap: .5rem; margin: .25rem .35rem;
+                   color: var(--muted); font-size: .68rem; font-weight: 700; text-transform: uppercase; }
+.review-item { width: 100%; display: grid; grid-template-columns: 1fr auto; gap: .25rem .45rem;
+               margin: .12rem 0; padding: .46rem .55rem; border: 1px solid transparent;
+               border-radius: 6px; background: transparent; color: var(--fg); text-align: left;
+               line-height: 1.25; cursor: pointer; }
+.review-item:hover { background: var(--code); }
+.review-item.active { border-color: #60a5fa; background: var(--selected-bg); color: var(--selected-fg); }
+.review-item[data-decided="true"] .item-state { color: var(--good); }
+.review-item[data-needs-eye="true"] .item-state { color: var(--warn); }
+.review-item[hidden] { display: none; }
+.item-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+              font-size: .8rem; font-weight: 600; }
+.item-path { grid-column: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+             white-space: nowrap; color: var(--muted); font-size: .65rem; }
+.item-state { grid-column: 2; grid-row: 1 / 3; align-self: center; font-size: .68rem; }
+.review-item.level-2 { padding-left: 1rem; }
+.review-item.level-3, .review-item.level-4 { padding-left: 1.45rem; }
+.pane-resizer { position: relative; z-index: 8; cursor: col-resize; background: var(--line); }
+.pane-resizer:hover, .pane-resizer.dragging { background: #60a5fa; }
+#mapping-lines { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 4;
+                 pointer-events: none; overflow: visible; }
+.review-stage { position: relative; min-width: 0; min-height: 0; overflow: hidden; background: var(--card); }
+.review-stage > .row { display: none; }
+.review-stage > .row.active { --level-width: 18rem; --mapping-width: 29rem; display: grid;
+                              grid-template-columns: var(--level-width) .35rem var(--mapping-width) .35rem minmax(24rem, 1fr);
+                              grid-template-rows: auto minmax(0, 1fr); height: 100%; margin: 0;
+                              padding: 0; border: 0; border-radius: 0; }
+.review-stage > .row > header { grid-column: 1 / 6; padding: .7rem 1rem; border-bottom: 1px solid var(--line);
+                               background: var(--bg); min-width: 0; }
+.review-stage > .row > header h3 { min-width: 0; overflow: hidden; text-overflow: ellipsis;
+                                  white-space: nowrap; font-size: .92rem; }
+.level-pane, .mapping-pane, .detail-pane { min-width: 0; min-height: 0; overflow: auto; padding: .8rem; }
+.level-pane { background: var(--bg); border-right: 1px solid var(--line); }
+.level-filter-all { width: 100%; margin: 0 0 .55rem; }
+.level-node { position: relative; margin: 0 0 .65rem; padding: .65rem; border: 1px solid var(--line);
+              border-radius: 7px; background: var(--card); }
+.level-filter-button { display: block; width: 100%; padding: 0; border: 0; background: transparent;
+                       color: inherit; text-align: left; cursor: pointer; }
+.level-node:has(.level-filter-button:hover), .level-node:has(.level-filter-button.level-filter-active) {
+  border-color: #60a5fa; background: var(--selected-bg); }
+.level-node strong { display: block; font-size: .82rem; }
+.level-node .level-number { color: var(--muted); font-size: .66rem; font-weight: 700; }
+.level-node textarea { margin-top: .45rem; min-height: 3.25rem; }
+.mapping-pane { border-right: 1px solid var(--line); background: var(--card); }
+.detail-pane { background: var(--bg); }
+.pane-heading { margin: 0 0 .55rem; font-size: .68rem; font-weight: 700; letter-spacing: .08em;
+                text-transform: uppercase; color: var(--muted); }
+.mapping-pane .panel.proposed { margin: 0; background: transparent; border: 0; padding: 0; }
+.mapping-pane .panel.proposed > h4 { display: none; }
+.mapping-pane .block { margin: 0 0 .7rem; background: var(--card); }
+.mapping-pane ul.grade > li { position: relative; border: 1px solid transparent;
+                              border-bottom-color: var(--line); border-radius: 5px;
+                              padding: .38rem .45rem; cursor: pointer; }
+.mapping-pane ul.grade > li[hidden] { display: none; }
+.concept-row-head { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .35rem;
+                    align-items: center; }
+.concept-row-head > div:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis;
+                                      white-space: nowrap; }
+.concept-row-head .verdict { margin: 0; white-space: nowrap; }
+.concept-details { margin-top: .18rem; }
+.concept-details > summary { color: var(--muted); font-size: .67rem; cursor: pointer; }
+.concept-details[open] > summary { margin-bottom: .35rem; }
+.concept-details .def { margin: .2rem 0; }
+.mapping-summary { display: inline-flex; gap: .2rem; margin-left: .3rem; }
+.mapping-summary .tag { font-size: .61rem; }
+.mapping-pane ul.grade > li:hover, .mapping-pane ul.grade > li.concept-selected {
+  border-color: #60a5fa; background: var(--selected-bg); color: var(--selected-fg); }
+.mapping-pane .pairing { grid-template-columns: 1fr; }
+.mapping-pane .taglist .concept { cursor: pointer; }
+.mapping-pane .taglist .concept:hover, .mapping-pane .taglist .concept.concept-selected {
+  border-color: #60a5fa; background: var(--selected-bg); color: var(--selected-fg); }
+.mapping-pane .row-note { margin-top: .8rem; }
+.level-choices { display: flex; flex-wrap: wrap; align-items: center; gap: .3rem; margin-top: .45rem; }
+.level-choice { display: inline-flex; align-items: center; gap: .2rem; padding: .2rem .4rem;
+                border: 1px solid var(--line); border-radius: 999px; background: var(--tag-bg);
+                font-size: .66rem; cursor: pointer; }
+.mapping-state { color: var(--muted); font-size: .67rem; }
+.mapping-removed { opacity: .55; text-decoration: line-through; }
+.mapping-removed .remove-mapping { font-weight: 700; color: var(--good); border-color: var(--good); }
+.add-concept { margin: .75rem 0; padding: .65rem; border: 1px dashed var(--line); border-radius: 7px; }
+.add-concept-fields { display: grid; grid-template-columns: minmax(8rem, 1fr) minmax(12rem, 2fr) auto;
+                      gap: .35rem; margin-top: .4rem; }
+.add-concept input { min-width: 0; }
+.mapping-pane .mark-reviewed { position: sticky; z-index: 5; bottom: .15rem; width: 100%;
+  margin: .65rem 0 .2rem; padding: .7rem; border-color: var(--good); background: var(--good);
+  color: white; font-weight: 750; box-shadow: 0 -4px 12px rgb(15 23 42 / .12); }
+.mapping-pane .mark-reviewed:hover { filter: brightness(1.08); }
+.concept-inspector { position: sticky; z-index: 3; top: 0; width: auto;
+                     max-height: 9.5rem; overflow: auto; border: 1px solid #93c5fd;
+                     border-left: 4px solid #3b82f6; border-radius: 7px; background: var(--card);
+                     padding: .65rem .8rem; box-shadow: 0 4px 14px rgb(15 23 42 / .08); }
+.concept-inspector h4 { margin: 0 0 .2rem; font-size: .9rem; }
+.concept-inspector .inspector-meta { color: var(--muted); font: .68rem/1.4 ui-monospace, monospace; }
+.concept-inspector .inspector-definition { margin: .45rem 0 0; font-size: .8rem; }
+.detail-pane { padding-top: .8rem; }
+.detail-pane .panel { margin-top: 0; }
+.actions { position: static; margin: .8rem 0 0; padding: .75rem; border: 1px solid var(--line);
+           border-radius: 7px; background: var(--card); }
+#out { height: 5rem; }
+.empty-review { display: none; padding: 3rem; color: var(--muted); text-align: center; }
+.review-stage.empty .empty-review { display: block; }
+@media (max-width: 78rem) {
+  .workspace-shell { --sidebar-width: 16rem; }
+}
+@media (max-width: 58rem) {
+  body.eval-workspace { overflow: auto; }
+  .eval-workspace main { min-height: 100vh; height: auto; }
+  .workspace-shell { grid-template-columns: 14rem minmax(0, 1fr); min-height: 44rem; }
+  .workspace-shell > .pane-resizer, #mapping-lines { display: none; }
+  .review-stage > .row.active { display: block; height: auto; }
+  .concept-inspector { position: static; width: auto; margin: 0 0 .8rem; max-height: none; }
+  .detail-pane { padding-top: .8rem; }
+  .level-pane, .mapping-pane { border-right: 0; border-bottom: 1px solid var(--line); }
+  .review-stage > .row.active > .pane-resizer { display: none; }
+}
 """
 )
 
@@ -533,6 +693,7 @@ function verdicts(row, selector) {
   });
   return out;
 }
+const baselineCache = new WeakMap();
 // A row already folded into gold carries its live state as a data-baseline JSON attribute
 // (gold/pipeline verdicts, the pairing reading, and the three note fields). No input is ever
 // disabled -- every row stays fully answerable -- but a re-submission that leaves the row exactly
@@ -540,9 +701,17 @@ function verdicts(row, selector) {
 // Copy-decisions JSON and a genuine amendment is the only entry that survives (Damien, 2026-07-28:
 // "let me add notes and change items even where you think things are settled").
 function baselineOf(row) {
+  if (baselineCache.has(row)) { return baselineCache.get(row); }
   const raw = row.getAttribute('data-baseline');
-  if (!raw) { return null; }
-  try { return JSON.parse(raw); } catch (e) { return null; }
+  if (!raw) { baselineCache.set(row, null); return null; }
+  try {
+    const baseline = JSON.parse(raw);
+    baselineCache.set(row, baseline);
+    return baseline;
+  } catch (e) {
+    baselineCache.set(row, null);
+    return null;
+  }
 }
 function diffMap(current, base) {
   const out = {};
@@ -550,6 +719,9 @@ function diffMap(current, base) {
     if (!base || base[key] !== current[key]) { out[key] = current[key]; }
   });
   return out;
+}
+function sameJson(first, second) {
+  return JSON.stringify(first || {}) === JSON.stringify(second || {});
 }
 function collect() {
   const decisions = {};
@@ -579,30 +751,457 @@ function collect() {
     if (pipeNoteVal && (!baseline || pipeNoteVal !== (baseline.pipeline_note || ''))) {
       entry.pipeline_note = pipeNoteVal;
     }
+    const levelMappings = {};
+    row.querySelectorAll('input[data-level-map]:checked').forEach(function (input) {
+      const level = input.value;
+      if (!levelMappings[level]) { levelMappings[level] = []; }
+      levelMappings[level].push(input.dataset.iri);
+    });
+    if (Object.keys(levelMappings).length && (!baseline || !sameJson(levelMappings, baseline.level_mappings))) {
+      entry.level_mappings = levelMappings;
+    }
+    const levelNotes = {};
+    row.querySelectorAll('textarea.level-note').forEach(function (field) {
+      const value = field.value.trim();
+      const level = field.closest('[data-level-id]').dataset.levelId;
+      if (value) { levelNotes[level] = value; }
+    });
+    if (Object.keys(levelNotes).length && (!baseline || !sameJson(levelNotes, baseline.level_notes))) {
+      entry.level_notes = levelNotes;
+    }
+    const unassigned = Array.from(row.querySelectorAll('input[data-unassigned]:checked'))
+      .map(function (input) { return input.dataset.iri; });
+    const mappingOptions = unassigned.length ? {unassigned: unassigned} : {};
+    if (unassigned.length && (!baseline || !sameJson(mappingOptions, baseline.mapping_options))) {
+      entry.mapping_options = mappingOptions;
+    }
+    const addedMappings = Array.from(row.querySelectorAll('li[data-added="true"]')).map(function (li) {
+      return {iri: li.dataset.iri, label: li.dataset.label};
+    });
+    if (addedMappings.length && (!baseline || !sameJson(addedMappings, baseline.added_mappings))) {
+      entry.added_mappings = addedMappings;
+    }
+    const nav = document.querySelector('.review-item[data-target="' + CSS.escape(id) + '"]');
+    if (nav && nav.dataset.reviewed === 'true') { entry.reviewed = true; }
     if (Object.keys(entry).length) { decisions[id] = entry; }
   });
   return decisions;
 }
-function refresh() {
-  const decisions = collect();
+function refresh(decisions) {
+  decisions = decisions || collect();
   document.getElementById('out').value = JSON.stringify(decisions, null, 2);
   document.getElementById('count').textContent = Object.keys(decisions).length + ' rows decided';
+  return decisions;
 }
-document.addEventListener('change', function (event) {
-  if (event.target.matches('input[data-kind=pairing]')) {
-    const row = event.target.closest('.row');
-    row.querySelectorAll('.pairing .opt').forEach(function (opt) {
-      opt.classList.toggle('picked', opt.getAttribute('data-choice') === event.target.value);
+"""
+
+_SCRIPT_V2_WORKSPACE = (
+    _SCRIPT_V2
+    + """
+const workspace = document.querySelector('[data-review-workspace="folio-eval-v1"]');
+const shell = document.querySelector('.workspace-shell');
+const stage = document.querySelector('.review-stage');
+const rows = Array.from(document.querySelectorAll('.review-stage .row[data-decision-id]'));
+const navItems = Array.from(document.querySelectorAll('.review-item[data-target]'));
+const rowsById = new Map(rows.map(function (row) {
+  return [row.getAttribute('data-decision-id'), row];
+}));
+const navByDecisionId = new Map(navItems.map(function (item) {
+  return [item.getAttribute('data-target'), item];
+}));
+const draftKey = 'folio-eval-draft:' + workspace.getAttribute('data-packet-key');
+let activeId = null;
+let mappingFrame = 0;
+let draftTimer = 0;
+const themeKey = 'folio-eval-theme';
+
+function setTheme(theme) {
+  const selected = theme === 'dark' ? 'dark' : 'light';
+  document.documentElement.dataset.theme = selected;
+  const toggle = document.getElementById('theme-toggle');
+  if (toggle) { toggle.textContent = selected === 'dark' ? 'Light mode' : 'Dark mode'; }
+  try { localStorage.setItem(themeKey, selected); } catch (error) { /* preference is optional */ }
+  scheduleMappingLines();
+}
+function restoreTheme() {
+  let selected = 'light';
+  try { selected = localStorage.getItem(themeKey) || 'light'; } catch (error) { /* stay light */ }
+  setTheme(selected);
+}
+
+function rowById(id) { return rowsById.get(id); }
+function navById(id) { return navByDecisionId.get(id); }
+function setRadio(row, selector, value) {
+  const input = row.querySelector(selector + ' input[value="' + CSS.escape(value) + '"]');
+  if (input) { input.checked = true; }
+}
+function addConceptRow(row, label, iri) {
+  const existing = row.querySelector('li[data-iri="' + CSS.escape(iri) + '"]');
+  if (existing) { return existing; }
+  let list = row.querySelector('.block.gold ul.grade');
+  if (!list) {
+    list = document.createElement('ul'); list.className = 'grade';
+    const empty = row.querySelector('.block.gold p.note');
+    if (empty) { empty.replaceWith(list); } else { row.querySelector('.block.gold').appendChild(list); }
+  }
+  const li = document.createElement('li');
+  li.dataset.iri = iri; li.dataset.label = label; li.dataset.kind = 'gold'; li.dataset.added = 'true';
+  const head = document.createElement('div'); head.className = 'concept-row-head';
+  const title = document.createElement('div');
+  const strong = document.createElement('strong'); strong.textContent = label + ' ';
+  const code = document.createElement('code'); code.textContent = iri.split('/').pop();
+  title.append(strong, code); head.appendChild(title);
+  const verdict = document.createElement('div'); verdict.className = 'verdict';
+  ['keep', 'remove'].forEach(function (value) {
+    const choice = document.createElement('label');
+    const radio = document.createElement('input'); radio.type = 'radio';
+    radio.name = 'gold|' + row.dataset.decisionId + '|added|' + iri; radio.value = value;
+    radio.checked = value === 'keep';
+    choice.append(radio, ' ' + (value === 'keep' ? 'Keep gold' : 'Remove from gold'));
+    verdict.appendChild(choice);
+  });
+  head.appendChild(verdict); li.appendChild(head);
+  const details = document.createElement('details'); details.className = 'concept-details';
+  const summary = document.createElement('summary'); summary.append('Mapping: ');
+  const summaryText = document.createElement('span'); summaryText.className = 'mapping-summary-text';
+  summaryText.textContent = 'Choose level'; summary.append(summaryText, ' · expand'); details.appendChild(summary);
+  const choices = document.createElement('div'); choices.className = 'level-choices';
+  const state = document.createElement('span'); state.className = 'mapping-state';
+  state.textContent = 'New mapping · choose:'; choices.appendChild(state);
+  row.querySelectorAll('.level-node').forEach(function (node) {
+    const choice = document.createElement('label'); choice.className = 'level-choice';
+    const checkbox = document.createElement('input'); checkbox.type = 'checkbox';
+    checkbox.dataset.levelMap = ''; checkbox.dataset.iri = iri; checkbox.value = node.dataset.levelId;
+    const levelLabel = node.querySelector('strong')?.textContent || '';
+    choice.append(checkbox, ' ' + node.dataset.levelId + ' · ' + levelLabel);
+    choices.appendChild(choice);
+  });
+  const unassignedChoice = document.createElement('label'); unassignedChoice.className = 'level-choice';
+  const unassigned = document.createElement('input'); unassigned.type = 'checkbox';
+  unassigned.dataset.unassigned = ''; unassigned.dataset.iri = iri;
+  unassignedChoice.append(unassigned, ' Unassigned'); choices.appendChild(unassignedChoice);
+  const remove = document.createElement('button'); remove.className = 'secondary remove-mapping';
+  remove.type = 'button'; remove.textContent = 'Remove'; choices.appendChild(remove);
+  details.appendChild(choices); li.appendChild(details); list.appendChild(li); return li;
+}
+function applyDecision(id, decision) {
+  const row = rowById(id);
+  if (!row || !decision || typeof decision !== 'object') { return; }
+  if (Array.isArray(decision.added_mappings)) {
+    decision.added_mappings.forEach(function (mapping) {
+      if (mapping && mapping.iri && mapping.label) { addConceptRow(row, mapping.label, mapping.iri); }
     });
   }
-  refresh();
-});
-document.addEventListener('input', function (event) {
-  if (event.target.matches('textarea.note')) { refresh(); }
-});
-document.getElementById('copy').addEventListener('click', function () {
+  ['gold', 'pipeline'].forEach(function (kind) {
+    const verdicts = decision[kind];
+    if (!verdicts || typeof verdicts !== 'object') { return; }
+    Object.keys(verdicts).forEach(function (iri) {
+      setRadio(row, '.block.' + kind + ' li[data-iri="' + CSS.escape(iri) + '"]', verdicts[iri]);
+    });
+  });
+  if (decision.pairing) { setRadio(row, '.pairing', decision.pairing); }
+  [['note', '.row-note'], ['gold_note', '.gold-note'], ['pipeline_note', '.pipeline-note']]
+    .forEach(function (pair) {
+      const field = row.querySelector(pair[1]);
+      if (field && typeof decision[pair[0]] === 'string') { field.value = decision[pair[0]]; }
+    });
+  if (decision.level_mappings && typeof decision.level_mappings === 'object') {
+    row.querySelectorAll('input[data-level-map], input[data-unassigned]').forEach(function (field) {
+      field.checked = false;
+    });
+    Object.keys(decision.level_mappings).forEach(function (level) {
+      decision.level_mappings[level].forEach(function (iri) {
+        const field = row.querySelector('input[data-level-map][value="' + CSS.escape(level)
+          + '"][data-iri="' + CSS.escape(iri) + '"]');
+        if (field) { field.checked = true; }
+      });
+    });
+  }
+  if (decision.level_notes && typeof decision.level_notes === 'object') {
+    Object.keys(decision.level_notes).forEach(function (level) {
+      const field = row.querySelector('[data-level-id="' + CSS.escape(level) + '"] .level-note');
+      if (field) { field.value = decision.level_notes[level]; }
+    });
+  }
+  if (decision.mapping_options && Array.isArray(decision.mapping_options.unassigned)) {
+    decision.mapping_options.unassigned.forEach(function (iri) {
+      const field = row.querySelector('input[data-unassigned][data-iri="' + CSS.escape(iri) + '"]');
+      if (field) { field.checked = true; }
+    });
+  }
+  row.querySelectorAll('.mapping-pane li[data-iri]').forEach(refreshMappingSummary);
+}
+function rowComplete(row) {
+  const radios = Array.from(row.querySelectorAll('input[type=radio][name]'));
+  if (!radios.length) { return false; }
+  const groups = new Set(radios.map(function (input) { return input.name; }));
+  const verdictsComplete = Array.from(groups).every(function (name) {
+    return radios.some(function (input) { return input.name === name && input.checked; });
+  });
+  const mappingsComplete = Array.from(row.querySelectorAll('.mapping-pane li[data-iri]')).every(function (li) {
+    const verdict = li.querySelector('input[type=radio]:checked');
+    const excluded = verdict && (verdict.value === 'remove' || verdict.value === 'not_gold');
+    return excluded || li.classList.contains('mapping-removed')
+      || Boolean(li.querySelector('input[data-level-map]:checked, input[data-unassigned]:checked'));
+  });
+  return verdictsComplete && mappingsComplete;
+}
+function restoreDraft() {
+  try {
+    const raw = localStorage.getItem(draftKey);
+    if (!raw) { return; }
+    const saved = JSON.parse(raw);
+    const decisions = saved.decisions && typeof saved.decisions === 'object' ? saved.decisions : saved;
+    Object.keys(decisions).forEach(function (id) { applyDecision(id, decisions[id]); });
+    const reviewedIds = saved.version >= 3 && Array.isArray(saved.reviewedIds)
+      ? saved.reviewedIds : [];
+    reviewedIds.forEach(function (id) {
+      const nav = navById(id);
+      const row = rowById(id);
+      if (nav && row && rowComplete(row)) { nav.dataset.reviewed = 'true'; }
+    });
+    document.getElementById('draft-state').textContent = 'Draft restored from this browser';
+  } catch (error) {
+    document.getElementById('draft-state').textContent = 'Draft could not be restored';
+  }
+}
+function persistDraft(decisions) {
+  try {
+    const reviewedIds = navItems.filter(function (item) { return item.dataset.reviewed === 'true'; })
+      .map(function (item) { return item.getAttribute('data-target'); });
+    localStorage.setItem(draftKey, JSON.stringify({
+      version: 3, decisions: decisions || collect(), reviewedIds: reviewedIds
+    }));
+    document.getElementById('draft-state').textContent = 'Draft saved in this browser';
+  } catch (error) {
+    document.getElementById('draft-state').textContent = 'Local draft unavailable — download often';
+  }
+}
+function scheduleDraft(decisions) {
+  window.clearTimeout(draftTimer);
+  draftTimer = window.setTimeout(function () { persistDraft(decisions); }, 250);
+}
+function flushDraft(decisions) {
+  window.clearTimeout(draftTimer);
+  persistDraft(decisions || collect());
+}
+function updateProgress() {
+  let decided = 0;
+  navItems.forEach(function (item) {
+    const isDecided = item.dataset.reviewed === 'true' || item.dataset.decided === 'true';
+    item.dataset.currentlyDecided = String(isDecided);
+    const state = item.querySelector('.item-state');
+    const row = rowById(item.getAttribute('data-target'));
+    const confirm = row ? row.querySelector('.mark-reviewed') : null;
+    if (isDecided) {
+      decided += 1;
+      if (state) { state.textContent = '\u2713'; }
+    }
+    if (confirm) { confirm.textContent = isDecided ? 'Reviewed \u2713' : 'Mark reviewed & continue'; }
+  });
+  const total = navItems.length;
+  document.getElementById('progress-count').textContent = decided + ' / ' + total + ' reviewed';
+  document.getElementById('progress-fill').style.width = (total ? decided / total * 100 : 0) + '%';
+}
+function showConcept(li) {
+  const activeRow = rowById(activeId);
+  const inspector = activeRow ? activeRow.querySelector('.concept-inspector') : null;
+  if (!inspector) { return; }
+  document.querySelectorAll('.concept-selected').forEach(function (entry) {
+    entry.classList.remove('concept-selected');
+  });
+  if (!li) {
+    inspector.innerHTML = '<h4>Select a mapped concept</h4><p class="note">Its definition, source, and current decision will appear here.</p>';
+    return;
+  }
+  li.classList.add('concept-selected');
+  const verdict = li.querySelector('input[type=radio]:checked');
+  inspector.innerHTML = '';
+  const title = document.createElement('h4');
+  title.textContent = li.dataset.label || 'Unnamed concept';
+  const meta = document.createElement('div');
+  meta.className = 'inspector-meta';
+  const iri = li.dataset.iri || li.dataset.conceptIri || '';
+  const source = li.dataset.kind === 'gold' ? 'Current gold'
+    : (li.dataset.kind === 'pipeline' ? 'Pipeline candidate' : 'Pairing candidate');
+  const bits = [source, iri];
+  if (li.dataset.branch) { bits.push(li.dataset.branch); }
+  if (li.dataset.score) { bits.push('score ' + li.dataset.score); }
+  if (verdict) { bits.push('decision: ' + verdict.value); }
+  meta.textContent = bits.filter(Boolean).join(' · ');
+  const definition = document.createElement('p');
+  definition.className = 'inspector-definition';
+  definition.textContent = li.dataset.definition || 'No definition was included in this audit packet.';
+  inspector.append(title, meta, definition);
+}
+function drawMappingLines() {
+  const svg = document.getElementById('mapping-lines');
+  const row = rowById(activeId);
+  if (!svg || !row || window.matchMedia('(max-width: 58rem)').matches) {
+    if (svg) { svg.innerHTML = ''; }
+    return;
+  }
+  const bounds = shell.getBoundingClientRect();
+  let paths = '';
+  row.querySelectorAll('.mapping-pane li[data-iri]:not([hidden]) input[data-level-map]:checked').forEach(function (input) {
+    const startNode = row.querySelector('[data-level-id="' + CSS.escape(input.value) + '"]');
+    const target = input.closest('li[data-iri]');
+    if (!startNode || !target) { return; }
+    const start = startNode.getBoundingClientRect();
+    const end = target.getBoundingClientRect();
+    const startX = start.right - bounds.left;
+    const startY = start.top + start.height / 2 - bounds.top;
+    const endX = end.left - bounds.left;
+    const endY = end.top + end.height / 2 - bounds.top;
+    const kind = target.dataset.kind;
+    const color = kind === 'gold' ? '#15803d' : '#c2410c';
+    const dx = endX - startX;
+    paths += '<path d="M' + startX + ',' + startY + ' C' + (startX + dx * .42) + ',' + startY
+      + ' ' + (startX + dx * .58) + ',' + endY + ' ' + endX + ',' + endY
+      + '" stroke="' + color + '" stroke-width="1.5" fill="none" opacity=".45"/>';
+  });
+  svg.innerHTML = paths;
+}
+function initPaneResizers() {
+  document.querySelectorAll('.pane-resizer').forEach(function (handle) {
+    handle.addEventListener('pointerdown', function (event) {
+      const row = handle.closest('.row.active');
+      const startX = event.clientX;
+      const sidebar = handle.parentElement === shell;
+      const property = sidebar ? '--sidebar-width'
+        : (handle.classList.contains('level-resizer') ? '--level-width' : '--mapping-width');
+      const target = sidebar ? shell : row;
+      const start = parseFloat(getComputedStyle(target).getPropertyValue(property)) || 280;
+      handle.classList.add('dragging');
+      handle.setPointerCapture(event.pointerId);
+      const move = function (next) {
+        target.style.setProperty(property, Math.max(180, start + next.clientX - startX) + 'px');
+        scheduleMappingLines();
+      };
+      const done = function () {
+        handle.classList.remove('dragging');
+        handle.removeEventListener('pointermove', move);
+        handle.removeEventListener('pointerup', done);
+      };
+      handle.addEventListener('pointermove', move);
+      handle.addEventListener('pointerup', done);
+    });
+  });
+}
+function scheduleMappingLines() {
+  if (mappingFrame) { return; }
+  mappingFrame = requestAnimationFrame(function () {
+    mappingFrame = 0;
+    drawMappingLines();
+  });
+}
+function currentLevelFilter(row) { return row && row.dataset.levelFilterState || 'all'; }
+function applyLevelFilter(row, level) {
+  if (!row) { return; }
+  row.dataset.levelFilterState = level || 'all';
+  const selected = currentLevelFilter(row);
+  row.querySelectorAll('[data-level-filter]').forEach(function (control) {
+    control.classList.toggle('level-filter-active', control.dataset.levelFilter === selected);
+    control.setAttribute('aria-pressed', String(control.dataset.levelFilter === selected));
+  });
+  row.querySelectorAll('.mapping-pane li[data-iri]').forEach(function (li) {
+    li.hidden = selected !== 'all'
+      && !li.querySelector('input[data-level-map][value="' + CSS.escape(selected) + '"]:checked');
+  });
+  scheduleMappingLines();
+}
+function refreshMappingSummary(li) {
+  if (!li) { return; }
+  const summary = li.querySelector('.mapping-summary-text');
+  if (!summary) { return; }
+  const levels = Array.from(li.querySelectorAll('input[data-level-map]:checked'))
+    .map(function (input) { return input.value; });
+  const unassigned = Boolean(li.querySelector('input[data-unassigned]:checked'));
+  summary.textContent = levels.length ? levels.join(' · ') : (unassigned ? 'Unassigned' : 'Choose level');
+}
+function mappingState(li) {
+  return {
+    levels: Array.from(li.querySelectorAll('input[data-level-map]:checked')).map(function (input) {
+      return input.value;
+    }),
+    unassigned: Boolean(li.querySelector('input[data-unassigned]:checked')),
+    verdict: li.querySelector('input[type=radio]:checked')?.value || ''
+  };
+}
+function restoreMappingState(li, state) {
+  const levels = Array.isArray(state.levels) ? state.levels : [];
+  li.querySelectorAll('input[data-level-map]').forEach(function (input) {
+    input.checked = levels.includes(input.value);
+  });
+  const unassigned = li.querySelector('input[data-unassigned]');
+  if (unassigned) { unassigned.checked = Boolean(state.unassigned); }
+  const verdict = li.querySelector('input[type=radio][value="' + CSS.escape(state.verdict || '') + '"]');
+  if (verdict) { verdict.checked = true; }
+}
+function setMappingRemoved(li, removed) {
+  li.classList.toggle('mapping-removed', removed);
+  li.querySelector('.remove-mapping').textContent = removed ? 'Undo remove' : 'Remove';
+  refreshMappingSummary(li);
+}
+function activate(id, options) {
+  const row = rowById(id);
+  const nav = navById(id);
+  if (!row || !nav || nav.hidden) { return; }
+  activeId = id;
+  rows.forEach(function (entry) { entry.classList.toggle('active', entry === row); });
+  navItems.forEach(function (entry) { entry.classList.toggle('active', entry === nav); });
+  stage.classList.remove('empty');
+  if (!options || options.scroll !== false) { nav.scrollIntoView({block: 'nearest'}); }
+  const firstConcept = row.querySelector('.mapping-pane li[data-iri], .mapping-pane [data-concept-iri]');
+  showConcept(firstConcept);
+  applyLevelFilter(row, 'all');
+}
+function visibleItems() { return navItems.filter(function (item) { return !item.hidden; }); }
+function move(delta) {
+  const visible = visibleItems();
+  if (!visible.length) { return; }
+  const current = visible.findIndex(function (item) { return item.getAttribute('data-target') === activeId; });
+  const next = Math.min(Math.max(current + delta, 0), visible.length - 1);
+  activate(visible[next].getAttribute('data-target'));
+}
+function applyFilters() {
+  const query = document.getElementById('review-search').value.trim().toLowerCase();
+  const status = document.getElementById('status-filter').value;
+  navItems.forEach(function (item) {
+    const textMatch = !query || item.dataset.search.indexOf(query) !== -1;
+    const decided = item.dataset.currentlyDecided === 'true';
+    const statusMatch = status === 'all'
+      || (status === 'needs-eye' && item.dataset.needsEye === 'true')
+      || (status === 'decided' && decided)
+      || (status === 'undecided' && !decided);
+    item.hidden = !(textMatch && statusMatch);
+  });
+  document.querySelectorAll('.nav-group').forEach(function (group) {
+    group.hidden = !group.querySelector('.review-item:not([hidden])');
+  });
+  const visible = visibleItems();
+  if (!visible.length) {
+    rows.forEach(function (row) { row.classList.remove('active'); });
+    stage.classList.add('empty');
+    document.getElementById('mapping-lines').innerHTML = '';
+  } else if (!navById(activeId) || navById(activeId).hidden) {
+    activate(visible[0].getAttribute('data-target'), {scroll: false});
+  }
+}
+function downloadDecisions() {
+  const decisions = refresh();
+  flushDraft(decisions);
+  const blob = new Blob([document.getElementById('out').value + '\\n'], {type: 'application/json'});
+  const link = document.createElement('a');
+  link.href = URL.createObjectURL(blob);
+  link.download = 'folio-eval-decisions.json';
+  link.click();
+  URL.revokeObjectURL(link.href);
+}
+function copyDecisions() {
   const out = document.getElementById('out');
-  refresh();
+  const decisions = refresh();
+  flushDraft(decisions);
   out.focus();
   out.select();
   out.setSelectionRange(0, out.value.length);
@@ -613,14 +1212,156 @@ document.getElementById('copy').addEventListener('click', function () {
   };
   if (navigator.clipboard && navigator.clipboard.writeText) {
     navigator.clipboard.writeText(out.value).then(done, function () {
-      try { document.execCommand('copy') ? done() : manual(); } catch (e) { manual(); }
+      try { document.execCommand('copy') ? done() : manual(); } catch (error) { manual(); }
     });
     return;
   }
-  try { document.execCommand('copy') ? done() : manual(); } catch (e) { manual(); }
+  try { document.execCommand('copy') ? done() : manual(); } catch (error) { manual(); }
+}
+
+document.querySelector('.review-sidebar').addEventListener('click', function (event) {
+  const item = event.target.closest('.review-item[data-target]');
+  if (item) { activate(item.getAttribute('data-target')); }
 });
+stage.addEventListener('click', function (event) {
+  const levelFilter = event.target.closest('[data-level-filter]');
+  if (levelFilter) {
+    if (event.target.matches('textarea, input')) { return; }
+    applyLevelFilter(levelFilter.closest('.row[data-decision-id]'), levelFilter.dataset.levelFilter);
+    return;
+  }
+  const add = event.target.closest('.add-mapping');
+  if (add) {
+    const row = add.closest('.row[data-decision-id]');
+    const panel = add.closest('.add-concept');
+    const label = panel.querySelector('.add-label').value.trim();
+    const iri = panel.querySelector('.add-iri').value.trim();
+    if (!label || iri.indexOf('https://folio.openlegalstandard.org/') !== 0) {
+      panel.querySelector('.add-iri').setCustomValidity('Enter a full FOLIO concept URL and label.');
+      panel.querySelector('.add-iri').reportValidity();
+      return;
+    }
+    panel.querySelector('.add-iri').setCustomValidity('');
+    addConceptRow(row, label, iri);
+    panel.querySelector('.add-label').value = ''; panel.querySelector('.add-iri').value = '';
+    scheduleMappingLines();
+    const decisions = refresh(); persistDraft(decisions); updateProgress(); applyFilters(); return;
+  }
+  const remove = event.target.closest('.remove-mapping');
+  if (remove) {
+    const li = remove.closest('li[data-iri]');
+    if (li.classList.contains('mapping-removed')) {
+      restoreMappingState(li, JSON.parse(li.dataset.previousState || '{}'));
+      setMappingRemoved(li, false);
+    } else {
+      li.dataset.previousState = JSON.stringify(mappingState(li));
+      li.querySelectorAll('input[data-level-map], input[data-unassigned]').forEach(function (input) {
+        input.checked = false;
+      });
+      const reject = li.querySelector('input[value="remove"], input[value="not_gold"]');
+      if (reject) { reject.checked = true; }
+      setMappingRemoved(li, true);
+    }
+    const mappingRow = li.closest('.row[data-decision-id]');
+    applyLevelFilter(mappingRow, currentLevelFilter(mappingRow));
+    scheduleMappingLines();
+    const decisions = refresh(); persistDraft(decisions); updateProgress(); applyFilters(); return;
+  }
+  const confirm = event.target.closest('.mark-reviewed');
+  if (confirm) {
+    const row = confirm.closest('.row[data-decision-id]');
+    const nav = row ? navById(row.getAttribute('data-decision-id')) : null;
+    if (row && nav && rowComplete(row)) {
+      nav.dataset.reviewed = 'true';
+      const decisions = refresh();
+      persistDraft(decisions);
+      updateProgress();
+      applyFilters();
+    } else {
+      confirm.textContent = 'Answer every decision first';
+    }
+    return;
+  }
+  const concept = event.target.closest('li[data-iri], [data-concept-iri]');
+  if (!concept || !concept.closest('.mapping-pane')) { return; }
+  if (event.target.matches('input, label')) {
+    requestAnimationFrame(function () { showConcept(concept); });
+  } else {
+    showConcept(concept);
+  }
+});
+document.getElementById('review-search').addEventListener('input', applyFilters);
+document.getElementById('status-filter').addEventListener('change', applyFilters);
+document.getElementById('previous-row').addEventListener('click', function () { move(-1); });
+document.getElementById('next-row').addEventListener('click', function () { move(1); });
+document.getElementById('download').addEventListener('click', downloadDecisions);
+document.getElementById('copy').addEventListener('click', copyDecisions);
+document.getElementById('theme-toggle').addEventListener('click', function () {
+  setTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark');
+});
+document.addEventListener('change', function (event) {
+  const row = event.target.closest('.row[data-decision-id]');
+  const nav = row ? navById(row.getAttribute('data-decision-id')) : null;
+  if (nav && row) { nav.dataset.reviewed = String(rowComplete(row)); }
+  if (row && event.target.matches('input[data-kind=pairing]')) {
+    row.querySelectorAll('.pairing .opt').forEach(function (opt) {
+      opt.classList.toggle('picked', opt.getAttribute('data-choice') === event.target.value);
+    });
+  }
+  if (event.target.matches('input[data-unassigned]') && event.target.checked) {
+    event.target.closest('li[data-iri]').querySelectorAll('input[data-level-map]').forEach(function (input) {
+      input.checked = false;
+    });
+  }
+  if (event.target.matches('input[data-level-map]') && event.target.checked) {
+    const unassigned = event.target.closest('li[data-iri]').querySelector('input[data-unassigned]');
+    if (unassigned) { unassigned.checked = false; }
+  }
+  if (event.target.matches('input[data-level-map], input[data-unassigned]')) {
+    refreshMappingSummary(event.target.closest('li[data-iri]'));
+  }
+  if (event.target.matches('input[type=radio][value="remove"], input[type=radio][value="not_gold"]')) {
+    event.target.closest('li[data-iri]').querySelectorAll('input[data-level-map], input[data-unassigned]')
+      .forEach(function (input) { input.checked = false; });
+    scheduleMappingLines();
+  }
+  const decisions = refresh();
+  if (row && currentLevelFilter(row) !== 'all') {
+    applyLevelFilter(row, currentLevelFilter(row));
+  }
+  persistDraft(decisions);
+  updateProgress();
+  applyFilters();
+});
+document.addEventListener('input', function (event) {
+  if (event.target.matches('textarea.note')) {
+    scheduleDraft();
+  }
+});
+document.addEventListener('focusout', function (event) {
+  if (event.target.matches('textarea.note')) { flushDraft(); }
+});
+document.addEventListener('keydown', function (event) {
+  if (event.target.matches('input, textarea, select')) { return; }
+  if (event.key === 'ArrowDown' || event.key.toLowerCase() === 'j') { event.preventDefault(); move(1); }
+  if (event.key === 'ArrowUp' || event.key.toLowerCase() === 'k') { event.preventDefault(); move(-1); }
+});
+window.addEventListener('resize', scheduleMappingLines);
+window.addEventListener('beforeunload', function () { flushDraft(); });
+document.querySelector('.review-sidebar').addEventListener('scroll', scheduleMappingLines, {passive: true});
+stage.addEventListener('scroll', scheduleMappingLines, {passive: true, capture: true});
+
+restoreTheme();
+restoreDraft();
+document.querySelectorAll('.mapping-pane li[data-iri]').forEach(refreshMappingSummary);
+initPaneResizers();
 refresh();
+updateProgress();
+applyFilters();
+const firstVisible = visibleItems()[0];
+if (firstVisible) { activate(firstVisible.getAttribute('data-target'), {scroll: false}); }
 """
+)
 
 
 def _mapping(value: object) -> Mapping[str, object]:
@@ -631,6 +1372,7 @@ def _mapping(value: object) -> Mapping[str, object]:
 def _grade_list(
     entries: Sequence[Mapping[str, object]],
     *,
+    row: PacketRow,
     decision_id: str,
     kind: str,
     prefill: Mapping[str, object],
@@ -653,7 +1395,7 @@ def _grade_list(
     for position, entry in enumerate(entries):
         iri = str(entry.get("iri", ""))
         name = f"{kind}|{decision_id}|{position}"
-        bits = [f'<strong>{_esc(entry.get("label", ""))}</strong> <code>{_esc(_short(iri))}</code>']
+        bits = [f"<strong>{_esc(entry.get('label', ''))}</strong> <code>{_esc(_short(iri))}</code>"]
         if kind != "gold":
             score = entry.get("score")
             if score is not None:
@@ -669,17 +1411,22 @@ def _grade_list(
         elif entry.get("column"):
             bits.append(f'<span class="tag">{_esc(entry["column"])}</span>')
         line = " ".join(bits)
-        if entry.get("definition"):
-            line += f'<span class="def">{_esc(entry["definition"])}</span>'
         picked = str(prefill.get(iri, "")) if isinstance(prefill, Mapping) else ""
+        if not picked:
+            picked = "keep" if kind == "gold" else "not_gold"
         radios = "".join(
             f'<label><input type="radio" name="{_esc(name)}" value="{value}"'
-            f'{" checked" if picked == value else ""}> {label}</label>'
+            f"{' checked' if picked == value else ''}> {label}</label>"
             for value, label in choices
         )
         items.append(
-            f'<li data-iri="{_esc(iri)}"><div>{line}</div>'
-            f'<div class="verdict">{radios}</div></li>'
+            f'<li data-iri="{_esc(iri)}" data-kind="{_esc(kind)}" '
+            f'data-label="{_esc(entry.get("label", ""))}" '
+            f'data-definition="{_esc(entry.get("definition", ""))}" '
+            f'data-score="{_esc(entry.get("score", ""))}" '
+            f'data-branch="{_esc(entry.get("branch", ""))}"><div class="concept-row-head">'
+            f'<div>{line}</div><div class="verdict">{radios}</div></div>'
+            f"{_level_assignment_controls(row, entry)}</li>"
         )
     return '<ul class="grade">' + "".join(items) + "</ul>"
 
@@ -693,7 +1440,7 @@ def _paths(row: PacketRow) -> str:
         if not isinstance(instance, Mapping):
             continue
         path = " \u203a ".join(_strings(instance.get("path"))) or "(root)"
-        chips.append(f'<span>L{_esc(instance.get("level", ""))} {_esc(path)}</span>')
+        chips.append(f"<span>L{_esc(instance.get('level', ''))} {_esc(path)}</span>")
     more = len(instances) - len(chips)
     if more > 0:
         chips.append(f"<span>+{more} more</span>")
@@ -712,6 +1459,124 @@ def _strings(value: object) -> list[str]:
     if not isinstance(value, (list, tuple)):
         return []
     return [str(entry) for entry in value]
+
+
+def _input_levels(row: PacketRow) -> tuple[str, ...]:
+    """The visible source hierarchy, one adjudicable level per breadcrumb segment."""
+    parts = tuple(part.strip() for part in row.input_text.split(">") if part.strip())
+    if parts:
+        return parts
+    path = tuple((*row.ancestor_path, row.surface_label))
+    return tuple(part for part in path if part)
+
+
+def _level_pane(row: PacketRow) -> str:
+    levels = _input_levels(row)
+    folded = row.extra.get("folded")
+    folded_map = folded if isinstance(folded, Mapping) else {}
+    notes_raw = folded_map.get("level_notes")
+    notes = notes_raw if isinstance(notes_raw, Mapping) else {}
+    nodes = []
+    for index, label in enumerate(levels, start=1):
+        nodes.append(
+            f'<section class="level-node" data-level-id="L{index}">'
+            f'<button class="level-filter-button" type="button" data-level-filter="L{index}" '
+            f'aria-label="Show mappings for L{index}"><span class="level-number">L{index}</span>'
+            f"<strong>{_esc(label)}</strong></button>"
+            f'<textarea class="note level-note" rows="2" name="level-note|{_esc(row.decision_id)}|L{index}" '
+            f'aria-label="note on L{index} mapping" placeholder="note on this level&rsquo;s mappings (optional)">'
+            f"{_esc(notes.get(f'L{index}', ''))}</textarea>"
+            "</section>"
+        )
+    return (
+        '<div class="level-pane"><p class="pane-heading">Input hierarchy · map each level</p>'
+        '<button class="secondary level-filter-all level-filter-active" type="button" '
+        'data-level-filter="all">See all levels</button>' + "".join(nodes) + "</div>"
+    )
+
+
+def _system_level_mappings(row: PacketRow) -> Mapping[str, object]:
+    """Read the packet builder's atomized matcher/workbook baseline."""
+    raw = row.extra.get("system_level_mappings")
+    return raw if isinstance(raw, Mapping) else {}
+
+
+def _explicit_level_mappings(row: PacketRow) -> Mapping[str, object] | None:
+    """Return a human-folded mapping when one exists; even an empty object is authoritative."""
+    if "level_mappings" in row.extra:
+        raw = row.extra.get("level_mappings")
+        return raw if isinstance(raw, Mapping) else {}
+    folded = row.extra.get("folded")
+    if isinstance(folded, Mapping) and "level_mappings" in folded:
+        raw = folded.get("level_mappings")
+        return raw if isinstance(raw, Mapping) else {}
+    return None
+
+
+def _review_baseline(row: PacketRow) -> Mapping[str, object]:
+    """One canonical baseline for rendering controls and diff-only decision export."""
+    raw = row.extra.get("baseline")
+    if isinstance(raw, Mapping):
+        return raw
+    if row.section == "pairing":
+        return {}
+    gold = tuple(row.gold) or tuple(_records(row.extra.get("gold_ref")))
+    pipeline = tuple(row.pipeline)
+    if not pipeline:
+        pipeline_ref = row.extra.get("pipeline_ref")
+        if isinstance(pipeline_ref, Mapping):
+            pipeline = tuple(_records(pipeline_ref.get("candidates")))
+    return {
+        "gold": {str(entry.get("iri", "")): "keep" for entry in gold},
+        "pipeline": {str(entry.get("iri", "")): "not_gold" for entry in pipeline},
+        "level_mappings": _system_level_mappings(row),
+    }
+
+
+def _level_assignment_controls(row: PacketRow, entry: Mapping[str, object]) -> str:
+    """Expose the system's atomized input-level mapping, with human-editable assignments."""
+    levels = _input_levels(row)
+    if not levels:
+        return ""
+    iri = str(entry.get("iri", ""))
+    folded = row.extra.get("folded")
+    folded_map = folded if isinstance(folded, Mapping) else {}
+    explicit = _explicit_level_mappings(row)
+    known = explicit if explicit is not None else _system_level_mappings(row)
+    options_raw = folded_map.get("mapping_options")
+    options = options_raw if isinstance(options_raw, Mapping) else {}
+    unassigned = iri in _strings(options.get("unassigned"))
+    labels = "".join(
+        f'<label class="level-choice"><input type="checkbox" data-level-map '
+        f'data-iri="{_esc(iri)}" value="L{index}"'
+        f"{' checked' if iri in _strings(known.get(f'L{index}')) else ''}>"
+        f" L{index} · {_esc(level_label)}</label>"
+        for index, level_label in enumerate(levels, start=1)
+    )
+    assigned = [
+        f"L{index}"
+        for index in range(1, len(levels) + 1)
+        if iri in _strings(known.get(f"L{index}"))
+    ]
+    has_known = bool(assigned)
+    if explicit is not None:
+        state = "Reviewed level mapping" if has_known or unassigned else "No reviewed mapping"
+    else:
+        state = "System level mapping" if has_known else "No system level mapping · choose"
+    summary = " · ".join(assigned) if assigned else ("Unassigned" if unassigned else "Choose level")
+    definition = str(entry.get("definition", ""))
+    return (
+        '<details class="concept-details"><summary>Mapping: <span class="mapping-summary-text">'
+        + _esc(summary)
+        + "</span> · expand</summary>"
+        + (f'<span class="def">{_esc(definition)}</span>' if definition else "")
+        + f'<div class="level-choices"><span class="mapping-state">{state}:</span>'
+        + labels
+        + f'<label class="level-choice"><input type="checkbox" data-unassigned data-iri="{_esc(iri)}"'
+        + (" checked" if unassigned else "")
+        + "> Unassigned</label>"
+        + '<button class="secondary remove-mapping" type="button">Remove</button></div></details>'
+    )
 
 
 # --------------------------------------------------------------------------------------
@@ -735,15 +1600,13 @@ def _source_panel(row: PacketRow) -> str:
                 f'<td class="filled">{_esc(cell)}</td>' if cell.strip() else "<td></td>"
                 for cell in cells
             )
-            body.append(
-                f'<tr><th class="rownum">{_esc(record.get("row", ""))}</th>{rendered}</tr>'
-            )
+            body.append(f'<tr><th class="rownum">{_esc(record.get("row", ""))}</th>{rendered}</tr>')
         if not body:
             continue
         tables.append(
             '<div class="tablewrap"><table class="sheetgrid"><thead><tr>'
             f'<th class="rownum">row</th>{head}</tr></thead>'
-            f'<tbody>{"".join(body)}</tbody></table></div>'
+            f"<tbody>{''.join(body)}</tbody></table></div>"
         )
     footnotes: list[str] = []
     unlocated = _strings(grid.get("unlocated"))
@@ -779,8 +1642,8 @@ def _gold_reference(entries: Sequence[Mapping[str, object]]) -> str:
     items: list[str] = []
     for entry in entries:
         bits = [
-            f'<strong>{_esc(entry.get("label", ""))}</strong> '
-            f'<code>{_esc(_short(str(entry.get("iri", ""))))}</code>'
+            f"<strong>{_esc(entry.get('label', ''))}</strong> "
+            f"<code>{_esc(_short(str(entry.get('iri', ''))))}</code>"
         ]
         if entry.get("column"):
             bits.append(f'<span class="tag">{_esc(entry["column"])}</span>')
@@ -801,14 +1664,14 @@ def _pipeline_reference(reference: object) -> str:
     items: list[str] = []
     for entry in candidates:
         committed = bool(entry.get("committed"))
-        score = f'score {_esc(entry.get("score"))}'
+        score = f"score {_esc(entry.get('score'))}"
         probability = entry.get("probability")
         if probability is not None:
             score += f" · p={_esc(probability)}"
         bits = [
             f'<span class="tag">#{_esc(entry.get("rank", ""))}</span>',
-            f'<strong>{_esc(entry.get("label", ""))}</strong>',
-            f'<code>{_esc(_short(str(entry.get("iri", ""))))}</code>',
+            f"<strong>{_esc(entry.get('label', ''))}</strong>",
+            f"<code>{_esc(_short(str(entry.get('iri', ''))))}</code>",
             f'<span class="tag">{score}</span>',
             '<span class="tag good">committed answer</span>'
             if committed
@@ -821,7 +1684,7 @@ def _pipeline_reference(reference: object) -> str:
     top_k = reference.get("top_k") or 0
     lede = (
         f'<p class="note">Committed answer set = the top {_esc(top_k)} of this ranked list '
-        f'(KTD2 answer rule); showing {_esc(len(candidates))} of {_esc(total)} ranked candidates.'
+        f"(KTD2 answer rule); showing {_esc(len(candidates))} of {_esc(total)} ranked candidates."
         "</p>"
     )
     return lede + '<ul class="iris">' + "".join(items) + "</ul>"
@@ -837,7 +1700,7 @@ def _workbook_line(entries: Sequence[Mapping[str, object]]) -> str:
     if not entries:
         return '<p class="note workbook">Workbook curation: none — this input cell carried no curated mapping.</p>'
     labels = "; ".join(
-        f'{_esc(entry.get("label", ""))} <code>{_esc(_short(str(entry.get("iri", ""))))}</code>'
+        f"{_esc(entry.get('label', ''))} <code>{_esc(_short(str(entry.get('iri', ''))))}</code>"
         for entry in entries
     )
     return f'<p class="note workbook">Workbook curation: {labels}</p>'
@@ -859,15 +1722,15 @@ def _reference_panels(row: PacketRow, *, current_version: int = 0) -> str:
         context = _records(row.extra.get("input_context"))
         gold_body = "".join(
             f'<div class="perinput"><h5>L{_esc(entry.get("level", ""))} · '
-            f'{_esc(entry.get("text", ""))}</h5>'
-            f'{_gold_reference(_records(entry.get("gold")))}'
-            f'{_workbook_line(_records(entry.get("workbook_gold")))}</div>'
+            f"{_esc(entry.get('text', ''))}</h5>"
+            f"{_gold_reference(_records(entry.get('gold')))}"
+            f"{_workbook_line(_records(entry.get('workbook_gold')))}</div>"
             for entry in context
         )
         pipe_body = "".join(
             f'<div class="perinput"><h5>L{_esc(entry.get("level", ""))} · '
-            f'{_esc(entry.get("text", ""))}</h5>'
-            f'{_pipeline_reference(entry.get("pipeline"))}</div>'
+            f"{_esc(entry.get('text', ''))}</h5>"
+            f"{_pipeline_reference(entry.get('pipeline'))}</div>"
             for entry in context
         )
     else:
@@ -876,7 +1739,9 @@ def _reference_panels(row: PacketRow, *, current_version: int = 0) -> str:
             _records(gold_raw) if isinstance(gold_raw, (list, tuple)) else list(row.gold)
         )
         workbook_raw = row.extra.get("workbook_gold")
-        gold_body += _workbook_line(_records(workbook_raw) if isinstance(workbook_raw, (list, tuple)) else [])
+        gold_body += _workbook_line(
+            _records(workbook_raw) if isinstance(workbook_raw, (list, tuple)) else []
+        )
         pipe_body = _pipeline_reference(row.extra.get("pipeline_ref"))
     return (
         f'<section class="panel ref-gold"><h4>{_esc(gold_title)}'
@@ -914,8 +1779,13 @@ def _tag_chips(entry: Mapping[str, object]) -> str:
         iri = str(tag.get("iri", ""))
         code = f" <code>{_esc(_short(iri))}</code>" if iri else ""
         css = "concept" if iri else "concept unresolved"
+        data = (
+            f' data-concept-iri="{_esc(iri)}" data-label="{_esc(tag.get("label", ""))}"'
+            if iri
+            else ""
+        )
         chips.append(
-            f'<span class="{css}"><strong>{_esc(tag.get("label", ""))}</strong>{code}</span>'
+            f'<span class="{css}"{data}><strong>{_esc(tag.get("label", ""))}</strong>{code}</span>'
         )
     return f'<span class="taglist">{"".join(chips)}</span>'
 
@@ -938,7 +1808,7 @@ def _output_cells(blocks: Sequence[Mapping[str, object]]) -> str:
 
 
 def _applied_reading_panel(assignments: Mapping[str, object]) -> str:
-    """"Your ruling, applied" — the row's live per-input gold, read straight off current gold.
+    """ "Your ruling, applied" — the row's live per-input gold, read straight off current gold.
 
     Shown on a folded pairing row instead of trusting either canned reading's stale pre-fold
     label: Damien's own edits (``edited_iris``) can leave the live state matching neither
@@ -952,12 +1822,12 @@ def _applied_reading_panel(assignments: Mapping[str, object]) -> str:
         return ""
     lines = "".join(
         f'<li class="instance"><strong>L{_esc(entry.get("level", ""))} '
-        f'{_esc(entry.get("input", ""))}</strong> → ' + _tag_chips(entry) + "</li>"
+        f"{_esc(entry.get('input', ''))}</strong> → " + _tag_chips(entry) + "</li>"
         for entry in entries
     )
     return (
         '<div class="opt applied-reading" data-choice="applied">'
-        "<h4>Your ruling, applied<span class=\"tag done\">live in gold now</span></h4>"
+        '<h4>Your ruling, applied<span class="tag done">live in gold now</span></h4>'
         f'<ul class="iris">{lines}</ul>'
         "</div>"
     )
@@ -1010,14 +1880,12 @@ def _pairing_readings(row: PacketRow) -> str:
         for entry in _records(assignments.get(reading)):
             lines.append(
                 f'<li class="instance"><strong>L{_esc(entry.get("level", ""))} '
-                f'{_esc(entry.get("input", ""))}</strong> → '
-                + _tag_chips(entry)
-                + "</li>"
+                f"{_esc(entry.get('input', ''))}</strong> → " + _tag_chips(entry) + "</li>"
             )
         broken = [name.replace("_", " ") for name in _strings(violations.get(key))]
         flag = (
             '<p class="note"><span class="tag needseye">dis-preferred</span> '
-            f'{_esc(", ".join(broken))}</p>'
+            f"{_esc(', '.join(broken))}</p>"
             if broken
             else ""
         )
@@ -1035,7 +1903,7 @@ def _pairing_readings(row: PacketRow) -> str:
     if not choice and is_folded:
         out.append(
             '<p class="note">Neither candidate reading matches what is live in gold today — see '
-            '&ldquo;Your ruling, applied&rdquo; above. Pick one below only to change it.</p>'
+            "&ldquo;Your ruling, applied&rdquo; above. Pick one below only to change it.</p>"
         )
     elif not choice:
         out.append(
@@ -1056,8 +1924,8 @@ def _consistency_block(row: PacketRow) -> str:
         labels = ", ".join(_strings(instance.get("gold_labels_raw")))
         lines.append(
             f'<li class="instance"><code>row {_esc(instance.get("row", ""))}</code> '
-            f'L{_esc(instance.get("level", ""))} {_esc(path)} → '
-            f'{_esc(labels or "— no mapping —")}</li>'
+            f"L{_esc(instance.get('level', ''))} {_esc(path)} → "
+            f"{_esc(labels or '— no mapping —')}</li>"
         )
     return (
         '<div class="block"><h4>How this cell was answered in each place</h4>'
@@ -1103,7 +1971,11 @@ def _improvement_block(
         if proposal.get("method"):
             bits.append(
                 f'<span class="tag">via {_esc(proposal["method"])}'
-                + (f' &ldquo;{_esc(proposal.get("query", ""))}&rdquo;' if proposal.get("query") else "")
+                + (
+                    f" &ldquo;{_esc(proposal.get('query', ''))}&rdquo;"
+                    if proposal.get("query")
+                    else ""
+                )
                 + "</span>"
             )
         lines.append("".join(bits))
@@ -1112,6 +1984,7 @@ def _improvement_block(
         '<span class="tag machine">machine-proposed</span></h4>'
         + _grade_list(
             row.pipeline,
+            row=row,
             decision_id=row.decision_id,
             kind="pipeline",
             prefill=pipe_prefill or {},
@@ -1140,13 +2013,11 @@ def _folded_panel(record: Mapping[str, object]) -> str:
         bits.append(f'<p class="note">{_esc(record["summary"])}</p>')
     for label, key in (("Your note", "note"), ("On the gold", "gold_note")):
         if record.get(key):
-            bits.append(
-                f'<p class="yournote"><strong>{label}:</strong> {_esc(record[key])}</p>'
-            )
+            bits.append(f'<p class="yournote"><strong>{label}:</strong> {_esc(record[key])}</p>')
     if record.get("gold_version"):
         bits.append(
             f'<p class="note">applied to gold v{_esc(record["gold_version"])}'
-            + (f' ({_esc(record["gold_id"])})' if record.get("gold_id") else "")
+            + (f" ({_esc(record['gold_id'])})" if record.get("gold_id") else "")
             + " — everything below is pre-filled to match; change anything to submit an "
             "amendment.</p>"
         )
@@ -1158,7 +2029,13 @@ def _folded_panel(record: Mapping[str, object]) -> str:
 
 
 def _textarea(
-    css_class: str, name_prefix: str, row: PacketRow, aria_label: str, placeholder: str, *, initial: str = ""
+    css_class: str,
+    name_prefix: str,
+    row: PacketRow,
+    aria_label: str,
+    placeholder: str,
+    *,
+    initial: str = "",
 ) -> str:
     """One note field, pre-filled with ``initial`` when this row was already decided.
 
@@ -1186,13 +2063,17 @@ def _row_note(row: PacketRow, *, initial: str = "") -> str:
     )
 
 
-def _proposed_panel(row: PacketRow) -> str:
+def _proposed_panel(row: PacketRow, *, baseline: Mapping[str, object]) -> str:
     prefill_raw = row.extra.get("prefill")
     prefill: Mapping[str, object] = prefill_raw if isinstance(prefill_raw, Mapping) else {}
     folded_raw = row.extra.get("folded")
     folded: Mapping[str, object] = folded_raw if isinstance(folded_raw, Mapping) else {}
-    baseline_raw = row.extra.get("baseline")
-    baseline: Mapping[str, object] = baseline_raw if isinstance(baseline_raw, Mapping) else {}
+    gold_entries = tuple(row.gold) or tuple(_records(row.extra.get("gold_ref")))
+    pipeline_entries = tuple(row.pipeline)
+    if not pipeline_entries:
+        pipeline_ref = row.extra.get("pipeline_ref")
+        if isinstance(pipeline_ref, Mapping):
+            pipeline_entries = tuple(_records(pipeline_ref.get("candidates")))
     # A row already folded pre-fills from what is actually live in gold (the baseline), which
     # takes precedence over an older carried-forward ruling — it is newer and it is the truth.
     gold_prefill = _mapping(baseline.get("gold")) or _mapping(prefill.get("gold"))
@@ -1201,13 +2082,23 @@ def _proposed_panel(row: PacketRow) -> str:
     if row.section == "pairing":
         body.append(_pairing_readings(row))
     elif row.section == "improvement":
-        body.append(_improvement_block(row, pipe_prefill=pipe_prefill, initial=str(folded.get("pipeline_note", ""))))
+        body.append(
+            _improvement_block(
+                row, pipe_prefill=pipe_prefill, initial=str(folded.get("pipeline_note", ""))
+            )
+        )
     else:
         if row.section == "consistency":
             body.append(_consistency_block(row))
         body.append(
             '<div class="block gold"><h4>Gold — keep or remove</h4>'
-            + _grade_list(row.gold, decision_id=row.decision_id, kind="gold", prefill=gold_prefill)
+            + _grade_list(
+                gold_entries,
+                row=row,
+                decision_id=row.decision_id,
+                kind="gold",
+                prefill=gold_prefill,
+            )
             + _textarea(
                 "note gold-note",
                 "gold-note",
@@ -1226,7 +2117,11 @@ def _proposed_panel(row: PacketRow) -> str:
         body.append(
             f'<div class="block pipeline"><h4>{_esc(pipeline_title)}</h4>'
             + _grade_list(
-                row.pipeline, decision_id=row.decision_id, kind="pipeline", prefill=pipe_prefill
+                pipeline_entries,
+                row=row,
+                decision_id=row.decision_id,
+                kind="pipeline",
+                prefill=pipe_prefill,
             )
             + _textarea(
                 "note pipeline-note",
@@ -1277,36 +2172,101 @@ def _render_row_v2(row: PacketRow, *, current_version: int = 0) -> str:
     if row.extra.get("machine_proposed"):
         header_bits.append('<span class="tag machine">machine-proposed</span>')
 
-    body: list[str] = [_paths(row)]
+    detail: list[str] = [_paths(row)]
     if row.notes_text:
-        body.append(f'<div class="notes">{_esc(row.notes_text)}</div>')
+        detail.append(f'<div class="notes">{_esc(row.notes_text)}</div>')
     if row.extra.get("occurrences"):
-        body.append(f'<p class="note">appears in {_esc(row.extra["occurrences"])} gold cell(s)</p>')
+        detail.append(
+            f'<p class="note">appears in {_esc(row.extra["occurrences"])} gold cell(s)</p>'
+        )
     if folded:
-        body.append(_folded_panel(folded))
-    body.append(_source_panel(row))
-    body.append(_reference_panels(row, current_version=current_version))
+        detail.append(_folded_panel(folded))
+    detail.append(_source_panel(row))
+    detail.append(_reference_panels(row, current_version=current_version))
     # Every input stays enabled, folded or not (Damien, 2026-07-28) — a folded row differs only in
     # arriving pre-filled (``_proposed_panel`` reads ``row.extra["baseline"]``) and in carrying the
     # ``data-baseline`` JSON below, which the sheet's own JS diffs a re-submission against so an
     # untouched row still folds to nothing.
-    body.append(_proposed_panel(row))
-    body.append(f'<p class="note mono">{_esc(row.decision_id)}</p>')
+    baseline_raw = _review_baseline(row)
+    proposed = _proposed_panel(row, baseline=baseline_raw)
+    add_concept = (
+        '<section class="add-concept"><strong>Add FOLIO concept</strong>'
+        '<p class="note">Paste a FOLIO URL/IRI and label, then assign it to one or more levels.</p>'
+        '<div class="add-concept-fields"><input class="add-label" type="text" placeholder="Concept label" '
+        'aria-label="FOLIO concept label"><input class="add-iri" type="url" '
+        'placeholder="https://folio.openlegalstandard.org/…" aria-label="FOLIO concept URL or IRI">'
+        '<button class="secondary add-mapping" type="button">Add</button></div></section>'
+    )
+    detail.append(f'<p class="note mono">{_esc(row.decision_id)}</p>')
 
-    baseline_raw = row.extra.get("baseline")
     baseline_attr = (
-        f' data-baseline="{_esc(json.dumps(baseline_raw, sort_keys=True))}"'
-        if isinstance(baseline_raw, Mapping)
-        else ""
+        f' data-baseline="{_esc(json.dumps(baseline_raw, sort_keys=True))}"' if baseline_raw else ""
     )
     return (
         f'<article class="row lvl {level_class}{" applied" if folded else ""}" '
         f'data-section="{_esc(row.section)}"{baseline_attr} '
         f'data-decision-id="{_esc(row.decision_id)}">'
-        f'<header><h3>{_esc(row.surface_label)}</h3><div>{"".join(header_bits)}</div></header>'
-        + "".join(body)
+        f"<header><h3>{_esc(row.surface_label)}</h3><div>{''.join(header_bits)}</div></header>"
+        + _level_pane(row)
+        + '<div class="pane-resizer level-resizer" role="separator" aria-label="Resize input hierarchy pane"></div>'
+        + '<div class="mapping-pane"><p class="pane-heading">Mapped outputs · decide and assign</p>'
+        + proposed
+        + add_concept
+        + '<button class="secondary mark-reviewed" type="button">Mark reviewed &amp; continue</button>'
+        + '</div><div class="pane-resizer mapping-resizer" role="separator" aria-label="Resize mapped outputs pane"></div>'
+        + '<div class="detail-pane"><section class="concept-inspector" aria-live="polite">'
+        + '<h4>Select a mapped concept</h4><p class="note">Its definition, source, and current decision will appear here.</p></section>'
+        + '<p class="pane-heading">Input evidence and context</p>'
+        + "".join(detail)
+        + "</div>"
         + "</article>"
     )
+
+
+def _review_navigation(packet: Packet) -> str:
+    """The persistent input hierarchy for the visual 1:many review workspace."""
+    groups: list[str] = []
+    for section in SECTIONS_V2:
+        rows = packet.section(section)
+        if not rows:
+            continue
+        title = SECTION_TITLES_V2[section][0]
+        items: list[str] = []
+        for row in rows:
+            level_raw = row.extra.get("level")
+            level = level_raw if isinstance(level_raw, int) else 1
+            path = " \u203a ".join(_input_levels(row))
+            concept_iris = {str(entry.get("iri", "")) for entry in row.gold}
+            concept_iris.update(
+                str(entry.get("iri", "")) for entry in _records(row.extra.get("gold_ref"))
+            )
+            if row.section == "pairing":
+                for block in _records(row.extra.get("blocks")):
+                    concept_iris.update(
+                        str(tag.get("iri", "")) for tag in _records(block.get("tags"))
+                    )
+            concept_count = len({iri for iri in concept_iris if iri})
+            precheck = row.extra.get("precheck")
+            needs_eye = isinstance(precheck, Mapping) and bool(precheck.get("needs_your_eye"))
+            folded = isinstance(row.extra.get("folded"), Mapping)
+            items.append(
+                f'<button class="review-item level-{min(max(level, 1), 4)}" type="button" '
+                f'data-target="{_esc(row.decision_id)}" data-section="{_esc(section)}" '
+                f'data-needs-eye="{str(needs_eye).lower()}" '
+                f'data-decided="{str(folded).lower()}" '
+                f'data-search="{_esc((path + " " + row.reason_class).lower())}">'
+                f'<span class="item-label">{_esc(row.surface_label)}</span>'
+                f'<span class="item-path">{_esc(path)}</span>'
+                f'<span class="item-state" aria-label="{concept_count} concepts">'
+                f"{'✓' if folded else concept_count}</span></button>"
+            )
+        groups.append(
+            '<section class="nav-group">'
+            f'<div class="nav-group-title"><span>{_esc(title)}</span><span>{len(rows)}</span></div>'
+            + "".join(items)
+            + "</section>"
+        )
+    return "".join(groups)
 
 
 def _pairing_banner(packet: Packet) -> str:
@@ -1318,9 +2278,9 @@ def _pairing_banner(packet: Packet) -> str:
     """
     counts = packet.counts
     picked = (
-        f'{counts.get("pairing_precheck_heuristic", 0)} pre-checked on Reading A (heuristic), '
-        f'{counts.get("pairing_precheck_alternative", 0)} on Reading B (alternative), '
-        f'{counts.get("pairing_needs_your_eye", 0)} badged &ldquo;needs your eye&rdquo;'
+        f"{counts.get('pairing_precheck_heuristic', 0)} pre-checked on Reading A (heuristic), "
+        f"{counts.get('pairing_precheck_alternative', 0)} on Reading B (alternative), "
+        f"{counts.get('pairing_needs_your_eye', 0)} badged &ldquo;needs your eye&rdquo;"
     )
     ruling = str(packet.meta.get("pairing_note", "") or "")
     return (
@@ -1354,10 +2314,24 @@ def _improvement_banner(packet: Packet) -> str:
         "Proposals are confined to the atom branches: Actor / Player, Asset Type, Industry and "
         "Market, Service, Legal Entity, Objectives, Area of Law."
         f'<p class="note">{_esc(items)} cells, {_esc(proposals)} proposals '
-        f'({_esc(per_item)} per cell), capped at {_esc(packet.meta.get("improvement_cap", 40))} '
+        f"({_esc(per_item)} per cell), capped at {_esc(packet.meta.get('improvement_cap', 40))} "
         "cells for this pilot. Accepted concepts land as provenance=damien_corrected; rejected "
         "ones are remembered and never proposed again unchanged.</p>"
         "</div>"
+    )
+
+
+def _overflow_banner(packet: Packet) -> str:
+    """Make a capped suspect queue impossible to mistake for the complete audit."""
+    if not packet.overflow:
+        return ""
+    spilled = ", ".join(
+        f"{_esc(reason)}: {count}" for reason, count in sorted(packet.overflow.items())
+    )
+    return (
+        '<p class="overflow"><strong>More suspect rows remain.</strong> Beyond the '
+        f"{_esc(packet.meta.get('suspect_cap', 50))}-row cap, held for the next batch — "
+        f"{spilled}.</p>"
     )
 
 
@@ -1404,66 +2378,85 @@ def _metrics_table(metrics: Mapping[str, object]) -> str:
 
 
 def render_sheet_v2(packet: Packet) -> str:
-    """The v2 decision sheet: one self-contained page, per-concept grading throughout."""
+    """Render the durable three-pane 1:many adjudication workspace."""
     meta = dict(packet.meta)
     metrics = meta.get("metrics")
     current_version_raw = meta.get("current_gold_version") or meta.get("gold_version") or 0
     current_version = int(current_version_raw) if isinstance(current_version_raw, (int, str)) else 0
-    sections: list[str] = []
-    for name in ("pairing", "consistency", "suspect", "resolution", "new_gold", "improvement"):
-        title, lede = SECTION_TITLES_V2[name]
-        rows = packet.section(name)
-        chunk = [f'<section data-section="{name}"><h2>{_esc(title)}</h2>']
-        chunk.append(f'<p class="lede">{_esc(lede)}</p>')
-        if name == "pairing":
-            chunk.append(_pairing_banner(packet))
-        if name == "improvement":
-            chunk.append(_improvement_banner(packet))
-        if name == "suspect" and packet.overflow:
-            spilled = ", ".join(
-                f"{_esc(reason)}: {count}" for reason, count in sorted(packet.overflow.items())
-            )
-            chunk.append(
-                f'<p class="overflow">Beyond the {_esc(meta.get("suspect_cap", 50))}-row cap, '
-                f"held for the next batch — {spilled}.</p>"
-            )
-        if not rows:
-            chunk.append('<p class="note">nothing queued in this section.</p>')
-        group = object()
-        for row in rows:
-            if row.stratum and row.stratum != group:
-                group = row.stratum
-                chunk.append(f'<p class="groupbar">{_esc(row.stratum)}</p>')
-            chunk.append(_render_row_v2(row, current_version=current_version))
-        chunk.append("</section>")
-        sections.append("".join(chunk))
+    articles = "".join(_render_row_v2(row, current_version=current_version) for row in packet.rows)
+    guidance = _pairing_banner(packet) if packet.section("pairing") else ""
+    if packet.section("improvement"):
+        guidance += _improvement_banner(packet)
+    guidance += _overflow_banner(packet)
+    baseline_id = meta.get("current_gold_id") or meta.get("gold_id") or meta.get("parent_gold_id")
+    packet_fingerprint = hashlib.sha256(
+        json.dumps(
+            [row.to_json() for row in packet.rows],
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+    ).hexdigest()[:16]
+    packet_key = "|".join(
+        (
+            str(baseline_id or f"gold-v{current_version}"),
+            str(meta.get("ontology_sha256") or "ontology-unknown"),
+            str(len(packet.rows)),
+            packet_fingerprint,
+        )
+    )
+    section_markers = "".join(
+        f'<span hidden data-section="{_esc(name)}"></span>' for name in SECTION_TITLES_V2
+    )
 
     counts = json.dumps(dict(packet.counts), indent=2, sort_keys=True)
     header_meta = json.dumps(
         {key: value for key, value in meta.items() if key != "metrics"}, indent=2, sort_keys=True
     )
     return (
-        '<!doctype html>\n<html lang="en"><head><meta charset="utf-8">'
+        '<!doctype html>\n<html lang="en" data-theme="light"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width, initial-scale=1">'
         "<title>folio-resolve — audit gate (gold v2, per-cell)</title>"
-        f"<style>{_STYLE_V2}</style></head><body><main>"
-        "<h1>Audit gate — gold v2 (per-cell)</h1>"
-        '<p class="lede">Every input label cell is its own question now: Level 1, Level 2 and '
-        "Level 3 cells each carry their own mapping, and nothing inherits. Grade each concept on "
-        "its own line — gold keeps or goes, pipeline candidates rise or do not. Nothing changes "
-        "gold until these decisions are folded in.</p>"
-        + (_metrics_table(metrics) if isinstance(metrics, Mapping) else "")
-        + f'<pre class="meta">{_esc(header_meta)}</pre>'
-        f'<pre class="meta">{_esc(counts)}</pre>'
-        f"{''.join(sections)}"
-        '<div class="actions">'
-        '<button id="copy" type="button">Copy decisions</button> '
-        '<span class="tag" id="count">0 rows decided</span>'
+        f'<style>{_STYLE_V2}</style></head><body class="eval-workspace"><main '
+        f'data-review-workspace="folio-eval-v1" data-packet-key="{_esc(packet_key)}">'
+        '<header class="review-header"><div class="review-titlebar"><div>'
+        "<h1>Gold evaluation workspace</h1>"
+        '<p class="lede">Select an input, inspect its 1:many mappings, decide each concept, and add notes.</p>'
+        '</div><div class="review-progress"><div class="progress-track" aria-hidden="true">'
+        '<div class="progress-fill" id="progress-fill"></div></div>'
+        '<strong id="progress-count">0 reviewed</strong></div></div>'
+        '<div class="review-toolbar">'
+        '<input id="review-search" type="search" placeholder="Search input labels or paths" '
+        'aria-label="Search evaluation items">'
+        '<select id="status-filter" aria-label="Filter evaluation items by status">'
+        '<option value="undecided">Undecided</option><option value="needs-eye">Needs your eye</option>'
+        '<option value="all">All items</option><option value="decided">Reviewed</option></select>'
+        '<button class="secondary" id="previous-row" type="button">↑ Previous</button>'
+        '<button class="secondary" id="next-row" type="button">↓ Next</button>'
+        '<span class="spacer"></span><span class="draft-state" id="draft-state">Draft not yet saved</span>'
+        '<button class="secondary" id="theme-toggle" type="button">Dark mode</button>'
+        '<button class="secondary" id="download" type="button">Download JSON</button>'
+        '<button id="copy" type="button">Copy decisions</button></div>'
+        '<details class="actions"><summary>Decision JSON, audit metadata, and section guidance '
+        '<span class="tag" id="count">0 rows decided</span></summary>'
         '<textarea id="out" readonly aria-label="assembled decisions JSON"></textarea>'
-        '<p id="hint">Paste this back into the chat. If the copy button is blocked, the text '
-        "above is already selected — press ⌘C / Ctrl+C.</p>"
-        "</div></main>"
-        f"<script>{_SCRIPT_V2}</script></body></html>\n"
+        '<p id="hint">Paste this back into the chat. If clipboard access is blocked, the text '
+        "above is selected — press ⌘C / Ctrl+C.</p>"
+        + guidance
+        + (_metrics_table(metrics) if isinstance(metrics, Mapping) else "")
+        + f'<pre class="meta">{_esc(header_meta)}</pre><pre class="meta">{_esc(counts)}</pre>'
+        + "</details></header>"
+        + '<div class="workspace-shell"><svg id="mapping-lines" aria-hidden="true"></svg>'
+        + section_markers
+        + '<aside class="review-sidebar"><p class="sidebar-label">Input items</p>'
+        + '<nav aria-label="Evaluation items">'
+        + _review_navigation(packet)
+        + '</nav></aside><div class="pane-resizer sidebar-resizer" role="separator" '
+        + 'aria-label="Resize input items pane"></div>'
+        + '<section class="review-stage"><div class="empty-review">No evaluation items match this filter.</div>'
+        + articles
+        + "</section></div></main>"
+        + f"<script>{_SCRIPT_V2_WORKSPACE}</script></body></html>\n"
     )
 
 
@@ -1496,7 +2489,8 @@ def write_packet(packet: Packet, out_dir: Path) -> dict[str, Path]:
     packet_path = out_dir / "packet.json"
     sheet_path = out_dir / "sheet.html"
     _atomic_write_text(
-        packet_path, json.dumps(packet.to_json(), ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+        packet_path,
+        json.dumps(packet.to_json(), ensure_ascii=False, indent=2, sort_keys=True) + "\n",
     )
     _atomic_write_text(sheet_path, render_sheet(packet))
     return {"packet": packet_path, "sheet": sheet_path}

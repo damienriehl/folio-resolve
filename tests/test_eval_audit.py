@@ -1046,6 +1046,13 @@ def test_v2_packet_grades_every_concept_individually(v2_gold: tuple[Any, list[An
     html = render_sheet_v2(packet)
     assert 'value="keep"' in html and 'value="remove"' in html
     assert 'value="elevate"' in html and 'value="not_gold"' in html
+    assert 'value="keep" checked' in html
+    assert 'value="not_gold" checked' in html
+    for entry in row.gold:
+        assert any(
+            f'data-iri="{entry["iri"]}" value="L{level}" checked' in html for level in (1, 2, 3)
+        )
+    assert any(f'data-iri="R-pipe" value="L{level}" checked' in html for level in (1, 2, 3))
     assert 'class="note gold-note"' in html and 'class="note pipeline-note"' in html
 
 
@@ -1122,6 +1129,133 @@ def test_v2_sheet_is_self_contained_and_renders_the_hierarchy(
     for forbidden in ("<script src=", "<link ", "@import", "url(http", "src=", "href="):
         assert forbidden not in html
     assert "Copy decisions" in html and '<textarea id="out" readonly' in html
+
+
+def test_v2_sheet_renders_an_actionable_mapping_workspace(v2_gold: tuple[Any, list[Any]]) -> None:
+    """The durable sheet is a navigable 1:many review tool, not a long stack of cards."""
+    build, rows = v2_gold
+    packet = v2_packet(build, rows)
+    html = render_sheet_v2(packet)
+
+    assert 'data-review-workspace="folio-eval-v1"' in html
+    assert 'aria-label="Evaluation items"' in html
+    assert 'id="mapping-lines"' in html
+    assert 'class="level-pane"' in html
+    assert "pane-resizer" in html
+    assert 'data-level-id="L1"' in html
+    assert 'data-level-id="L2"' in html
+    assert 'data-level-id="L3"' in html
+    assert "Option A" not in html
+    assert "Option B" not in html
+    assert "Option C" not in html
+    assert "L1 ·" in html and "L2 ·" in html and "L3 ·" in html
+    assert "System level mapping" in html
+    assert "See all levels" in html
+    assert 'data-level-filter="L1"' in html
+    assert 'class="concept-details"' in html
+    assert "Undo remove" in html
+    assert "applyLevelFilter" in html
+    assert "Mapped outputs" in html
+    assert "Add FOLIO concept" in html
+    assert "level_mappings" in html
+    assert "level_notes" in html
+    assert "mapping_options" in html
+    assert "initPaneResizers" in html
+    assert 'class="concept-inspector"' in html
+    assert 'id="review-search"' in html
+    assert 'id="status-filter"' in html
+    assert 'id="previous-row"' in html and 'id="next-row"' in html
+    assert 'id="download"' in html
+    assert 'id="theme-toggle"' in html
+    assert 'data-theme="light"' in html
+    assert "folio-eval-theme" in html
+    assert "setTheme" in html
+    assert "--tag-bg:" in html
+    assert "background: var(--tag-bg)" in html
+    assert '<option value="undecided">Undecided</option>' in html
+    assert html.index('<option value="undecided">') < html.index('<option value="needs-eye">')
+    assert 'class="secondary mark-reviewed"' in html
+    assert 'value="keep" checked' in html
+    assert "entry.reviewed = true" in html
+    assert "position: sticky" in html
+    assert "Mark reviewed &amp; continue" in html
+    assert "localStorage" in html
+    assert "drawMappingLines" in html
+    assert "scheduleMappingLines" in html
+    assert "restoreDraft" in html
+    assert "reviewedIds" in html
+    assert "function rowComplete(row)" in html
+    assert "saved.version >= 3" in html
+    assert html.count("document.addEventListener('change'") == 1
+
+
+def test_v2_sheet_restores_folded_level_assignments_and_notes(
+    v2_gold: tuple[Any, list[Any]],
+) -> None:
+    build, rows = v2_gold
+    packet = v2_packet(build, rows)
+    target = next(row for row in packet.rows if row.gold and row.section != "pairing")
+    iri = str(target.gold[0]["iri"])
+    folded = {
+        "gold_version": 3,
+        "gold_id": "v3-test",
+        "level_mappings": {"L1": [iri]},
+        "level_notes": {"L1": "Keep this level-specific explanation."},
+        "mapping_options": {"unassigned": []},
+    }
+    updated = replace(target, extra={**target.extra, "folded": folded, "baseline": folded})
+    packet = replace(
+        packet,
+        rows=tuple(
+            updated if row.decision_id == target.decision_id else row for row in packet.rows
+        ),
+    )
+
+    html = render_sheet_v2(packet)
+
+    assert f'data-iri="{iri}" value="L1" checked' in html
+    assert "System level mapping" in html
+    assert "Keep this level-specific explanation." in html
+
+
+def test_v2_sheet_draft_key_tracks_the_live_gold_baseline(v2_gold: tuple[Any, list[Any]]) -> None:
+    """A regenerated packet must not restore decisions made against a different live gold."""
+    build, rows = v2_gold
+    first = render_sheet_v2(
+        v2_packet(build, rows, current_gold_version=2, current_gold_id="live-gold-2")
+    )
+    second = render_sheet_v2(
+        v2_packet(build, rows, current_gold_version=3, current_gold_id="live-gold-3")
+    )
+
+    assert 'data-packet-key="live-gold-2|' in first
+    assert 'data-packet-key="live-gold-3|' in second
+
+
+def test_v2_sheet_draft_key_tracks_the_decision_shaping_packet(
+    v2_gold: tuple[Any, list[Any]],
+) -> None:
+    """Candidate changes under one gold ID must not inherit stale browser decisions."""
+    build, rows = v2_gold
+    packet = v2_packet(build, rows, current_gold_version=3, current_gold_id="live-gold-3")
+    changed_row = replace(
+        packet.rows[0],
+        pipeline=(*packet.rows[0].pipeline, {"iri": "R-new", "label": "New candidate"}),
+    )
+    changed_packet = replace(packet, rows=(changed_row, *packet.rows[1:]))
+
+    original_key = render_sheet_v2(packet).split('data-packet-key="', 1)[1].split('"', 1)[0]
+    changed_key = render_sheet_v2(changed_packet).split('data-packet-key="', 1)[1].split('"', 1)[0]
+    assert original_key != changed_key
+
+
+def test_v2_sheet_warns_when_suspect_rows_overflow(v2_gold: tuple[Any, list[Any]]) -> None:
+    build, rows = v2_gold
+    packet = replace(v2_packet(build, rows), overflow={"candidate tail": 7})
+    html = render_sheet_v2(packet)
+
+    assert "More suspect rows remain." in html
+    assert "candidate tail: 7" in html
 
 
 def test_v2_prefilled_ruling_is_carried_forward(v2_gold: tuple[Any, list[Any]]) -> None:
