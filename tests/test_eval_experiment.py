@@ -17,6 +17,7 @@ from folio_eval.experiment import (
     ItemOutcome,
     PendingAttemptError,
     SliceOutcome,
+    StopRuleError,
     WindowRefusalError,
     append_record,
     build_scores_json,
@@ -28,7 +29,10 @@ from folio_eval.experiment import (
     pair_outcomes,
     start_attempt,
     status,
+    stop_status,
 )
+from folio_eval.grade import DISAGREEMENT_CLASSES
+from folio_eval.leakcheck import ScryptParams, build_manifest
 
 GOLD_SURFACES = ("Fund Formation", "Escrow Services", "Carry Waterfall")
 
@@ -41,6 +45,34 @@ def outcome(
 
 def slice_of(name: str, items: list[ItemOutcome]) -> SliceOutcome:
     return SliceOutcome(slice_name=name, items=tuple(items))
+
+
+def synthetic_iteration(
+    iteration: int,
+    *,
+    delta: float = 0.002,
+    low: float = -0.001,
+    high: float = 0.004,
+    lever_scope: str = "shared",
+    corpus_version: str = "synthetic-v1",
+    classes: tuple[str, ...] = (),
+    rebaseline: bool = False,
+) -> dict[str, object]:
+    return {
+        "record_type": "attempt",
+        "iteration": iteration,
+        "lever_scope": lever_scope,
+        "corpus_version": corpus_version,
+        "item_count": 20,
+        "bootstrap_ci": {
+            "point": delta,
+            "low": low,
+            "high": high,
+            "width": high - low,
+        },
+        "disagreement_classes_seen": list(classes),
+        "rebaseline": rebaseline,
+    }
 
 
 # --------------------------------------------------------------------------------------
@@ -161,8 +193,12 @@ def _seed_one_attempt(
         hypothesis="widen the recall channel",
         cluster_targeted="candidate_gap_truncated",
         cluster_size=10,
-        scores_before=build_scores_json(slice_of("tune", []), slice_of("firm2", [])),
-        scores_after=build_scores_json(slice_of("tune", []), slice_of("firm2", [])),
+        scores_before=build_scores_json(
+            {"tune": slice_of("tune", []), "firm2": slice_of("firm2", [])}
+        ),
+        scores_after=build_scores_json(
+            {"tune": slice_of("tune", []), "firm2": slice_of("firm2", [])}
+        ),
         tripwire={"flagged": False},
         triage={"new_suspects": 0},
         decision="keep",
@@ -532,8 +568,12 @@ def test_append_only_existing_lines_are_never_rewritten(tmp_path: Path) -> None:
         hypothesis="a second, unrelated attempt",
         cluster_targeted="hierarchy_near_miss",
         cluster_size=8,
-        scores_before=build_scores_json(slice_of("tune", []), slice_of("firm2", [])),
-        scores_after=build_scores_json(slice_of("tune", []), slice_of("firm2", [])),
+        scores_before=build_scores_json(
+            {"tune": slice_of("tune", []), "firm2": slice_of("firm2", [])}
+        ),
+        scores_after=build_scores_json(
+            {"tune": slice_of("tune", []), "firm2": slice_of("firm2", [])}
+        ),
         tripwire={"flagged": False},
         triage={"new_suspects": 0},
         decision="park",
@@ -627,6 +667,123 @@ def test_status_on_an_empty_log(tmp_path: Path) -> None:
     assert result.baseline_gold_version is None
     assert result.check_in_due is False
     assert result.last_decision is None
+
+
+# --------------------------------------------------------------------------------------
+# U9 synthetic iteration records and guarded diminishing-return stop rule
+# --------------------------------------------------------------------------------------
+
+
+def test_build_scores_json_accepts_named_slice_map_and_legacy_record_still_parses() -> None:
+    scores = build_scores_json({"tune": slice_of("tune", []), "firm2": slice_of("firm2", [])})
+    legacy = ExperimentRecord.from_json(
+        {
+            "record_type": "attempt",
+            "attempt_id": "attempt-legacy",
+            "scores_before": {"tune": {"f1": 0.5}, "firm2": {"aggregate": {}, "items": []}},
+            "scores_after": scores,
+        }
+    )
+    assert set(scores) == {"tune", "firm2"}
+    assert legacy.scores_before["tune"] == {"f1": 0.5}
+    assert legacy.lever_scope is None
+
+
+def test_append_record_refuses_empty_surfaces_without_manifest_checker(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="empty surfaces"):
+        append_record(tmp_path / "log.jsonl", {"record_type": "attempt"}, surfaces=())
+
+
+def test_synthetic_record_via_manifest_checker_round_trips(tmp_path: Path) -> None:
+    salt = b"u9-test-salt"
+    manifest = build_manifest(
+        ["private firm phrase"],
+        salt,
+        gold_version="gold_v1",
+        gold_content_sha256="a" * 64,
+        scrypt_params=ScryptParams(n=2, r=1, p=1, dklen=8),
+    )
+    log_path = tmp_path / "synthetic.jsonl"
+    pending_path = tmp_path / "pending.json"
+    before = SliceOutcome.from_synthetic_report(
+        {"overall": {"items": 2, "tp": 8, "fp": 2, "fn": 2, "exact_items": 1}}
+    )
+    after = slice_of(
+        "synthetic",
+        [outcome("s-1"), outcome("s-2", tp=7, fp=2, fn=2, exact=False)],
+    )
+    start_attempt(
+        hypothesis="shared normalization adjustment",
+        cluster_targeted="synthetic disagreement",
+        cluster_size=2,
+        gold_version=0,
+        ontology_hash="a" * 64,
+        config_hash="b" * 64,
+        surfaces=(),
+        manifest_checker=(manifest, salt),
+        prior_scores={"synthetic": before},
+        lever_scope="shared",
+        corpus_version="synthetic-v1",
+        disagreement_classes_seen=("set_mismatch",),
+        run_selftest=False,
+        experiments_log=log_path,
+        pending_path=pending_path,
+    )
+    record = finish_attempt(
+        decision="keep",
+        reason="small synthetic improvement",
+        surfaces=(),
+        manifest_checker=(manifest, salt),
+        after_scores={"synthetic": after},
+        commit_sha="cafebabe",
+        experiments_log=log_path,
+        pending_path=pending_path,
+        ci_resamples=50,
+        ci_seed=1,
+    )
+    loaded = ExperimentRecord.from_json(load_raw_records(log_path)[0])
+    assert loaded == record
+    assert loaded.lever_scope == "shared"
+    assert loaded.corpus_version == "synthetic-v1"
+    assert loaded.item_count == 2
+    assert set(loaded.bootstrap_ci) >= {"low", "high", "width"}
+    assert loaded.disagreement_classes_seen == ("set_mismatch",)
+
+
+def test_stop_status_stops_only_with_corroborating_checkpoint() -> None:
+    records = [synthetic_iteration(1), synthetic_iteration(2)]
+    checkpoint = {"tune": {"f1": 0.7}, "firm2": {"changed_items": 0}, "corroborates": True}
+    assert stop_status(records, interim_checkpoint=checkpoint).status == "stopped"
+    assert stop_status(records, interim_checkpoint=None).status == "escalate"
+
+
+def test_adapter_only_iteration_does_not_advance_stop_counter() -> None:
+    records = [
+        synthetic_iteration(1),
+        synthetic_iteration(2, lever_scope="adapter_only"),
+    ]
+    assert stop_status(records, interim_checkpoint={"corroborates": True}).status == "continue"
+
+
+def test_stop_status_refuses_cross_version_delta_without_rebaseline() -> None:
+    records = [
+        synthetic_iteration(1, corpus_version="synthetic-v1"),
+        synthetic_iteration(2, corpus_version="synthetic-v2"),
+    ]
+    with pytest.raises(StopRuleError, match="rebaseline"):
+        stop_status(records, interim_checkpoint={"corroborates": True})
+
+
+def test_novel_disagreement_class_resets_stop_counter() -> None:
+    novel = next(iter(DISAGREEMENT_CLASSES))
+    records = [
+        synthetic_iteration(1),
+        synthetic_iteration(2, classes=(novel,)),
+        synthetic_iteration(3),
+    ]
+    result = stop_status(records, interim_checkpoint={"corroborates": True})
+    assert result.status == "continue"
+    assert result.consecutive_sub_epsilon == 1
 
 
 # --------------------------------------------------------------------------------------
