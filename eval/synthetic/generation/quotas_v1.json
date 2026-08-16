@@ -1,0 +1,24 @@
+{
+  "branch_targets": {
+    "Actor / Player": 24,
+    "Area of Law": 30,
+    "Asset Type": 24,
+    "Document Artifacts": 24,
+    "Events": 24,
+    "Industry and Market": 24,
+    "Location": 30,
+    "Objectives": 30,
+    "Service": 30
+  },
+  "doc_types": [
+    {"doc_type": "litigation brief", "jurisdictions": ["US federal", "California", "New York"], "scoreable": 30, "no_match": 4},
+    {"doc_type": "commercial agreement", "jurisdictions": ["Delaware", "New York", "England and Wales"], "scoreable": 30, "no_match": 4},
+    {"doc_type": "corporate board materials", "jurisdictions": ["Delaware", "California", "England and Wales"], "scoreable": 30, "no_match": 4},
+    {"doc_type": "regulatory submission", "jurisdictions": ["US federal", "European Union", "Illinois"], "scoreable": 30, "no_match": 4},
+    {"doc_type": "intellectual property filing", "jurisdictions": ["US federal", "European Union", "England and Wales"], "scoreable": 30, "no_match": 4},
+    {"doc_type": "real estate instrument", "jurisdictions": ["Minnesota", "California", "New York"], "scoreable": 30, "no_match": 4},
+    {"doc_type": "employment policy and notice", "jurisdictions": ["Minnesota", "California", "England and Wales"], "scoreable": 30, "no_match": 3},
+    {"doc_type": "estate planning instrument", "jurisdictions": ["Minnesota", "Florida", "New York"], "scoreable": 30, "no_match": 3}
+  ],
+  "version": 1
+}
