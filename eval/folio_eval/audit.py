@@ -69,6 +69,9 @@ from .splits import sha256_text
 #: KTD9: at most 50 detailed suspect rows per batch; the rest are reported as counts by reason.
 SUSPECT_ROW_CAP = 50
 
+#: Gate 1b sittings are deliberately short enough to finish on a phone.
+SITTING_BATCH_SIZE = 25
+
 #: KTD5: at most 25 new-gold candidates per check-in, drawn from term sets that already have gold.
 NEW_GOLD_CAP = 25
 
@@ -710,6 +713,154 @@ class Packet:
             "split": self.split.to_json() if self.split else None,
             "rows": [row.to_json() for row in self.rows],
         }
+
+
+@dataclass(frozen=True, slots=True)
+class SittingManifestRow:
+    """One ranked decision in a sitting's machine-readable manifest."""
+
+    decision_id: str
+    rank: int
+    needs_your_eye: bool
+    downstream_items: int
+
+    def to_json(self) -> dict[str, object]:
+        return {
+            "decision_id": self.decision_id,
+            "rank": self.rank,
+            "needs_your_eye": self.needs_your_eye,
+            "downstream_items": self.downstream_items,
+        }
+
+    @classmethod
+    def from_json(cls, payload: Mapping[str, object]) -> SittingManifestRow:
+        return cls(
+            decision_id=str(payload["decision_id"]),
+            rank=_as_int(payload.get("rank")),
+            needs_your_eye=bool(payload.get("needs_your_eye", False)),
+            downstream_items=_as_int(payload.get("downstream_items")),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class SittingManifest:
+    """Stable description of one batch, independent of its rendered HTML."""
+
+    number: int
+    batch_size: int
+    total_batches: int
+    rows: tuple[SittingManifestRow, ...]
+
+    def to_json(self) -> dict[str, object]:
+        return {
+            "number": self.number,
+            "batch_size": self.batch_size,
+            "total_batches": self.total_batches,
+            "rows": [row.to_json() for row in self.rows],
+        }
+
+    @classmethod
+    def from_json(cls, payload: Mapping[str, object]) -> SittingManifest:
+        return cls(
+            number=_as_int(payload.get("number")),
+            batch_size=_as_int(payload.get("batch_size")),
+            total_batches=_as_int(payload.get("total_batches")),
+            rows=tuple(
+                SittingManifestRow.from_json(entry)
+                for entry in _items(payload.get("rows"))
+                if isinstance(entry, Mapping)
+            ),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class SittingBatch:
+    """A renderable packet slice and the manifest describing its global ranks."""
+
+    packet: Packet
+    manifest: SittingManifest
+
+
+@dataclass(frozen=True, slots=True)
+class SittingPlan:
+    """All pending sittings plus safe defaults to send through the normal fold."""
+
+    batches: tuple[SittingBatch, ...]
+    auto_decisions: Mapping[str, Mapping[str, object]]
+
+
+def _needs_your_eye(row: PacketRow) -> bool:
+    precheck = row.extra.get("precheck")
+    return isinstance(precheck, Mapping) and bool(precheck.get("needs_your_eye"))
+
+
+def _downstream_item_count(row: PacketRow) -> int:
+    """Count distinct packet items/instances whose state is clarified by resolving ``row``."""
+    item_ids = set(_resolution_targets(row))
+    assignments = row.extra.get("assignments")
+    if isinstance(assignments, Mapping):
+        for reading in assignments.values():
+            for entry in _items(reading):
+                if isinstance(entry, Mapping) and entry.get("item_id"):
+                    item_ids.add(str(entry["item_id"]))
+    item_ids.update(str(value) for value in _items(row.extra.get("item_ids")) if value)
+    return max(len(item_ids), len(_items(row.extra.get("instances"))), row.label_frequency, 1)
+
+
+def assemble_sittings(packet: Packet, *, batch_size: int = SITTING_BATCH_SIZE) -> SittingPlan:
+    """Rank open rows, auto-resolving only non-badged pairing pre-checks through the fold.
+
+    Badged rows sort before every unbadged row. Within each tier, the row affecting the most
+    unique assignment/group items or workbook instances sorts first; ``decision_id`` breaks ties.
+    Rows already carrying ``extra.folded`` are closed. A badged row is never auto-resolved.
+    """
+    if batch_size <= 0:
+        raise ValueError("sitting batch_size must be positive")
+    pending: list[tuple[PacketRow, bool, int]] = []
+    auto_decisions: dict[str, Mapping[str, object]] = {}
+    for row in packet.rows:
+        if isinstance(row.extra.get("folded"), Mapping):
+            continue
+        precheck = row.extra.get("precheck")
+        badged = _needs_your_eye(row)
+        choice = str(precheck.get("choice", "")) if isinstance(precheck, Mapping) else ""
+        if row.section == "pairing" and choice in PAIRING_CHOICES and not badged:
+            auto_decisions[row.decision_id] = {"pairing": choice}
+            continue
+        pending.append((row, badged, _downstream_item_count(row)))
+    pending.sort(
+        key=lambda ranked: (
+            not ranked[1],
+            -ranked[2],
+            ranked[0].decision_id,
+        )
+    )
+    total_batches = (len(pending) + batch_size - 1) // batch_size
+    batches: list[SittingBatch] = []
+    for offset in range(0, len(pending), batch_size):
+        number = len(batches) + 1
+        selected = pending[offset : offset + batch_size]
+        subset = replace(
+            packet,
+            rows=tuple(row for row, _, _ in selected),
+            meta={**packet.meta, "sitting_number": number, "sitting_total": total_batches},
+        )
+        manifest = SittingManifest(
+            number=number,
+            batch_size=batch_size,
+            total_batches=total_batches,
+            rows=tuple(
+                SittingManifestRow(
+                    decision_id=row.decision_id,
+                    rank=offset + index + 1,
+                    needs_your_eye=needs_eye,
+                    downstream_items=downstream_items,
+                )
+                for index, (row, needs_eye, downstream_items) in enumerate(selected)
+            ),
+        )
+        batches.append(SittingBatch(packet=subset, manifest=manifest))
+    return SittingPlan(batches=tuple(batches), auto_decisions=auto_decisions)
 
 
 def _gold_evidence(
@@ -3369,7 +3520,7 @@ def _main_v2(args: Any, parser: Any) -> int:  # pragma: no cover - I/O orchestra
 
     from .answer_rule import load_config, rank_candidates
     from .clusters import collect_raw_candidates, surface_strings
-    from .packet_render import write_packet_v2
+    from .packet_render import validate_sitting_output, write_packet_v2, write_sitting_v2
     from .resolve_labels import index_from_folio
     from .score import PipelineAdapter, build_folio_provider, build_pipeline
     from .selftest import OntologyPinError, assert_ontology_pin
@@ -3386,6 +3537,8 @@ def _main_v2(args: Any, parser: Any) -> int:  # pragma: no cover - I/O orchestra
         pin = assert_ontology_pin("")
     rows = load_gold_rows_v2(args.gold)
     out_dir = Path(args.out)
+    if args.mode == "sitting":
+        validate_sitting_output(out_dir, lane=args.lane)
     packet_path = out_dir / "packet.json"
 
     current_gold_path = (
@@ -3631,46 +3784,99 @@ def _main_v2(args: Any, parser: Any) -> int:  # pragma: no cover - I/O orchestra
         ),
     }
 
-    packet = build_packet_v2(
-        gold_rows=rows,
-        current_gold_rows=current_rows,
-        current_gold_version=current_gold_version,
-        current_gold_id=current_gold_id,
-        pairing_rows=pairing_rows,
-        inconsistent_groups=inconsistent,
-        suspects=suspects,
-        resolution_batch=resolution_batch,
-        cluster_rows=cluster_rows,
-        predictions=predictions,
-        definitions=definitions,
-        label_proposals=proposals,
-        value_iris=value_iris,
-        frozen_ids=split_manifest.slices[FROZEN_SLICE],
-        rejected=rejection_memory(
-            load_decisions(Path(args.decision_log)), ontology_sha256=pin.sha256
-        ),
-        eligible_strata=eligible,
-        slice_by_item=slice_by_item,
-        split=split_facts,
-        metrics=metrics,
-        ontology_sha256=pin.sha256,
-        gold_version=gold_set.gold_version,
-        gold_id=gold_set.gold_id,
-        parent_gold_id=str(gold_set.manifest.get("parent_gold_id", "")),
-        prefill_rulings=load_prefill_rulings(args.prefill),
-        sheet_sources=load_sheet_sources(
-            data_dir=args.data_dir, manifest_path=args.intake_manifest
-        ),
-        answer_config=config,
-        pairing_note=load_pairing_note(args.pairing_note),
-        harness_config_sha256=config.content_sha256(),
-        suspect_cap=args.suspect_cap,
-        new_gold_cap=args.new_gold_cap,
-        improvements=improvements,
-        improvement_cap=args.improvement_cap,
-        folded_decisions=folded_decisions,
+    rejected = rejection_memory(
+        load_decisions(Path(args.decision_log)), ontology_sha256=pin.sha256
     )
-    written = write_packet_v2(packet, out_dir)
+    prefill_rulings = load_prefill_rulings(args.prefill)
+    sheet_sources = load_sheet_sources(data_dir=args.data_dir, manifest_path=args.intake_manifest)
+    pairing_note = load_pairing_note(args.pairing_note)
+
+    def make_packet(
+        live_rows: Sequence[GoldRowV2],
+        live_version: int,
+        live_id: str,
+        review_history: Mapping[str, Mapping[str, object]],
+    ) -> Packet:
+        return build_packet_v2(
+            gold_rows=rows,
+            current_gold_rows=live_rows,
+            current_gold_version=live_version,
+            current_gold_id=live_id,
+            pairing_rows=pairing_rows,
+            inconsistent_groups=inconsistent,
+            suspects=suspects,
+            resolution_batch=resolution_batch,
+            cluster_rows=cluster_rows,
+            predictions=predictions,
+            definitions=definitions,
+            label_proposals=proposals,
+            value_iris=value_iris,
+            frozen_ids=split_manifest.slices[FROZEN_SLICE],
+            rejected=rejected,
+            eligible_strata=eligible,
+            slice_by_item=slice_by_item,
+            split=split_facts,
+            metrics=metrics,
+            ontology_sha256=pin.sha256,
+            gold_version=gold_set.gold_version,
+            gold_id=gold_set.gold_id,
+            parent_gold_id=str(gold_set.manifest.get("parent_gold_id", "")),
+            prefill_rulings=prefill_rulings,
+            sheet_sources=sheet_sources,
+            answer_config=config,
+            pairing_note=pairing_note,
+            harness_config_sha256=config.content_sha256(),
+            suspect_cap=args.suspect_cap,
+            new_gold_cap=args.new_gold_cap,
+            improvements=improvements,
+            improvement_cap=args.improvement_cap,
+            folded_decisions=review_history,
+        )
+
+    packet = make_packet(current_rows, current_gold_version, current_gold_id, folded_decisions)
+    if args.mode == "sitting":
+        plan = assemble_sittings(packet, batch_size=args.batch_size)
+        auto_resolved = len(plan.auto_decisions)
+        if args.sitting_number < 1:
+            parser.error("--sitting-number must be positive")
+        if plan.auto_decisions:
+            result = fold_granular_decisions(
+                current_rows,
+                plan.auto_decisions,
+                packet=packet,
+                ontology_sha256=pin.sha256,
+                parent_gold_id=current_gold_id,
+                base_gold_version=current_gold_version,
+            )
+            write_gold_version(result, Path(args.gold_out))
+            append_decisions(
+                Path(args.decision_log), result.records, surfaces=surface_strings(gold_set)
+            )
+            prior_folded = args.folded or latest_folded_path(
+                Path(args.gold_out), at_most_version=current_gold_version
+            )
+            folded_path = write_folded_history(
+                result, plan.auto_decisions, Path(args.gold_out), prior_path=prior_folded
+            )
+            current_rows = [gold_row_v2_from_json(payload) for payload in result.rows]
+            current_gold_version = _as_version(result.manifest.get("gold_version"))
+            current_gold_id = str(result.manifest.get("gold_id", ""))
+            folded_decisions = json.loads(folded_path.read_text(encoding="utf-8"))
+            packet = make_packet(
+                current_rows, current_gold_version, current_gold_id, folded_decisions
+            )
+            plan = assemble_sittings(packet, batch_size=args.batch_size)
+        if not plan.batches:
+            print(f"auto-resolved {auto_resolved} row(s); no sitting remains")
+            return 0
+        if args.sitting_number > len(plan.batches):
+            parser.error(
+                f"--sitting-number must be between 1 and {len(plan.batches)} for this packet"
+            )
+        batch = plan.batches[args.sitting_number - 1]
+        written = write_sitting_v2(batch.packet, batch.manifest, out_dir, lane=args.lane)
+    else:
+        written = write_packet_v2(packet, out_dir)
     print(json.dumps(dict(packet.counts), indent=2, sort_keys=True))
     print(f"overflow by reason: {json.dumps(dict(packet.overflow), sort_keys=True)}")
     print(
@@ -3707,7 +3913,7 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - I/O or
         description="U5 audit gate: assemble the decision packet, or fold Damien's decisions.",
     )
     parser.add_argument(
-        "--mode", choices=("packet", "fold", "packet-v2", "fold-v2"), default="packet"
+        "--mode", choices=("packet", "fold", "packet-v2", "fold-v2", "sitting"), default="packet"
     )
     parser.add_argument("--gold", type=Path, default=DEFAULT_GOLD_DIR / "gold_v1.jsonl")
     parser.add_argument(
@@ -3726,9 +3932,7 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - I/O or
     parser.add_argument(
         "--resolution-batch", type=Path, default=DEFAULT_GOLD_DIR / "resolution_batch_v1.jsonl"
     )
-    parser.add_argument(
-        "--clusters", type=Path, default=DEFAULT_ITEM_REPORT_DIR / "clusters_v1.jsonl"
-    )
+    parser.add_argument("--clusters", type=Path, default=None)
     parser.add_argument("--item-report-dir", type=Path, default=DEFAULT_ITEM_REPORT_DIR)
     parser.add_argument("--item-csv-label", default="baseline-v1")
     parser.add_argument(
@@ -3748,6 +3952,9 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - I/O or
         help="detailed suspect rows in this batch (KTD9 default 50; the rest report as counts)",
     )
     parser.add_argument("--new-gold-cap", type=int, default=NEW_GOLD_CAP)
+    parser.add_argument("--batch-size", type=int, default=SITTING_BATCH_SIZE)
+    parser.add_argument("--sitting-number", type=int, default=1)
+    parser.add_argument("--lane", choices=("firm", "synthetic"), default=None)
     parser.add_argument(
         "--improvement-cap",
         type=int,
@@ -3796,13 +4003,29 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - I/O or
         "--baseline-v2", type=Path, default=_EVAL_ROOT / "reports" / "baseline-v2.json"
     )
     args = parser.parse_args(argv)
+    if args.mode in ("packet", "packet-v2", "sitting") and args.clusters is None:
+        parser.error(
+            "--clusters is required for packet/sitting regeneration; pass the explicit "
+            "clusters_v2.jsonl path"
+        )
+    if args.mode == "sitting" and args.lane is None:
+        parser.error("--lane is required in sitting mode (firm or synthetic)")
     if args.out is None:
-        args.out = DEFAULT_PACKET_DIR_V2 if args.mode.endswith("-v2") else DEFAULT_PACKET_DIR
+        args.out = (
+            DEFAULT_PACKET_DIR_V2
+            if args.mode in ("packet-v2", "fold-v2", "sitting")
+            else DEFAULT_PACKET_DIR
+        )
+
+    if args.mode == "sitting":
+        from .packet_render import validate_sitting_output
+
+        validate_sitting_output(Path(args.out), lane=args.lane)
 
     import sys
 
     ensure_hash_seed()
-    if args.mode in ("packet-v2", "fold-v2"):
+    if args.mode in ("packet-v2", "fold-v2", "sitting"):
         return _main_v2(args, parser)
     gold_set = load_gold(args.gold)
     try:

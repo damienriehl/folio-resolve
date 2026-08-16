@@ -34,8 +34,12 @@ import os
 import tempfile
 from collections.abc import Mapping, Sequence
 from pathlib import Path
+from typing import Literal
 
-from .audit import SECTIONS_V2, Packet, PacketRow, pairing_applied_reading_name
+from .audit import SECTIONS_V2, Packet, PacketRow, SittingManifest, pairing_applied_reading_name
+from .intake import DEFAULT_DATA_DIR
+
+SittingLane = Literal["firm", "synthetic"]
 
 SECTION_TITLES: Mapping[str, tuple[str, str]] = {
     "cascade": (
@@ -2472,25 +2476,53 @@ def _atomic_write_text(path: Path, text: str) -> None:
             os.unlink(tmp_name)
 
 
+def _atomic_write_json(path: Path, payload: object) -> None:
+    _atomic_write_text(
+        path,
+        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+    )
+
+
 def write_packet_v2(packet: Packet, out_dir: Path) -> dict[str, Path]:
     """Write the v2 ``packet.json`` + ``sheet.html`` into a gitignored packet directory."""
     packet_path = out_dir / "packet.json"
     sheet_path = out_dir / "sheet.html"
-    _atomic_write_text(
-        packet_path,
-        json.dumps(packet.to_json(), ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-    )
+    _atomic_write_json(packet_path, packet.to_json())
     _atomic_write_text(sheet_path, render_sheet_v2(packet))
     return {"packet": packet_path, "sheet": sheet_path}
+
+
+def validate_sitting_output(out_dir: Path, *, lane: SittingLane) -> Path:
+    """Return the canonical safe output directory, or reject the unavailable/wrong lane."""
+    if lane == "synthetic":
+        raise NotImplementedError("synthetic sitting output is deferred to campaign unit U7")
+    if lane != "firm":
+        raise ValueError("sitting lane must be 'firm' or 'synthetic'")
+    reports_root = (DEFAULT_DATA_DIR / "reports").resolve()
+    target = out_dir.resolve()
+    if not target.is_relative_to(reports_root):
+        raise ValueError(
+            f"firm-lane sittings must be written under gitignored eval/data/reports/: {out_dir}"
+        )
+    return target
+
+
+def write_sitting_v2(
+    packet: Packet, manifest: SittingManifest, out_dir: Path, *, lane: SittingLane
+) -> dict[str, Path]:
+    """Write one sitting, enforcing the U2/U7 firm-data lane boundary at the writer seam."""
+    target = validate_sitting_output(out_dir, lane=lane)
+    sheet_path = target / f"sitting_{manifest.number}.html"
+    manifest_path = target / f"sitting_{manifest.number}.json"
+    _atomic_write_text(sheet_path, render_sheet_v2(packet))
+    _atomic_write_json(manifest_path, manifest.to_json())
+    return {"sheet": sheet_path, "manifest": manifest_path}
 
 
 def write_packet(packet: Packet, out_dir: Path) -> dict[str, Path]:
     """Write ``packet.json`` + ``sheet.html`` into a gitignored packet directory."""
     packet_path = out_dir / "packet.json"
     sheet_path = out_dir / "sheet.html"
-    _atomic_write_text(
-        packet_path,
-        json.dumps(packet.to_json(), ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-    )
+    _atomic_write_json(packet_path, packet.to_json())
     _atomic_write_text(sheet_path, render_sheet(packet))
     return {"packet": packet_path, "sheet": sheet_path}

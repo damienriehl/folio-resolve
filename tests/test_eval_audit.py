@@ -12,6 +12,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
+import folio_eval.packet_render as packet_render
 import pytest
 from fixtures.eval_synthetic_workbook import (
     FIRM1_PIPE_ROWS,
@@ -40,9 +41,11 @@ from folio_eval.audit import (
     LabelProposal,
     Packet,
     PacketRow,
+    SittingManifest,
     SplitFacts,
     _atomized_level_mappings,
     append_decisions,
+    assemble_sittings,
     build_packet,
     build_packet_v2,
     fold_decisions,
@@ -68,12 +71,15 @@ from folio_eval.audit import (
     write_folded_history,
     write_gold_version,
 )
+from folio_eval.audit import main as audit_main
 from folio_eval.gold import build_gold_v2, parse_firm1_v2, parse_firm2_v2
 from folio_eval.packet_render import (
     render_sheet,
     render_sheet_v2,
+    validate_sitting_output,
     write_packet,
     write_packet_v2,
+    write_sitting_v2,
 )
 from folio_eval.resolve_labels import IndexedConcept, LabelIndex
 from folio_eval.splits import DEFAULT_GOLD_DIR, sha256_text
@@ -1718,6 +1724,129 @@ def test_v2_packet_round_trips_through_json(v2_gold: tuple[Any, list[Any]], tmp_
             entry["iri"] for entry in original[row.decision_id].pipeline
         ]
     assert reloaded.section("pairing")[0].extra["assignments"]
+
+
+def _sitting_packet(rows: list[PacketRow]) -> Packet:
+    return Packet(rows=tuple(rows), variants=(), replay={}, split=None, counts={}, overflow={}, meta={})
+
+
+def test_sittings_cap_at_25_and_put_all_badged_rows_first() -> None:
+    rows = [
+        PacketRow(
+            decision_id=f"row-{index}", section="suspect", item_id=f"item-{index}", firm="firm1",
+            stratum="s", stratum_id="sid", ancestor_path=(), surface_label=f"label-{index}",
+            input_text=f"label-{index}", slice_name="tune", reason_class="test",
+            suggested_action="review",
+            extra={
+                "precheck": {"choice": "", "needs_your_eye": index in {2, 31, 59}},
+                "item_ids": [f"dependent-{n}" for n in range(10)] if index == 7 else [],
+            },
+        )
+        for index in range(60)
+    ]
+    plan = assemble_sittings(_sitting_packet(rows))
+    assert [len(batch.packet.rows) for batch in plan.batches] == [25, 25, 10]
+    ordered = [row for batch in plan.batches for row in batch.manifest.rows]
+    assert [row.decision_id for row in ordered[:3]] == ["row-2", "row-31", "row-59"]
+    assert all(row.needs_your_eye for row in ordered[:3])
+    assert not any(row.needs_your_eye for row in ordered[3:])
+    assert ordered[3].decision_id == "row-7"
+
+
+def test_prechecked_rows_auto_fold_but_badged_rows_stay_in_sittings(
+    v2_gold: tuple[Any, list[Any]], tmp_path: Path
+) -> None:
+    build, rows = v2_gold
+    source_packet = v2_packet(build, rows)
+    base = source_packet.section("pairing")[0]
+    badged = replace(
+        base,
+        decision_id="pairing-badged",
+        surface_label="badged",
+        extra={"precheck": {"choice": "heuristic", "needs_your_eye": True}},
+    )
+    packet = replace(source_packet, rows=(base, badged))
+    plan = assemble_sittings(packet)
+    assert plan.auto_decisions == {base.decision_id: {"pairing": "heuristic"}}
+    result = fold_granular_decisions(
+        rows, plan.auto_decisions, packet=packet, ontology_sha256=ONTOLOGY_SHA
+    )
+    folded_path = write_folded_history(result, plan.auto_decisions, tmp_path)
+    folded = json.loads(folded_path.read_text(encoding="utf-8"))
+    rebuilt = replace(
+        packet,
+        rows=(replace(base, extra={**base.extra, "folded": folded[base.decision_id]}), badged),
+    )
+    remaining = assemble_sittings(rebuilt)
+    assert result.records[0].decision_id == base.decision_id
+    assert not remaining.auto_decisions
+    assert [row.decision_id for row in remaining.batches[0].packet.rows] == ["pairing-badged"]
+
+
+@pytest.mark.parametrize("mode", ["packet", "packet-v2", "sitting"])
+def test_packet_regeneration_requires_explicit_clusters_v2(
+    mode: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    with pytest.raises(SystemExit):
+        audit_main(["--mode", mode])
+    assert "clusters_v2" in capsys.readouterr().err
+
+
+def test_firm_sitting_refuses_output_outside_reports_tree(tmp_path: Path) -> None:
+    packet = _sitting_packet([])
+    manifest = SittingManifest(number=1, batch_size=25, total_batches=0, rows=())
+    with pytest.raises(ValueError, match="eval/data/reports"):
+        write_sitting_v2(packet, manifest, tmp_path, lane="firm")
+
+
+def test_sitting_writer_emits_round_trippable_manifest_and_v2_sheet(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(packet_render, "DEFAULT_DATA_DIR", tmp_path / "eval" / "data")
+    out_dir = tmp_path / "eval" / "data" / "reports" / "packet"
+    row = PacketRow(
+        decision_id="row-1", section="suspect", item_id="item-1", firm="firm1", stratum="s",
+        stratum_id="sid", ancestor_path=(), surface_label="one", input_text="one",
+        slice_name="tune", reason_class="test", suggested_action="review",
+    )
+    batch = assemble_sittings(_sitting_packet([row])).batches[0]
+    written = write_sitting_v2(batch.packet, batch.manifest, out_dir, lane="firm")
+    restored = SittingManifest.from_json(json.loads(written["manifest"].read_text(encoding="utf-8")))
+    assert restored == batch.manifest
+    assert written["manifest"].name == "sitting_1.json"
+    assert 'data-decision-id="row-1"' in written["sheet"].read_text(encoding="utf-8")
+
+
+def test_sitting_cli_requires_lane_and_synthetic_points_to_u7(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    clusters = tmp_path / "clusters_v2.jsonl"
+    with pytest.raises(SystemExit):
+        audit_main(["--mode", "sitting", "--clusters", str(clusters)])
+    assert "--lane is required" in capsys.readouterr().err
+    with pytest.raises(NotImplementedError, match="U7"):
+        audit_main(
+            ["--mode", "sitting", "--clusters", str(clusters), "--lane", "synthetic"]
+        )
+    with pytest.raises(NotImplementedError, match="U7"):
+        validate_sitting_output(tmp_path, lane="synthetic")
+
+
+def test_sitting_manifest_round_trips_and_batches_do_not_overlap() -> None:
+    rows = [
+        PacketRow(
+            decision_id=f"row-{index}", section="suspect", item_id=f"item-{index}", firm="firm1",
+            stratum="s", stratum_id="sid", ancestor_path=(), surface_label=str(index), input_text=str(index),
+            slice_name="tune", reason_class="test", suggested_action="review",
+        )
+        for index in range(30)
+    ]
+    plan = assemble_sittings(_sitting_packet(rows), batch_size=25)
+    restored = SittingManifest.from_json(plan.batches[0].manifest.to_json())
+    assert restored == plan.batches[0].manifest
+    first = {row.decision_id for row in restored.rows}
+    second = {row.decision_id for row in plan.batches[1].manifest.rows}
+    assert first.isdisjoint(second)
 
 
 def test_a_pipeline_candidate_that_is_already_gold_says_so(v2_gold: tuple[Any, list[Any]]) -> None:
