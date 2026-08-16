@@ -10,12 +10,14 @@ import hashlib
 import json
 from pathlib import Path
 
+import folio_eval.leakcheck as leakcheck_module
 import pytest
 from folio_eval.clusters import SurfaceLeakError, assert_no_surfaces, surface_strings
 from folio_eval.leakcheck import (
     LeakcheckError,
     Manifest,
     ScryptParams,
+    assert_manifest_current,
     build_manifest,
     canonical_json,
     harvest_surfaces,
@@ -26,7 +28,7 @@ from folio_eval.leakcheck import (
 from folio_eval.normalize import normalize_label
 from folio_eval.splits import GoldItemRecord, GoldSet
 
-FAST_SCRYPT = ScryptParams(n=2**4, r=1, p=1, dklen=16)
+FAST_SCRYPT = ScryptParams(n=2**4, r=1, p=1, dklen=16, test_params=True)
 SALT = b"synthetic-test-salt"
 FAKE_SURFACE = "chancery estoppel widgets"
 
@@ -91,6 +93,104 @@ def test_embedded_surface_reports_count_and_item_id_without_surface(tmp_path: Pa
 
 def test_clean_text_has_no_collisions() -> None:
     assert scan_text("Entirely unrelated invented prose.", manifest_for(FAKE_SURFACE), SALT) == 0
+
+
+@pytest.mark.parametrize(
+    "surface,rendering",
+    [
+        ("Surface,", "a surface appears"),
+        ('"Surface"', "surface appears"),
+        (":Surface", "surface appears"),
+        ("Surface.", "a SURFACE."),
+    ],
+)
+def test_punctuation_folded_surfaces_collide(surface: str, rendering: str) -> None:
+    assert scan_text(rendering, manifest_for(surface), SALT) == 1
+
+
+def test_title_case_surface_collides_with_lowercase_rendering() -> None:
+    assert scan_text("secret surface", manifest_for("Secret Surface"), SALT) == 1
+
+
+def test_mapping_keys_are_scanned(tmp_path: Path) -> None:
+    path = tmp_path / "keys.jsonl"
+    path.write_text(json.dumps({FAKE_SURFACE: "clean"}) + "\n", encoding="utf-8")
+    assert scan_file(path, manifest_for(FAKE_SURFACE), SALT).collision_count == 1
+
+
+def test_salt_mismatch_fails_before_clean_scan() -> None:
+    with pytest.raises(LeakcheckError, match="salt does not match"):
+        scan_text("entirely clean", manifest_for(FAKE_SURFACE), b"wrong-salt")
+
+
+def test_scan_file_salt_mismatch_fails_before_clean_scan(tmp_path: Path) -> None:
+    clean = tmp_path / "clean.md"
+    clean.write_text("entirely clean", encoding="utf-8")
+    with pytest.raises(LeakcheckError, match="salt does not match"):
+        scan_file(clean, manifest_for(FAKE_SURFACE), b"wrong-salt")
+
+
+def test_empty_manifest_is_rejected() -> None:
+    with pytest.raises(LeakcheckError, match="at least one digest"):
+        build_manifest((), SALT, gold_version="gold_v4", gold_content_sha256="a" * 64,
+                       scrypt_params=FAST_SCRYPT)
+
+
+def test_ordinary_colon_label_is_hashed() -> None:
+    assert scan_text("re settlement terms", manifest_for("re: settlement terms"), SALT) == 1
+
+
+def test_scrypt_rejects_below_defaults_without_explicit_test_escape() -> None:
+    with pytest.raises(LeakcheckError, match="below the pinned"):
+        ScryptParams(n=2**13).validate()
+    ScryptParams(n=2, r=1, p=1, dklen=8, test_params=True).validate()
+
+
+def test_same_version_content_drift_is_stale(tmp_path: Path) -> None:
+    local = tmp_path / "gold_v4.manifest.json"
+    local.write_text(
+        json.dumps({"gold_version": 4, "content_sha256": "b" * 64}), encoding="utf-8"
+    )
+    with pytest.raises(LeakcheckError, match="manifest stale"):
+        assert_manifest_current(manifest_for(FAKE_SURFACE), (local,))
+
+
+def test_check_never_creates_a_missing_salt(tmp_path: Path) -> None:
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(canonical_json(manifest_for(FAKE_SURFACE).to_json()), encoding="utf-8")
+    input_path = tmp_path / "clean.md"
+    input_path.write_text("clean", encoding="utf-8")
+    missing = tmp_path / "missing-salt"
+    assert main(
+        ["check", "--manifest", str(manifest_path), "--salt-file", str(missing), str(input_path)],
+        local_gold_manifest_paths=(),
+    ) == 2
+    assert not missing.exists()
+
+
+def test_generate_exits_nonzero_when_harvest_is_empty(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    gold_path = tmp_path / "gold.jsonl"
+    gold_path.write_text("synthetic placeholder", encoding="utf-8")
+    salt_path = tmp_path / "salt"
+    salt_path.write_bytes(SALT)
+    out_path = tmp_path / "manifest.json"
+    monkeypatch.setattr(leakcheck_module, "load_gold", lambda _path: synthetic_gold())
+    monkeypatch.setattr(leakcheck_module, "harvest_surfaces", lambda _gold: frozenset())
+
+    assert main(
+        [
+            "generate",
+            "--gold",
+            str(gold_path),
+            "--salt-file",
+            str(salt_path),
+            "--out",
+            str(out_path),
+        ]
+    ) == 2
+    assert not out_path.exists()
 
 
 def test_manifest_generation_is_byte_identical_for_identical_inputs() -> None:
@@ -188,6 +288,7 @@ def test_manifest_rejects_malformed_digest() -> None:
         max_tokens=valid.max_tokens,
         gold_version=valid.gold_version,
         gold_content_sha256=valid.gold_content_sha256,
+        salt_fingerprint=valid.salt_fingerprint,
         digests=("not-hex",),
     )
     with pytest.raises(LeakcheckError, match="lowercase hexadecimal"):

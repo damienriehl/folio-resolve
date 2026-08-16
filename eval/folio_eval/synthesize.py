@@ -52,7 +52,8 @@ def _atomic_write(path: Path, data: bytes) -> None:
             handle.write(data)
         os.replace(temporary, path)
     finally:
-        Path(temporary).unlink(missing_ok=True)
+        if os.path.exists(temporary):
+            os.unlink(temporary)
 
 
 @dataclass(frozen=True, slots=True)
@@ -244,7 +245,8 @@ def _string_values(value: object) -> Iterable[str]:
     if isinstance(value, str):
         yield value
     elif isinstance(value, Mapping):
-        for nested in value.values():
+        for key, nested in value.items():
+            yield from _string_values(key)
             yield from _string_values(nested)
     elif isinstance(value, (list, tuple, set, frozenset)):
         for nested in value:

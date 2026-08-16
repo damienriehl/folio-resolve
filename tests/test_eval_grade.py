@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 from folio_eval.audit import assemble_sittings
 from folio_eval.grade import (
+    GradeError,
     GraderVote,
     audit_report,
     audit_sample,
@@ -119,6 +120,35 @@ def test_sub_floor_agreement_routes_queue(dictionary: LabelIndex) -> None:
     assert outcome.close_calls[0].disagreement_class == "sub_floor_confidence"
 
 
+def test_missing_votes_routes_before_other_disagreements(dictionary: LabelIndex) -> None:
+    outcome = fold_votes(
+        [item()], [vote(1, {}), vote(2, {"Beta": 0.9})], floor=0.6, dictionary=dictionary
+    )
+    assert outcome.close_calls[0].disagreement_class == "missing_votes"
+
+
+@pytest.mark.parametrize("duplicate", ["grader", "family"])
+def test_fold_rejects_duplicate_grader_identity(
+    dictionary: LabelIndex, duplicate: str
+) -> None:
+    votes = [vote(1, {"Alpha": 0.9}), vote(2, {"Alpha": 0.9}), vote(3, {"Alpha": 0.9})]
+    if duplicate == "grader":
+        votes[1] = replace(votes[1], grader_id=votes[0].grader_id)
+    else:
+        votes[1] = replace(votes[1], model_family=votes[0].model_family)
+    expected = "duplicate grader" if duplicate == "grader" else "duplicate model_family"
+    with pytest.raises(GradeError, match=expected):
+        fold_votes([item()], votes, floor=0.6, dictionary=dictionary)
+
+
+def test_three_empty_votes_route_empty_proposal(dictionary: LabelIndex) -> None:
+    outcome = fold_votes(
+        [item()], [vote(1, {}), vote(2, {}), vote(3, {})], floor=0.6, dictionary=dictionary
+    )
+    assert outcome.items[0].verification == "needs_review"
+    assert outcome.close_calls[0].disagreement_class == "empty_proposal"
+
+
 def test_provisional_gold_provenance_carries_all_votes(dictionary: LabelIndex) -> None:
     votes = [vote(1, {"Alpha": 0.9}), vote(2, {"Alpha": 0.8}), vote(3, {"Alpha": 0.7})]
     row = fold_votes([item()], votes, floor=0.6, dictionary=dictionary).items[0]
@@ -144,11 +174,11 @@ def test_audit_sample_is_deterministic_and_report_math(dictionary: LabelIndex) -
 
 def _manifest(surfaces: list[str]):
     return build_manifest(
-        surfaces,
+        surfaces or ["invented non-colliding surface"],
         SALT,
         gold_version="test",
         gold_content_sha256="a" * 64,
-        scrypt_params=ScryptParams(n=2, r=1, p=1, dklen=8),
+        scrypt_params=ScryptParams(n=2, r=1, p=1, dklen=8, test_params=True),
     )
 
 
@@ -173,6 +203,7 @@ def test_synthetic_sitting_leakcheck_and_gate_precedence(
             lane="synthetic",
             leak_manifest=_manifest(["planted"]),
             salt=SALT,
+            firm_sheet_empty=True,
         )
     assert not list(tmp_path.iterdir())
 
@@ -193,5 +224,23 @@ def test_synthetic_queue_batch_cap_is_25(tmp_path: Path) -> None:
     manifest = replace(assemble_sittings(packet).batches[0].manifest, batch_size=26)
     with pytest.raises(ValueError, match="capped at 25"):
         write_sitting_v2(
-            packet, manifest, tmp_path, lane="synthetic", leak_manifest=_manifest([]), salt=SALT
+            packet, manifest, tmp_path, lane="synthetic", leak_manifest=_manifest([]), salt=SALT,
+            firm_sheet_empty=True,
+        )
+
+
+def test_synthetic_sitting_derives_firm_sheet_nonempty_from_rows(tmp_path: Path) -> None:
+    from folio_eval.audit import Packet, PacketRow
+
+    row = PacketRow(
+        decision_id="d1", section="suspect", item_id="i1", firm="firm1", stratum="brief",
+        stratum_id="brief", ancestor_path=(), surface_label="i1", input_text="passage",
+        slice_name="synthetic", reason_class="set_mismatch", suggested_action="review",
+    )
+    packet = Packet((row,), (), {}, None, {}, {}, {})
+    manifest = assemble_sittings(packet).batches[0].manifest
+    with pytest.raises(ValueError, match="only synthetic rows"):
+        write_sitting_v2(
+            packet, manifest, tmp_path, lane="synthetic", leak_manifest=_manifest([]), salt=SALT,
+            firm_sheet_empty=True,
         )

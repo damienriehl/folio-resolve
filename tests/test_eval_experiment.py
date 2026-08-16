@@ -9,10 +9,12 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import folio_eval.experiment as experiment_module
 import pytest
 from folio_eval.experiment import (
     CHECK_IN_ATTEMPTS,
     BoundaryRecord,
+    ExperimentError,
     ExperimentRecord,
     ItemOutcome,
     PendingAttemptError,
@@ -69,6 +71,7 @@ def synthetic_iteration(
             "low": low,
             "high": high,
             "width": high - low,
+            "n_units": 20,
         },
         "disagreement_classes_seen": list(classes),
         "rebaseline": rebaseline,
@@ -701,12 +704,13 @@ def test_synthetic_record_via_manifest_checker_round_trips(tmp_path: Path) -> No
         salt,
         gold_version="gold_v1",
         gold_content_sha256="a" * 64,
-        scrypt_params=ScryptParams(n=2, r=1, p=1, dklen=8),
+        scrypt_params=ScryptParams(n=2, r=1, p=1, dklen=8, test_params=True),
     )
     log_path = tmp_path / "synthetic.jsonl"
     pending_path = tmp_path / "pending.json"
-    before = SliceOutcome.from_synthetic_report(
-        {"overall": {"items": 2, "tp": 8, "fp": 2, "fn": 2, "exact_items": 1}}
+    before = slice_of(
+        "synthetic",
+        [outcome("s-1"), outcome("s-2", tp=6, fp=3, fn=3, exact=False)],
     )
     after = slice_of(
         "synthetic",
@@ -745,7 +749,9 @@ def test_synthetic_record_via_manifest_checker_round_trips(tmp_path: Path) -> No
     assert loaded == record
     assert loaded.lever_scope == "shared"
     assert loaded.corpus_version == "synthetic-v1"
+    assert loaded.answer_rule_config_sha256 == "b" * 64
     assert loaded.item_count == 2
+    assert loaded.bootstrap_ci is not None
     assert set(loaded.bootstrap_ci) >= {"low", "high", "width"}
     assert loaded.disagreement_classes_seen == ("set_mismatch",)
 
@@ -755,6 +761,161 @@ def test_stop_status_stops_only_with_corroborating_checkpoint() -> None:
     checkpoint = {"tune": {"f1": 0.7}, "firm2": {"changed_items": 0}, "corroborates": True}
     assert stop_status(records, interim_checkpoint=checkpoint).status == "stopped"
     assert stop_status(records, interim_checkpoint=None).status == "escalate"
+
+
+def test_stop_status_rejects_bare_checkpoint_flag() -> None:
+    records = [synthetic_iteration(1), synthetic_iteration(2)]
+    assert stop_status(records, interim_checkpoint={"corroborates": True}).status == "escalate"
+
+
+def test_stop_status_zero_unit_ci_does_not_advance_counter() -> None:
+    records = [synthetic_iteration(1), synthetic_iteration(2)]
+    records[1]["bootstrap_ci"] = {"point": 0.0, "low": 0.0, "high": 0.0, "n_units": 0}
+    result = stop_status(records, interim_checkpoint=None)
+    assert result.status == "continue"
+    assert result.consecutive_sub_epsilon == 0
+
+
+def test_large_negative_delta_is_not_diminishing_returns() -> None:
+    records = [synthetic_iteration(1), synthetic_iteration(2, delta=-0.5, low=-0.6, high=-0.4)]
+    result = stop_status(records, interim_checkpoint=None)
+    assert result.status == "continue"
+    assert result.consecutive_sub_epsilon == 0
+
+
+def test_finish_synthetic_attempt_requires_paired_item_data(tmp_path: Path) -> None:
+    log_path = tmp_path / "synthetic.jsonl"
+    pending_path = tmp_path / "pending.json"
+    aggregate = SliceOutcome.from_synthetic_report(
+        {"overall": {"items": 2, "tp": 2, "fp": 0, "fn": 0, "exact_items": 2}}
+    )
+    start_attempt(
+        hypothesis="normalization adjustment",
+        cluster_targeted="synthetic disagreement",
+        cluster_size=2,
+        gold_version=0,
+        ontology_hash="a" * 64,
+        config_hash="b" * 64,
+        surfaces=GOLD_SURFACES,
+        prior_scores={"synthetic": aggregate},
+        lever_scope="shared",
+        corpus_version="synthetic-v1",
+        run_selftest=False,
+        experiments_log=log_path,
+        pending_path=pending_path,
+    )
+    with pytest.raises(ExperimentError, match="paired per-item data"):
+        finish_attempt(
+            decision="keep",
+            reason="aggregate only",
+            surfaces=GOLD_SURFACES,
+            after_scores={"synthetic": aggregate},
+            commit_sha="cafebabe",
+            experiments_log=log_path,
+            pending_path=pending_path,
+        )
+
+
+def test_finish_binds_synthetic_report_identity_at_start(tmp_path: Path) -> None:
+    log_path = tmp_path / "synthetic.jsonl"
+    pending_path = tmp_path / "pending.json"
+    scores = {"synthetic": slice_of("synthetic", [outcome("s-1")])}
+    start_attempt(
+        hypothesis="normalization adjustment",
+        cluster_targeted="synthetic disagreement",
+        cluster_size=1,
+        gold_version=0,
+        ontology_hash="a" * 64,
+        config_hash="b" * 64,
+        answer_rule_config_sha256="b" * 64,
+        surfaces=GOLD_SURFACES,
+        prior_scores=scores,
+        lever_scope="shared",
+        corpus_version="synthetic-v1",
+        run_selftest=False,
+        experiments_log=log_path,
+        pending_path=pending_path,
+    )
+    with pytest.raises(ExperimentError, match="corpus_version differs"):
+        finish_attempt(
+            decision="keep",
+            reason="identity changed",
+            surfaces=GOLD_SURFACES,
+            after_scores=scores,
+            corpus_version="synthetic-v2",
+            answer_rule_config_sha256="b" * 64,
+            commit_sha="cafebabe",
+            experiments_log=log_path,
+            pending_path=pending_path,
+        )
+
+
+def test_finish_refuses_changed_answer_rule_config_hash(tmp_path: Path) -> None:
+    log_path = tmp_path / "synthetic.jsonl"
+    pending_path = tmp_path / "pending.json"
+    scores = {"synthetic": slice_of("synthetic", [outcome("s-1")])}
+    start_attempt(
+        hypothesis="normalization adjustment",
+        cluster_targeted="synthetic disagreement",
+        cluster_size=1,
+        gold_version=0,
+        ontology_hash="a" * 64,
+        config_hash="b" * 64,
+        answer_rule_config_sha256="b" * 64,
+        surfaces=GOLD_SURFACES,
+        prior_scores=scores,
+        lever_scope="shared",
+        corpus_version="synthetic-v1",
+        run_selftest=False,
+        experiments_log=log_path,
+        pending_path=pending_path,
+    )
+    with pytest.raises(ExperimentError, match="answer_rule_config_sha256 differs"):
+        finish_attempt(
+            decision="keep",
+            reason="identity changed",
+            surfaces=GOLD_SURFACES,
+            after_scores=scores,
+            corpus_version="synthetic-v1",
+            answer_rule_config_sha256="c" * 64,
+            commit_sha="cafebabe",
+            experiments_log=log_path,
+            pending_path=pending_path,
+        )
+
+
+def test_synthetic_attempt_defaults_to_separate_ledger(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    firm_log = tmp_path / "experiments.jsonl"
+    synthetic_log = tmp_path / "synthetic_experiments.jsonl"
+    monkeypatch.setattr(experiment_module, "DEFAULT_EXPERIMENTS_LOG", firm_log)
+    monkeypatch.setattr(experiment_module, "DEFAULT_SYNTHETIC_EXPERIMENTS_LOG", synthetic_log)
+    pending_path = tmp_path / "pending.json"
+    scores = {"synthetic": slice_of("synthetic", [outcome("s-1")])}
+    start_attempt(
+        hypothesis="normalization adjustment",
+        cluster_targeted="synthetic disagreement",
+        cluster_size=1,
+        gold_version=0,
+        ontology_hash="a" * 64,
+        config_hash="b" * 64,
+        surfaces=GOLD_SURFACES,
+        prior_scores=scores,
+        lever_scope="shared",
+        corpus_version="synthetic-v1",
+        run_selftest=False,
+        pending_path=pending_path,
+    )
+    finish_attempt(
+        decision="keep",
+        reason="complete",
+        surfaces=GOLD_SURFACES,
+        after_scores=scores,
+        commit_sha="cafebabe",
+        pending_path=pending_path,
+        ci_resamples=10,
+    )
+    assert synthetic_log.exists()
+    assert not firm_log.exists()
 
 
 def test_adapter_only_iteration_does_not_advance_stop_counter() -> None:

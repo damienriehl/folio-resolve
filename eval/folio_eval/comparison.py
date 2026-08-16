@@ -27,7 +27,7 @@ from .leakcheck import Manifest, scan_text
 from .report import DEFAULT_BOOTSTRAP_RESAMPLES, DEFAULT_BOOTSTRAP_SEED, bootstrap_ci
 from .score import MicroCounts
 from .synthesize import LoadedCorpus, SyntheticItem
-from .synthetic_score import DocumentAdapter, PhraseExtractor, nounish_ngrams
+from .synthetic_score import DocumentAdapter, PhraseExtractor, _assert_config, nounish_ngrams
 
 
 class ComparisonError(RuntimeError):
@@ -71,7 +71,8 @@ def _atomic_write_text(path: Path, text: str) -> Path:
             handle.write(text)
         os.replace(tmp_name, path)
     finally:
-        Path(tmp_name).unlink(missing_ok=True)
+        if os.path.exists(tmp_name):
+            os.unlink(tmp_name)
     return path
 
 
@@ -88,6 +89,8 @@ def emit_items_file(
     *,
     limit: int | None = None,
     extractor: PhraseExtractor = nounish_ngrams,
+    leak_manifest: Manifest | None = None,
+    salt: bytes | None = None,
 ) -> Path:
     """Emit the common JSONL once, including the U8 extraction seam's segments.
 
@@ -102,7 +105,14 @@ def emit_items_file(
             "segments": list(extractor(item.text)),
         }
         lines.append(json.dumps(payload, ensure_ascii=False, sort_keys=True))
-    return _atomic_write_text(out_path, "\n".join(lines) + ("\n" if lines else ""))
+    text = "\n".join(lines) + ("\n" if lines else "")
+    if leak_manifest is not None:
+        if salt is None:
+            raise ComparisonError("salt is required with a leak manifest")
+        collisions = scan_text(text, leak_manifest, salt)
+        if collisions:
+            raise ComparisonError(f"items leak check failed: collisions={collisions}")
+    return _atomic_write_text(out_path, text)
 
 
 def _probe_environment(spec: ConsumerSpec) -> dict[str, str]:
@@ -193,6 +203,9 @@ def parse_stack_output(path: Path) -> StackRun:
         raise StackContractError(f"stack output {path} has an invalid header")
     if not isinstance(header["config"], dict):
         raise StackContractError(f"stack output {path} config is not an object")
+    for field in ("stack", "lane", "folio_resolve_version", "folio_python_version"):
+        if not isinstance(header[field], str) or not header[field].strip():
+            raise StackContractError(f"stack output {path} has an empty {field}")
     rows: dict[str, frozenset[str]] = {}
     stages: dict[str, Mapping[str, object]] = {}
     for payload in payloads[1:]:
@@ -397,6 +410,8 @@ def classify_verdict(
 
 
 def _assert_no_version_skew(runs: Sequence[StackRun]) -> str:
+    if any(not run.folio_python_version.strip() for run in runs):
+        raise VersionSkewError("folio-python version is empty")
     versions = sorted({run.folio_python_version for run in runs})
     if len(versions) != 1:
         detail = ", ".join(f"{run.key}={run.folio_python_version}" for run in runs)
@@ -407,12 +422,14 @@ def _assert_no_version_skew(runs: Sequence[StackRun]) -> str:
 def build_comparison(
     corpus: LoadedCorpus,
     runs: Sequence[StackRun],
+    config: AnswerRuleConfig,
     *,
     limit: int | None = None,
     n_resamples: int = DEFAULT_BOOTSTRAP_RESAMPLES,
     seed: int = DEFAULT_BOOTSTRAP_SEED,
 ) -> dict[str, object]:
     """Build the committed-eligible comparison dictionary from parsed stack runs."""
+    _assert_config(corpus, config)
     if not runs:
         raise ComparisonError("comparison requires at least one stack run")
     common_folio_python = _assert_no_version_skew(runs)
@@ -498,17 +515,31 @@ def write_comparison(
     return _atomic_write_text(path, text)
 
 
-def write_stage_snapshots(runs: Sequence[StackRun], out_dir: Path) -> tuple[Path, ...]:
+def write_stage_snapshots(
+    runs: Sequence[StackRun],
+    out_dir: Path,
+    *,
+    leak_manifest: Manifest | None = None,
+    salt: bytes | None = None,
+) -> tuple[Path, ...]:
     """Write row-level stage data to a caller-selected gitignored directory."""
+    keys = [run.key for run in runs]
+    if len(set(keys)) != len(keys):
+        raise StackContractError("duplicate stack/lane run")
+    if leak_manifest is not None and salt is None:
+        raise ComparisonError("salt is required with a leak manifest")
+    checked_salt = salt
     paths: list[Path] = []
     for run in runs:
         path = out_dir / run.stack / run.lane / "stages.json"
         payload = {item_id: run.stages[item_id] for item_id in sorted(run.stages)}
-        paths.append(
-            _atomic_write_text(
-                path, json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
-            )
-        )
+        text = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+        if leak_manifest is not None:
+            assert checked_salt is not None
+            collisions = scan_text(text, leak_manifest, checked_salt)
+            if collisions:
+                raise ComparisonError(f"stage snapshot leak check failed: collisions={collisions}")
+        paths.append(_atomic_write_text(path, text))
     return tuple(paths)
 
 
@@ -520,14 +551,20 @@ def run_synthetic_comparison(
     consumers: Sequence[ConsumerSpec],
     items_path: Path,
     row_snapshot_dir: Path,
+    leak_manifest: Manifest,
+    salt: bytes,
     limit: int | None = None,
     incumbent_version: str = "0.4.0",
 ) -> dict[str, object]:
     """Execute the local candidate and every pinned consumer incumbent, then aggregate."""
-    emit_items_file(corpus, items_path, limit=limit, extractor=adapter.phrase_extractor)
+    _assert_config(corpus, config)
+    emit_items_file(
+        corpus, items_path, limit=limit, extractor=adapter.phrase_extractor,
+        leak_manifest=leak_manifest, salt=salt,
+    )
     runs = [run_local_stack(corpus, adapter, config, limit=limit, items_path=items_path)]
     runs.extend(
         run_consumer_stack(spec, items_path, version=incumbent_version) for spec in consumers
     )
-    write_stage_snapshots(runs, row_snapshot_dir)
-    return build_comparison(corpus, runs, limit=limit)
+    write_stage_snapshots(runs, row_snapshot_dir, leak_manifest=leak_manifest, salt=salt)
+    return build_comparison(corpus, runs, config, limit=limit)

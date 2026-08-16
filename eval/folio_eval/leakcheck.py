@@ -23,12 +23,12 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from .clusters import surface_strings
-from .normalize import is_iri_like, normalize_label
+from .normalize import label_key, normalize_label
 from .splits import GoldItemRecord, GoldSet, load_gold
 
 MANIFEST_KIND = "firm-surface-manifest"
-MANIFEST_VERSION = 1
-NORMALIZATION_NAME = "normalize_label"
+MANIFEST_VERSION = 2
+NORMALIZATION_NAME = "label_key+punctuation_fold"
 MAX_SURFACE_TOKENS = 64
 MAX_DIGESTS = 100_000
 SAFE_ITEM_ID_RE = re.compile(r"[A-Za-z0-9_.:-]+")
@@ -51,17 +51,25 @@ class ScryptParams:
     r: int = 8
     p: int = 1
     dklen: int = 32
+    test_params: bool = False
 
     def validate(self) -> None:
         if self.n < 2 or self.n & (self.n - 1):
             raise LeakcheckError("scrypt n must be a power of two greater than one")
         if self.r < 1 or self.p < 1 or self.dklen < 1:
             raise LeakcheckError("scrypt r, p, and dklen must be positive")
-        if self.n > 2**14 or self.r > 8 or self.p > 1 or self.dklen > 32:
+        if not self.test_params and (
+            self.n < 2**14 or self.r < 8 or self.p < 1 or self.dklen < 32
+        ):
+            raise LeakcheckError("scrypt parameters are below the pinned leakcheck minimums")
+        if self.n > 2**20 or self.r > 16 or self.p > 16 or self.dklen > 64:
             raise LeakcheckError("scrypt parameters exceed the supported leakcheck limits")
 
     def to_json(self) -> dict[str, int]:
-        return {"n": self.n, "r": self.r, "p": self.p, "dklen": self.dklen}
+        payload = {"n": self.n, "r": self.r, "p": self.p, "dklen": self.dklen}
+        if self.test_params:
+            payload["test_params"] = True
+        return payload
 
 
 DEFAULT_SCRYPT_PARAMS = ScryptParams()
@@ -78,6 +86,7 @@ class Manifest:
     max_tokens: int
     gold_version: str
     gold_content_sha256: str
+    salt_fingerprint: str
     digests: tuple[str, ...]
     kind: str = MANIFEST_KIND
 
@@ -91,11 +100,10 @@ class Manifest:
         if self.normalization != NORMALIZATION_NAME:
             raise LeakcheckError(f"unsupported normalization: {self.normalization!r}")
         self.scrypt_params.validate()
-        if self.digest_count:
-            if self.min_tokens < 1 or self.max_tokens < self.min_tokens:
-                raise LeakcheckError("invalid manifest token bounds")
-        elif self.min_tokens != 0 or self.max_tokens != 0:
-            raise LeakcheckError("empty manifest must have zero token bounds")
+        if not self.digest_count:
+            raise LeakcheckError("surface manifest must contain at least one digest")
+        if self.min_tokens < 1 or self.max_tokens < self.min_tokens:
+            raise LeakcheckError("invalid manifest token bounds")
         if self.max_tokens > MAX_SURFACE_TOKENS:
             raise LeakcheckError("manifest token bounds exceed the supported limit")
         if self.digest_count > MAX_DIGESTS:
@@ -110,6 +118,8 @@ class Manifest:
             for digest in self.digests
         ):
             raise LeakcheckError("manifest digests must be lowercase hexadecimal values")
+        if not re.fullmatch(r"[0-9a-f]{64}", self.salt_fingerprint):
+            raise LeakcheckError("manifest salt fingerprint must be lowercase sha256")
 
     def to_json(self) -> dict[str, object]:
         return {
@@ -121,6 +131,7 @@ class Manifest:
             "max_tokens": self.max_tokens,
             "gold_version": self.gold_version,
             "gold_content_sha256": self.gold_content_sha256,
+            "salt_fingerprint": self.salt_fingerprint,
             "digest_count": self.digest_count,
             "digests": list(self.digests),
         }
@@ -159,7 +170,8 @@ def _atomic_write_text(path: Path, text: str, *, mode: int | None = None) -> Non
         if mode is not None:
             os.chmod(path, mode)
     finally:
-        Path(tmp_name).unlink(missing_ok=True)
+        if os.path.exists(tmp_name):
+            os.unlink(tmp_name)
 
 
 def _atomic_write_bytes(path: Path, data: bytes, *, mode: int) -> None:
@@ -172,7 +184,8 @@ def _atomic_write_bytes(path: Path, data: bytes, *, mode: int) -> None:
         os.replace(tmp_name, path)
         os.chmod(path, mode)
     finally:
-        Path(tmp_name).unlink(missing_ok=True)
+        if os.path.exists(tmp_name):
+            os.unlink(tmp_name)
 
 
 def _as_gold_set(gold: GoldSet | Iterable[GoldItemRecord]) -> GoldSet:
@@ -189,8 +202,24 @@ def _as_gold_set(gold: GoldSet | Iterable[GoldItemRecord]) -> GoldSet:
 
 
 def _is_iri_surface(surface: str) -> bool:
-    """Reject both known FOLIO forms and any absolute IRI scheme."""
-    return is_iri_like(surface) or bool(urlsplit(surface).scheme)
+    """Reject actual absolute IRIs without discarding ordinary colon-bearing labels."""
+    candidate = normalize_label(surface)
+    lowered = candidate.casefold()
+    parsed = urlsplit(candidate)
+    return (
+        lowered.startswith(("http://", "https://", "urn:"))
+        or bool(parsed.scheme and parsed.netloc)
+    )
+
+
+def _leak_tokens(text: str) -> tuple[str, ...]:
+    """Return the case-folded, punctuation-folded token form used by both gate sides."""
+    normalized = label_key(text)
+    folded = "".join(
+        character if character.isalnum() or character.isspace() else " "
+        for character in normalized
+    )
+    return tuple(folded.split())
 
 
 def harvest_surfaces(gold: GoldSet | Iterable[GoldItemRecord]) -> frozenset[str]:
@@ -201,9 +230,9 @@ def harvest_surfaces(gold: GoldSet | Iterable[GoldItemRecord]) -> frozenset[str]
     }
     normalized = (normalize_label(surface) for surface in surface_strings(gold_set))
     return frozenset(
-        surface
+        " ".join(_leak_tokens(surface))
         for surface in normalized
-        if surface and surface not in forbidden_iris and not _is_iri_surface(surface)
+        if _leak_tokens(surface) and surface not in forbidden_iris and not _is_iri_surface(surface)
     )
 
 
@@ -233,9 +262,14 @@ def build_manifest(
     if not salt:
         raise LeakcheckError("salt must not be empty")
     scrypt_params.validate()
-    normalized = frozenset(normalize_label(surface) for surface in surfaces if surface.strip())
-    if any(_is_iri_surface(surface) for surface in normalized):
+    raw_surfaces = tuple(normalize_label(surface) for surface in surfaces if surface.strip())
+    if any(_is_iri_surface(surface) for surface in raw_surfaces):
         raise LeakcheckError("IRI-like values are forbidden in a surface manifest")
+    normalized = frozenset(
+        folded
+        for surface in raw_surfaces
+        if (folded := " ".join(_leak_tokens(surface)))
+    )
     token_lengths = [len(surface.split()) for surface in normalized]
     manifest = Manifest(
         version=MANIFEST_VERSION,
@@ -245,6 +279,7 @@ def build_manifest(
         max_tokens=max(token_lengths, default=0),
         gold_version=gold_version,
         gold_content_sha256=gold_content_sha256,
+        salt_fingerprint=hashlib.sha256(salt).hexdigest(),
         digests=tuple(sorted(_digest(surface, salt, scrypt_params) for surface in normalized)),
     )
     manifest.validate()
@@ -254,17 +289,17 @@ def build_manifest(
 def scan_text(text: str, manifest: Manifest, salt: bytes) -> int:
     """Count distinct matching normalized token n-grams in one text value."""
     manifest.validate()
-    if not manifest.digests:
-        return 0
     if not salt:
         raise LeakcheckError("salt must not be empty")
+    if hashlib.sha256(salt).hexdigest() != manifest.salt_fingerprint:
+        raise LeakcheckError("salt does not match surface manifest")
     return _scan_text(text, manifest, salt, frozenset(manifest.digests))
 
 
 def _scan_text(
     text: str, manifest: Manifest, salt: bytes, digest_set: frozenset[str]
 ) -> int:
-    tokens = normalize_label(text).split()
+    tokens = _leak_tokens(text)
     collisions = 0
     for length in range(manifest.min_tokens, manifest.max_tokens + 1):
         ngrams = {
@@ -281,7 +316,8 @@ def _string_values(value: object) -> Iterable[str]:
     if isinstance(value, str):
         yield value
     elif isinstance(value, Mapping):
-        for nested in value.values():
+        for key, nested in value.items():
+            yield from _string_values(key)
             yield from _string_values(nested)
     elif isinstance(value, list):
         for nested in value:
@@ -291,10 +327,10 @@ def _string_values(value: object) -> Iterable[str]:
 def scan_file(path: Path, manifest: Manifest, salt: bytes) -> FileReport:
     """Scan a JSONL object's string values or an entire plain-text/Markdown file."""
     manifest.validate()
-    if not manifest.digests:
-        return FileReport(path=path, collision_count=0, item_ids=())
     if not salt:
         raise LeakcheckError("salt must not be empty")
+    if hashlib.sha256(salt).hexdigest() != manifest.salt_fingerprint:
+        raise LeakcheckError("salt does not match surface manifest")
     digest_set = frozenset(manifest.digests)
     collisions = 0
     item_ids: set[str] = set()
@@ -340,6 +376,7 @@ def _manifest_from_json(payload: object) -> Manifest:
             r=int(params_raw["r"]),
             p=int(params_raw["p"]),
             dklen=int(params_raw["dklen"]),
+            test_params=params_raw.get("test_params") is True,
         )
         manifest = Manifest(
             kind=str(payload["kind"]),
@@ -350,6 +387,7 @@ def _manifest_from_json(payload: object) -> Manifest:
             max_tokens=int(payload["max_tokens"]),
             gold_version=str(payload["gold_version"]),
             gold_content_sha256=str(payload["gold_content_sha256"]),
+            salt_fingerprint=str(payload["salt_fingerprint"]),
             digests=tuple(digests_raw),
         )
     except (KeyError, TypeError, ValueError) as exc:
@@ -360,8 +398,10 @@ def _manifest_from_json(payload: object) -> Manifest:
     return manifest
 
 
-def load_manifest(path: Path) -> Manifest:
-    return _manifest_from_json(json.loads(path.read_text(encoding="utf-8")))
+def load_manifest(path: Path, *, allow_stale: bool = False) -> Manifest:
+    manifest = _manifest_from_json(json.loads(path.read_text(encoding="utf-8")))
+    assert_manifest_current(manifest, allow_stale=allow_stale)
+    return manifest
 
 
 def _read_or_create_salt(path: Path) -> bytes:
@@ -379,7 +419,10 @@ def _read_or_create_salt(path: Path) -> bytes:
 
 
 def _read_salt(path: Path) -> bytes:
-    raw = path.read_bytes()
+    try:
+        raw = path.read_bytes()
+    except FileNotFoundError as exc:
+        raise LeakcheckError("salt file does not exist; owners must run init-salt") from exc
     if not raw:
         raise LeakcheckError("salt file is empty")
     return raw
@@ -390,8 +433,19 @@ def _gold_version_name(version: object) -> str:
     return text if text.startswith("gold_v") else f"gold_v{text}"
 
 
-def _local_gold_versions(paths: Iterable[Path]) -> tuple[str, ...]:
-    versions: set[str] = set()
+def assert_manifest_current(
+    manifest: Manifest,
+    local_gold_manifest_paths: Iterable[Path] | None = None,
+    *,
+    allow_stale: bool = False,
+) -> None:
+    """Fail closed when local private-gold identity differs in version or content."""
+    if allow_stale:
+        return
+    paths = local_gold_manifest_paths
+    if paths is None:
+        paths = DEFAULT_LOCAL_GOLD_MANIFEST_GLOB.parent.glob(DEFAULT_LOCAL_GOLD_MANIFEST_GLOB.name)
+    identities: list[tuple[str, str]] = []
     for path in paths:
         try:
             text = path.read_text(encoding="utf-8")
@@ -399,8 +453,12 @@ def _local_gold_versions(paths: Iterable[Path]) -> tuple[str, ...]:
             continue
         payload = json.loads(text)
         if isinstance(payload, dict) and "gold_version" in payload:
-            versions.add(_gold_version_name(payload["gold_version"]))
-    return tuple(sorted(versions))
+            content = payload.get("gold_content_sha256", payload.get("content_sha256", ""))
+            identities.append((_gold_version_name(payload["gold_version"]), str(content)))
+    if identities:
+        current = max(identities, key=lambda value: _version_order(value[0]))
+        if current != (manifest.gold_version, manifest.gold_content_sha256):
+            raise LeakcheckError("manifest stale: local gold identity does not match surface manifest")
 
 
 def _version_order(version: str) -> tuple[int, str]:
@@ -415,6 +473,8 @@ def _parser() -> argparse.ArgumentParser:
     generate.add_argument("--gold", type=Path, required=True)
     generate.add_argument("--salt-file", type=Path, required=True)
     generate.add_argument("--out", type=Path, required=True)
+    init_salt = subparsers.add_parser("init-salt", help="owner-only: create a new salt file")
+    init_salt.add_argument("--salt-file", type=Path, required=True)
     check = subparsers.add_parser("check", help="scan candidate artifacts without firm rows")
     check.add_argument("--manifest", type=Path, required=True)
     check.add_argument("--salt-file", type=Path, required=True)
@@ -430,9 +490,12 @@ def main(
     """Run the owner ``generate`` or worker-safe ``check`` command."""
     args = _parser().parse_args(argv)
     try:
+        if args.command == "init-salt":
+            _read_or_create_salt(args.salt_file)
+            return 0
         if args.command == "generate":
             gold = load_gold(args.gold)
-            salt = _read_or_create_salt(args.salt_file)
+            salt = _read_salt(args.salt_file)
             manifest = build_manifest(
                 harvest_surfaces(gold),
                 salt,
@@ -443,17 +506,13 @@ def main(
             print(f"wrote {manifest.digest_count} digests to {args.out}")
             return 0
 
-        manifest = load_manifest(args.manifest)
+        manifest = load_manifest(args.manifest, allow_stale=True)
         salt = _read_salt(args.salt_file)
         if local_gold_manifest_paths is None:
             local_gold_manifest_paths = DEFAULT_LOCAL_GOLD_MANIFEST_GLOB.parent.glob(
                 DEFAULT_LOCAL_GOLD_MANIFEST_GLOB.name
             )
-        local_versions = _local_gold_versions(local_gold_manifest_paths)
-        if local_versions and max(local_versions, key=_version_order) != manifest.gold_version:
-            raise LeakcheckError(
-                "manifest stale: local gold version does not match surface manifest"
-            )
+        assert_manifest_current(manifest, local_gold_manifest_paths)
         reports = [scan_file(path, manifest, salt) for path in args.input_file]
         for report in reports:
             ids = ",".join(report.item_ids) if report.item_ids else "-"

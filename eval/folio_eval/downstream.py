@@ -1016,6 +1016,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             consumers=specs,
             items_path=args.items,
             row_snapshot_dir=args.row_snapshot_dir,
+            leak_manifest=load_manifest(args.leak_manifest),
+            salt=args.salt_file.read_bytes(),
             limit=args.limit,
             incumbent_version=args.incumbent_version,
         )

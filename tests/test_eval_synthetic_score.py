@@ -136,6 +136,22 @@ def test_config_hash_mismatch_raises() -> None:
         score_corpus(corpus, _ontology(), replace(config, threshold=0.9))
 
 
+def test_unscoreable_corpus_requires_explicit_diagnostics_override() -> None:
+    config = AnswerRuleConfig(threshold=0.5)
+    corpus = _corpus(config)
+    corpus = replace(corpus, manifest=replace(corpus.manifest, scoreable=False))
+    with pytest.raises(SyntheticScoringError, match="not scoreable"):
+        score_corpus(corpus, _ontology(), config)
+    result = score_corpus(corpus, _ontology(), config, allow_unscoreable=True)
+    assert result.unscoreable_override is True
+    report = build_synthetic_report(
+        result, corpus=corpus, config=config, label="diagnostic",
+        ontology_pin=corpus.manifest.ontology_cache_sha256,
+        depth_probe_result={}, determinism_selftest={},
+    )
+    assert report["unscoreable_override"] is True
+
+
 def test_depth_probe_has_monotone_counts_and_metrics() -> None:
     config = AnswerRuleConfig(threshold=0.0, top_k=5)
     probe = depth_probe(_corpus(config), _ontology(), config, depths=(1, 2, 5))
@@ -163,7 +179,7 @@ def test_report_shape_and_leak_checked_atomic_write(tmp_path: Path) -> None:
     manifest = build_manifest(
         ["planted collision"],
         salt=salt,
-        scrypt_params=ScryptParams(n=2, r=1, p=1, dklen=8),
+        scrypt_params=ScryptParams(n=2, r=1, p=1, dklen=8, test_params=True),
         gold_version="test",
         gold_content_sha256="d" * 64,
     )

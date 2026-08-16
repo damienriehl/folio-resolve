@@ -34,6 +34,7 @@ DISAGREEMENT_CLASSES = frozenset(
         "unresolved_label",
         "partial_overlap",
         "empty_proposal",
+        "missing_votes",
     }
 )
 VOTE_SCHEMA_VERSION = 1
@@ -225,6 +226,8 @@ def _resolve_vote(vote: GraderVote, dictionary: LabelIndex) -> _ResolvedVote:
 
 
 def _reason(resolved: Sequence[_ResolvedVote], floor: float) -> str:
+    if len(resolved) < 3:
+        return "missing_votes"
     issues = [entry.issue for entry in resolved if entry.issue]
     if "ambiguous_label" in issues:
         return "ambiguous_label"
@@ -259,12 +262,18 @@ def fold_votes(
             skipped.append(item.item_id)
             continue
         item_votes = tuple(grouped.get(item.item_id, ()))
+        grader_ids = [vote.grader_id for vote in item_votes]
+        model_families = [vote.model_family for vote in item_votes]
+        if len(grader_ids) != len(set(grader_ids)):
+            raise GradeError(f"item {item.item_id!r} has duplicate grader_id votes")
+        if len(model_families) != len(set(model_families)):
+            raise GradeError(f"item {item.item_id!r} has duplicate model_family votes")
         resolved = tuple(_resolve_vote(vote, dictionary) for vote in item_votes)
         set_counts = Counter(entry.iris for entry in resolved if entry.issue is None and entry.iris)
         winner = set_counts.most_common(1)[0][0] if set_counts else frozenset()
         agreeing = [entry for entry in resolved if entry.iris == winner and entry.mean >= floor]
         unanimous_sets = len({entry.iris for entry in resolved}) == 1
-        if len(resolved) == 3 and unanimous_sets and len(agreeing) >= 2 and not any(entry.issue for entry in resolved):
+        if winner and len(resolved) == 3 and unanimous_sets and len(agreeing) >= 2 and not any(entry.issue for entry in resolved):
             labels = tuple(sorted({label for entry in resolved for label in entry.vote.concepts}))
             provenance = dict(item.provenance)
             provenance["grader_votes"] = [entry.vote.to_json() for entry in resolved]

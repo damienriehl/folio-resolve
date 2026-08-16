@@ -93,6 +93,8 @@ _REPO_ROOT = _EVAL_ROOT.parent
 
 #: Committed (KTD1: IDs, hashes, counts, and free-text hypothesis/reason -- leak-scanned first).
 DEFAULT_EXPERIMENTS_LOG = _EVAL_ROOT / "reports" / "experiments.jsonl"
+#: Synthetic attempts are isolated from the firm-lane ledger by default.
+DEFAULT_SYNTHETIC_EXPERIMENTS_LOG = _EVAL_ROOT / "reports" / "synthetic_experiments.jsonl"
 #: Gitignored: the one in-flight attempt's captured state between ``start`` and ``finish``.
 DEFAULT_PENDING_PATH = DEFAULT_ITEM_REPORT_DIR / "experiment_pending.json"
 #: Gitignored: the running suspect stream the incremental triage hook maintains.
@@ -369,6 +371,7 @@ class ExperimentRecord:
     recorded_at: str
     lever_scope: LeverScope | None = None
     corpus_version: str | None = None
+    answer_rule_config_sha256: str | None = None
     item_count: int | None = None
     bootstrap_ci: Mapping[str, object] | None = None
     disagreement_classes_seen: tuple[str, ...] = ()
@@ -397,6 +400,7 @@ class ExperimentRecord:
             payload.update(
                 lever_scope=self.lever_scope,
                 corpus_version=self.corpus_version,
+                answer_rule_config_sha256=self.answer_rule_config_sha256,
                 item_count=self.item_count,
                 bootstrap_ci=dict(self.bootstrap_ci or {}),
                 disagreement_classes_seen=list(self.disagreement_classes_seen),
@@ -425,6 +429,9 @@ class ExperimentRecord:
             lever_scope=_lever_scope(payload.get("lever_scope")),
             corpus_version=str(payload["corpus_version"])
             if payload.get("corpus_version") is not None
+            else None,
+            answer_rule_config_sha256=str(payload["answer_rule_config_sha256"])
+            if payload.get("answer_rule_config_sha256") is not None
             else None,
             item_count=_as_int(payload.get("item_count"))
             if payload.get("item_count") is not None
@@ -625,7 +632,12 @@ def stop_status(
     epsilon: float = 0.005,
     interim_checkpoint: Mapping[str, object] | None,
 ) -> StopStatus:
-    """Stop only after two corroborated, same-cohort, shared-scope diminishing returns."""
+    """Stop after two corroborated shared attempts with ``abs(delta) < epsilon``.
+
+    A regression, however large in the negative direction, is not diminishing returns. Empty
+    (zero-unit) confidence intervals and structurally incomplete checkpoints never advance or
+    corroborate the stop gate.
+    """
     if epsilon <= 0:
         raise ValueError("epsilon must be positive")
     seen_classes: set[str] = set()
@@ -668,6 +680,9 @@ def stop_status(
         if not isinstance(ci, Mapping):
             consecutive = 0
             continue
+        if _as_int(ci.get("n_units"), 0) == 0:
+            consecutive = 0
+            continue
         delta_raw = ci.get("point")
         low = ci.get("low")
         high = ci.get("high")
@@ -680,7 +695,7 @@ def stop_status(
             continue
         delta = float(delta_raw)
         in_band = float(low) <= delta <= float(high)
-        if not novel and delta < epsilon and in_band:
+        if not novel and abs(delta) < epsilon and in_band:
             consecutive += 1
         elif not novel:
             consecutive = 0
@@ -688,7 +703,15 @@ def stop_status(
     eligible = consecutive >= 2
     if not eligible:
         return StopStatus("continue", consecutive, False, "diminishing returns not yet corroborated")
-    if interim_checkpoint is not None and interim_checkpoint.get("corroborates") is True:
+    checkpoint_complete = (
+        interim_checkpoint is not None
+        and interim_checkpoint.get("corroborates") is True
+        and isinstance(interim_checkpoint.get("tune"), Mapping)
+        and bool(interim_checkpoint["tune"])
+        and isinstance(interim_checkpoint.get("firm2"), Mapping)
+        and bool(interim_checkpoint["firm2"])
+    )
+    if checkpoint_complete:
         return StopStatus("stopped", consecutive, True, "interim tune/Firm-2 checkpoint corroborates")
     return StopStatus(
         "escalate",
@@ -721,6 +744,7 @@ class PendingAttempt:
     firm2_before_items: tuple[ItemOutcome, ...]
     lever_scope: LeverScope | None = None
     corpus_version: str | None = None
+    answer_rule_config_sha256: str | None = None
     disagreement_classes_seen: tuple[str, ...] = ()
 
     def to_json(self) -> dict[str, object]:
@@ -742,6 +766,7 @@ class PendingAttempt:
             payload.update(
                 lever_scope=self.lever_scope,
                 corpus_version=self.corpus_version,
+                answer_rule_config_sha256=self.answer_rule_config_sha256,
                 disagreement_classes_seen=list(self.disagreement_classes_seen),
             )
         return payload
@@ -768,6 +793,9 @@ class PendingAttempt:
             lever_scope=_lever_scope(payload.get("lever_scope")),
             corpus_version=str(payload["corpus_version"])
             if payload.get("corpus_version") is not None
+            else None,
+            answer_rule_config_sha256=str(payload["answer_rule_config_sha256"])
+            if payload.get("answer_rule_config_sha256") is not None
             else None,
             disagreement_classes_seen=_string_tuple(
                 payload.get("disagreement_classes_seen")
@@ -853,12 +881,13 @@ def start_attempt(
     prior_scores: ScoreResult | None = None,
     lever_scope: LeverScope | None = None,
     corpus_version: str | None = None,
+    answer_rule_config_sha256: str | None = None,
     disagreement_classes_seen: Iterable[str] = (),
     rebaseline: bool = False,
     rebaseline_reason: str = "",
     determinism_target: str = DEFAULT_SELFTEST_TARGET,
     run_selftest: bool = True,
-    experiments_log: Path = DEFAULT_EXPERIMENTS_LOG,
+    experiments_log: Path | None = None,
     pending_path: Path = DEFAULT_PENDING_PATH,
     now: str | None = None,
 ) -> PendingAttempt:
@@ -889,6 +918,12 @@ def start_attempt(
         raise ValueError("lever_scope must be 'shared' or 'adapter_only'")
     if lever_scope is not None and not corpus_version:
         raise ValueError("synthetic iterations require corpus_version")
+    if lever_scope is not None and not answer_rule_config_sha256:
+        answer_rule_config_sha256 = config_hash
+
+    experiments_log = experiments_log or (
+        DEFAULT_SYNTHETIC_EXPERIMENTS_LOG if lever_scope is not None else DEFAULT_EXPERIMENTS_LOG
+    )
 
     records = load_raw_records(experiments_log)
     baseline = current_window_baseline(records)
@@ -959,6 +994,7 @@ def start_attempt(
         firm2_before_items=firm2_before_items,
         lever_scope=lever_scope,
         corpus_version=corpus_version,
+        answer_rule_config_sha256=answer_rule_config_sha256,
         disagreement_classes_seen=seen_classes,
     )
     _atomic_write_text(
@@ -975,11 +1011,13 @@ def finish_attempt(
     manifest_checker: ManifestChecker | None = None,
     score_tune_firm2: ScoreFn | None = None,
     after_scores: ScoreResult | None = None,
+    corpus_version: str | None = None,
+    answer_rule_config_sha256: str | None = None,
     commit_sha: str | None = None,
     cluster_rows: Sequence[Mapping[str, object]] | None = None,
     gold_rows: Sequence[GoldRow] | None = None,
     live_suspects_path: Path = DEFAULT_LIVE_SUSPECTS_PATH,
-    experiments_log: Path = DEFAULT_EXPERIMENTS_LOG,
+    experiments_log: Path | None = None,
     pending_path: Path = DEFAULT_PENDING_PATH,
     now: str | None = None,
     ci_resamples: int = DEFAULT_BOOTSTRAP_RESAMPLES,
@@ -1000,6 +1038,21 @@ def finish_attempt(
             f"no attempt in progress at {pending_path} — call start_attempt first"
         )
     pending = PendingAttempt.from_json(json.loads(pending_path.read_text(encoding="utf-8")))
+    experiments_log = experiments_log or (
+        DEFAULT_SYNTHETIC_EXPERIMENTS_LOG
+        if pending.lever_scope is not None
+        else DEFAULT_EXPERIMENTS_LOG
+    )
+
+    if pending.lever_scope is not None:
+        finishing_version = corpus_version or pending.corpus_version
+        finishing_config = answer_rule_config_sha256 or pending.answer_rule_config_sha256
+        if finishing_version != pending.corpus_version:
+            raise ExperimentError("finishing synthetic report corpus_version differs from start")
+        if finishing_config != pending.answer_rule_config_sha256:
+            raise ExperimentError(
+                "finishing synthetic report answer_rule_config_sha256 differs from start"
+            )
 
     if after_scores is not None:
         after_map = _as_slice_map(after_scores)
@@ -1021,6 +1074,10 @@ def finish_attempt(
     if pending.lever_scope is not None:
         synthetic_before_items = slice_items_from_scores_json(pending.scores_before, "synthetic")
         paired_synthetic = pair_outcomes(synthetic_before_items, synthetic_after_items)
+        if not paired_synthetic:
+            raise ExperimentError(
+                "synthetic-lever attempt requires paired per-item data (n_units must be nonzero)"
+            )
         synthetic_ci = bootstrap_ci(
             paired_synthetic, f1_delta, n_resamples=ci_resamples, seed=ci_seed
         )
@@ -1077,6 +1134,7 @@ def finish_attempt(
         recorded_at=now or _now(),
         lever_scope=pending.lever_scope,
         corpus_version=pending.corpus_version,
+        answer_rule_config_sha256=pending.answer_rule_config_sha256,
         item_count=len(synthetic_after_items)
         or slice_item_count_from_scores_json(scores_after, "synthetic"),
         bootstrap_ci={
@@ -1135,7 +1193,7 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - I/O or
     common_paths.add_argument("--split-manifest", type=Path, default=DEFAULT_SPLIT_MANIFEST)
     common_paths.add_argument("--label-search-limit", type=int, default=10)
     common_paths.add_argument("--multi-strategy-recall", action="store_true")
-    common_paths.add_argument("--experiments-log", type=Path, default=DEFAULT_EXPERIMENTS_LOG)
+    common_paths.add_argument("--experiments-log", type=Path, default=None)
     common_paths.add_argument("--pending", type=Path, default=DEFAULT_PENDING_PATH)
     common_paths.add_argument("--allow-ontology-bump", action="store_true")
     common_paths.add_argument(
@@ -1193,6 +1251,8 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - I/O or
             parser.error("synthetic report requires corpus_version")
         ontology_hash = str(report.get("ontology_cache_sha256", ""))
         config_hash = str(report.get("answer_rule_config_sha256", ""))
+        if not config_hash:
+            parser.error("synthetic report requires answer_rule_config_sha256")
         def score_synthetic() -> ScoreResult:
             return {"synthetic": synthetic}
         if args.command == "start":
@@ -1208,6 +1268,7 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - I/O or
                 score_tune_firm2=score_synthetic,
                 lever_scope=args.lever_scope,
                 corpus_version=corpus_version,
+                answer_rule_config_sha256=config_hash,
                 disagreement_classes_seen=args.disagreement_class or (),
                 rebaseline=args.rebaseline,
                 rebaseline_reason=args.rebaseline_reason,
@@ -1223,6 +1284,8 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - I/O or
             surfaces=(),
             manifest_checker=manifest_checker,
             score_tune_firm2=score_synthetic,
+            corpus_version=corpus_version,
+            answer_rule_config_sha256=config_hash,
             commit_sha=args.commit_sha,
             experiments_log=args.experiments_log,
             pending_path=args.pending,
@@ -1282,7 +1345,7 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - I/O or
             rebaseline=args.rebaseline,
             rebaseline_reason=args.rebaseline_reason,
             determinism_target=args.determinism_target,
-            experiments_log=args.experiments_log,
+            experiments_log=args.experiments_log or DEFAULT_EXPERIMENTS_LOG,
             pending_path=args.pending,
         )
         print(json.dumps(pending.to_json(), indent=2, sort_keys=True))

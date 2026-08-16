@@ -3520,6 +3520,7 @@ def _main_v2(args: Any, parser: Any) -> int:  # pragma: no cover - I/O orchestra
 
     from .answer_rule import load_config, rank_candidates
     from .clusters import collect_raw_candidates, surface_strings
+    from .leakcheck import _read_salt, load_manifest
     from .packet_render import validate_sitting_output, write_packet_v2, write_sitting_v2
     from .resolve_labels import index_from_folio
     from .score import PipelineAdapter, build_folio_provider, build_pipeline
@@ -3537,8 +3538,9 @@ def _main_v2(args: Any, parser: Any) -> int:  # pragma: no cover - I/O orchestra
         pin = assert_ontology_pin("")
     rows = load_gold_rows_v2(args.gold)
     out_dir = Path(args.out)
-    if args.mode == "sitting":
-        validate_sitting_output(out_dir, lane=args.lane)
+    validate_sitting_output(out_dir, lane=args.lane)
+    leak_manifest = load_manifest(args.leak_manifest) if args.leak_manifest else None
+    salt = _read_salt(args.salt_file) if args.salt_file else None
     packet_path = out_dir / "packet.json"
 
     current_gold_path = (
@@ -3874,9 +3876,23 @@ def _main_v2(args: Any, parser: Any) -> int:  # pragma: no cover - I/O orchestra
                 f"--sitting-number must be between 1 and {len(plan.batches)} for this packet"
             )
         batch = plan.batches[args.sitting_number - 1]
-        written = write_sitting_v2(batch.packet, batch.manifest, out_dir, lane=args.lane)
+        written = write_sitting_v2(
+            batch.packet,
+            batch.manifest,
+            out_dir,
+            lane=args.lane,
+            leak_manifest=leak_manifest,
+            salt=salt,
+            firm_sheet_empty=not any(row.firm != "synthetic" for row in batch.packet.rows),
+        )
     else:
-        written = write_packet_v2(packet, out_dir)
+        written = write_packet_v2(
+            packet,
+            out_dir,
+            lane=args.lane,
+            leak_manifest=leak_manifest,
+            salt=salt,
+        )
     print(json.dumps(dict(packet.counts), indent=2, sort_keys=True))
     print(f"overflow by reason: {json.dumps(dict(packet.overflow), sort_keys=True)}")
     print(
@@ -3955,6 +3971,8 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - I/O or
     parser.add_argument("--batch-size", type=int, default=SITTING_BATCH_SIZE)
     parser.add_argument("--sitting-number", type=int, default=1)
     parser.add_argument("--lane", choices=("firm", "synthetic"), default=None)
+    parser.add_argument("--leak-manifest", type=Path, default=None)
+    parser.add_argument("--salt-file", type=Path, default=None)
     parser.add_argument(
         "--improvement-cap",
         type=int,
@@ -4008,8 +4026,14 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - I/O or
             "--clusters is required for packet/sitting regeneration; pass the explicit "
             "clusters_v2.jsonl path"
         )
-    if args.mode == "sitting" and args.lane is None:
-        parser.error("--lane is required in sitting mode (firm or synthetic)")
+    if args.mode in ("packet-v2", "fold-v2", "sitting") and args.lane is None:
+        parser.error("--lane is required in v2 modes (firm or synthetic)")
+    if (
+        args.mode in ("packet-v2", "fold-v2", "sitting")
+        and args.lane == "synthetic"
+        and (args.leak_manifest is None or args.salt_file is None)
+    ):
+        parser.error("--lane synthetic requires --leak-manifest and --salt-file")
     if args.out is None:
         args.out = (
             DEFAULT_PACKET_DIR_V2
@@ -4017,7 +4041,7 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - I/O or
             else DEFAULT_PACKET_DIR
         )
 
-    if args.mode == "sitting":
+    if args.mode in ("packet-v2", "fold-v2", "sitting"):
         from .packet_render import validate_sitting_output
 
         validate_sitting_output(Path(args.out), lane=args.lane)

@@ -176,6 +176,7 @@ class SyntheticScoreResult:
     suppression_counters: Mapping[str, int]
     raw_candidate_count: int
     survivor_count: int
+    unscoreable_override: bool = False
 
 
 def _assert_config(corpus: LoadedCorpus, config: AnswerRuleConfig) -> None:
@@ -193,9 +194,14 @@ def score_corpus(
     config: AnswerRuleConfig,
     *,
     adapter: DocumentAdapter | None = None,
+    allow_unscoreable: bool = False,
 ) -> SyntheticScoreResult:
     """Score verified rows and evaluate no-match false positives outside ``score_items``."""
     _assert_config(corpus, config)
+    if not corpus.manifest.scoreable and not allow_unscoreable:
+        raise SyntheticScoringError(
+            "corpus manifest is not scoreable; pass allow_unscoreable=True for diagnostics"
+        )
     document_adapter = adapter or DocumentAdapter(ontology)
     counters = dict.fromkeys(SUPPRESSION_CATEGORIES, 0)
     raw_count = 0
@@ -234,6 +240,7 @@ def score_corpus(
         suppression_counters=dict(sorted(counters.items())),
         raw_candidate_count=raw_count,
         survivor_count=survivor_count,
+        unscoreable_override=not corpus.manifest.scoreable and allow_unscoreable,
     )
 
 
@@ -309,6 +316,7 @@ def build_synthetic_report(
         "suppression_counters": dict(sorted(result.suppression_counters.items())),
         "raw_candidate_count": result.raw_candidate_count,
         "survivor_count": result.survivor_count,
+        "unscoreable_override": result.unscoreable_override,
         "depth_probe": dict(sorted(depth_probe_result.items())),
         "determinism_selftest": dict(determinism_selftest),
     }
@@ -340,7 +348,8 @@ def write_report(path: Path, report: Mapping[str, object], leak_manifest: Manife
             handle.write(serialized)
         os.replace(temporary, path)
     finally:
-        Path(temporary).unlink(missing_ok=True)
+        if os.path.exists(temporary):
+            os.unlink(temporary)
     return path
 
 

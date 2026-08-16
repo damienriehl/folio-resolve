@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -187,9 +188,21 @@ def render_prompt(template: str, assignment: Mapping[str, object]) -> str:
         rendered = template.format(**{name: assignment[name] for name in required})
     except KeyError as exc:
         raise ValueError(f"missing prompt assignment field: {exc.args[0]}") from exc
-    folded = rendered.casefold()
-    markers = LEAKAGE_MARKERS | PUBLIC_BRANCH_NAMES
-    found = sorted(marker for marker in markers if marker.casefold() in folded)
+    # ``Location`` is ordinary assignment prose as well as a branch name; treating it as a
+    # marker would reject benign prompts. The distinctive branch vocabulary remains guarded.
+    markers = LEAKAGE_MARKERS | (PUBLIC_BRANCH_NAMES - {"Location"})
+    found = sorted(
+        marker
+        for marker in markers
+        if (
+            marker in {"http://", "https://"}
+            and marker.casefold() in rendered.casefold()
+        )
+        or (
+            marker not in {"http://", "https://"}
+            and re.search(rf"\b{re.escape(marker)}\b", rendered, flags=re.IGNORECASE)
+        )
+    )
     if found:
         raise ValueError(f"rendered prompt contains leakage marker: {found[0]!r}")
     return rendered

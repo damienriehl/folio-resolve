@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
+from folio_eval.answer_rule import AnswerRuleConfig
 from folio_eval.comparison import (
+    ComparisonError,
     IncumbentInstallMismatch,
+    StackContractError,
     StackRun,
     VersionSkewError,
     assert_incumbent_probe,
@@ -17,12 +21,14 @@ from folio_eval.comparison import (
     parse_stack_output,
     score_stack,
     write_comparison,
+    write_stage_snapshots,
 )
 from folio_eval.leakcheck import build_manifest
 from folio_eval.synthesize import CorpusManifest, LoadedCorpus, SyntheticItem
 
 
 def _corpus(tmp_path: Path) -> LoadedCorpus:
+    config = AnswerRuleConfig()
     scoreable = (
         SyntheticItem("one", "brief", "US", "Alpha beta", ("A",), frozenset({"iri:a"}), "human"),
         SyntheticItem("two", "brief", "US", "Gamma", ("B",), frozenset({"iri:b"}), "human"),
@@ -33,7 +39,7 @@ def _corpus(tmp_path: Path) -> LoadedCorpus:
         content_sha256="corpus-hash",
         nomatch_content_sha256="nomatch-hash",
         ontology_cache_sha256="ontology-hash",
-        answer_rule_config_sha256="config-hash",
+        answer_rule_config_sha256=config.content_sha256(),
         item_counts={},
         non_lexical_fraction=0.0,
         non_lexical_floor=0.0,
@@ -117,7 +123,20 @@ def test_version_skew_aborts(tmp_path: Path) -> None:
         _run("folio-mapper", "incumbent", {"one": set(), "two": set(), "none": set()}, py="2"),
     ]
     with pytest.raises(VersionSkewError, match="folio-python version skew"):
-        build_comparison(corpus, runs)
+        build_comparison(corpus, runs, AnswerRuleConfig())
+
+
+@pytest.mark.parametrize("field", ["folio_resolve_version", "folio_python_version"])
+def test_parse_rejects_empty_version_strings(tmp_path: Path, field: str) -> None:
+    header = {
+        "kind": "synthetic-stack-run", "stack": "s", "lane": "candidate",
+        "folio_resolve_version": "1", "folio_python_version": "1", "config": {},
+    }
+    header[field] = "  "
+    path = tmp_path / "empty.jsonl"
+    path.write_text(json.dumps(header) + "\n", encoding="utf-8")
+    with pytest.raises(StackContractError, match="empty"):
+        parse_stack_output(path)
 
 
 def test_incumbent_assertion_logic() -> None:
@@ -148,6 +167,24 @@ def test_items_file_emits_shared_segments_once(tmp_path: Path) -> None:
     assert calls == ["Alpha beta", "Gamma", "Nothing here"]
 
 
+def test_items_and_stage_snapshots_are_leak_gated(tmp_path: Path) -> None:
+    salt = b"0123456789abcdef"
+    manifest = build_manifest(["Alpha beta"], salt=salt, gold_version="g", gold_content_sha256="h")
+    with pytest.raises(ComparisonError, match="items leak"):
+        emit_items_file(_corpus(tmp_path), tmp_path / "items.jsonl", leak_manifest=manifest, salt=salt)
+    run = _run("folio-resolve", "candidate", {"one": set()})
+    run = replace(run, stages={"one": {"note": "Alpha beta"}})
+    with pytest.raises(ComparisonError, match="stage snapshot leak"):
+        write_stage_snapshots([run], tmp_path / "stages", leak_manifest=manifest, salt=salt)
+
+
+def test_duplicate_snapshots_rejected_before_write(tmp_path: Path) -> None:
+    run = _run("folio-resolve", "candidate", {"one": set()})
+    with pytest.raises(StackContractError, match="duplicate"):
+        write_stage_snapshots([run, run], tmp_path / "stages")
+    assert not (tmp_path / "stages").exists()
+
+
 def test_write_comparison_leakchecks_every_string(tmp_path: Path) -> None:
     salt = b"0123456789abcdef"
     manifest = build_manifest(
@@ -172,8 +209,22 @@ def test_build_comparison_records_pilot_and_iri_sets(tmp_path: Path) -> None:
         _run("folio-resolve", "candidate", {"one": {"iri:a"}, "none": set()}),
         _run("folio-mapper", "incumbent", {"one": set(), "none": set()}),
     ]
-    result = build_comparison(corpus, runs, limit=1, n_resamples=100)
+    result = build_comparison(corpus, runs, AnswerRuleConfig(), limit=1, n_resamples=100)
     assert result["pilot"] is True
     assert result["scoreable_items"] == 1
     assert result["stacks"]["folio-resolve:candidate"]["items"] == {"one": ["iri:a"]}
     assert result["verdicts"]["folio-mapper"]["verdict"] == "win"
+
+
+def test_build_comparison_config_hash_mismatch_raises(tmp_path: Path) -> None:
+    corpus = _corpus(tmp_path)
+    runs = [_run("folio-resolve", "candidate", {"one": {"iri:a"}, "two": {"iri:b"}, "none": set()})]
+    with pytest.raises(Exception, match="answer_rule_config_sha256"):
+        build_comparison(corpus, runs, AnswerRuleConfig(threshold=0.9))
+
+
+def test_missing_item_is_stack_contract_error(tmp_path: Path) -> None:
+    corpus = _corpus(tmp_path)
+    run = _run("folio-resolve", "candidate", {"one": {"iri:a"}, "none": set()})
+    with pytest.raises(StackContractError, match="omitted scoreable item"):
+        build_comparison(corpus, [run], AnswerRuleConfig())

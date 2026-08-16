@@ -42,11 +42,11 @@ def index() -> LabelIndex:
 @pytest.fixture
 def empty_manifest():
     return build_manifest(
-        [],
+        ["invented forbidden surface"],
         SALT,
         gold_version="test",
         gold_content_sha256="b" * 64,
-        scrypt_params=ScryptParams(n=2, r=1, p=1, dklen=8),
+        scrypt_params=ScryptParams(n=2, r=1, p=1, dklen=8, test_params=True),
     )
 
 
@@ -105,6 +105,26 @@ def test_empty_gold_scoreable_rejected_and_explicit_nomatch_is_routed(
     assert [row.item_id for row in loaded.nomatch_items] == ["nomatch"]
 
 
+def test_leakcheck_scans_provenance_mapping_keys(tmp_path: Path) -> None:
+    surface = "invented firm key"
+    leak_manifest = build_manifest(
+        [surface],
+        SALT,
+        gold_version="test",
+        gold_content_sha256="b" * 64,
+        scrypt_params=ScryptParams(n=2, r=1, p=1, dklen=8, test_params=True),
+    )
+    row = item(
+        "key-leak",
+        "Clean passage.",
+        labels=("Label",),
+        iris=frozenset({"urn:test"}),
+        provenance={surface: "clean"},
+    )
+    with pytest.raises(SynthesisError, match="leak check failed"):
+        build(tmp_path, [row], leak_manifest)
+
+
 def test_ambiguous_resolution_needs_review_and_is_not_scored(
     tmp_path: Path, empty_manifest, index: LabelIndex
 ) -> None:
@@ -143,7 +163,7 @@ def test_leak_collision_reports_counts_and_ids_only(tmp_path: Path) -> None:
         SALT,
         gold_version="test",
         gold_content_sha256="b" * 64,
-        scrypt_params=ScryptParams(n=2, r=1, p=1, dklen=8),
+        scrypt_params=ScryptParams(n=2, r=1, p=1, dklen=8, test_params=True),
     )
     with pytest.raises(SynthesisError) as caught:
         build(tmp_path, [item("leaky-id", "Contains planted private phrase here.")], manifest)

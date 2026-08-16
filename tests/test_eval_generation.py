@@ -111,6 +111,21 @@ def test_render_prompt_refuses_leakage_classes(tmp_path: Path, template: str) ->
         render_prompt(template, assignment)
 
 
+@pytest.mark.parametrize("word", ["portfolio", "location"])
+def test_render_prompt_allows_words_that_only_contain_markers(word: str) -> None:
+    rendered = render_prompt(
+        "Draft a {register} {doc_type} about {scenario} in {jurisdiction}, {length}.",
+        {
+            "doc_type": "brief",
+            "jurisdiction": "test",
+            "scenario": word,
+            "length": "200 words",
+            "register": "formal",
+        },
+    )
+    assert word in rendered
+
+
 def test_input_manifest_is_deterministic(tmp_path: Path) -> None:
     alpha = tmp_path / "alpha.txt"
     beta = tmp_path / "beta.txt"
