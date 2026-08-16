@@ -1332,6 +1332,30 @@ def test_a_stranded_sitting_can_be_recovered(v2_gold: tuple[Any, list[Any]]) -> 
     assert "localStorage.getItem(dismissKey) !== candidates[0].key" in js
     assert "localStorage.setItem(dismissKey, best.key)" in js
     assert "removeItem(best.key)" not in js
+
+
+def test_recovery_ranks_by_what_a_person_wrote(v2_gold: tuple[Any, list[Any]]) -> None:
+    """A raw decision count is mostly machine state, so ranking on it offers the emptiest sitting.
+
+    Observed against real drafts: one stranded sitting held 104 entries of pure default and another
+    held 31 carrying six genuine calls. Raw-count ranking offered the empty one first, and accepting
+    it would have overwritten live work with the defaults the sheet already ships.
+    """
+    build, rows = v2_gold
+    html = render_sheet_v2(v2_packet(build, rows))
+    js = _js(html)
+
+    assert "function humanAuthored(decisions)" in js
+    # a note, a pairing reading or an added concept is authorship; so is a non-default verdict
+    for field in ("'note'", "'gold_note'", "'pipeline_note'", "'level_notes'", "'added_mappings'"):
+        assert field in js
+    assert "entry.gold[iri] !== 'keep'" in js
+    assert "entry.pipeline[iri] !== 'not_gold'" in js
+    # ranked by authorship first, and a sitting with none of it is not offered at all
+    assert "second.human - first.human || second.count - first.count" in js
+    assert "if (human) { found.push(" in js
+    # the label reports authored entries, not the inflated raw count
+    assert "'Recover ' + best.human + ' decision(s) you entered in an earlier sitting'" in js
     # recovery must not silently overwrite work already entered in this workspace
     assert "window.confirm(" in js
     assert "already entered in this workspace" in js

@@ -1034,8 +1034,31 @@ function applySavedDraft(saved) {
   });
   return {matched: matched, orphaned: orphaned};
 }
+// How much of a saved sitting a PERSON actually authored. collect() emits machine state for every
+// unfolded row, so a raw decision count is mostly noise: one of Damien's real stranded sittings
+// held 104 entries of pure default and another held 31 entries carrying six genuine calls. Ranking
+// on the raw count offered him the empty one first, which is worse than not offering at all --
+// accepting it would have overwritten live work with defaults.
+function humanAuthored(decisions) {
+  let score = 0;
+  Object.keys(decisions || {}).forEach(function (id) {
+    const entry = decisions[id] || {};
+    let human = ['note', 'gold_note', 'pipeline_note', 'level_notes', 'added_mappings', 'pairing']
+      .some(function (field) { return entry[field]; });
+    if (!human && entry.gold) {
+      human = Object.keys(entry.gold).some(function (iri) { return entry.gold[iri] !== 'keep'; });
+    }
+    if (!human && entry.pipeline) {
+      human = Object.keys(entry.pipeline).some(function (iri) {
+        return entry.pipeline[iri] !== 'not_gold';
+      });
+    }
+    if (human) { score += 1; }
+  });
+  return score;
+}
 // Any draft for the same gold baseline under a different packet key -- i.e. a sitting stranded by
-// a republish. Ranked by decision count so the fullest one is offered.
+// a republish -- that still holds something a person wrote.
 function strandedDrafts() {
   const found = [];
   for (let index = 0; index < localStorage.length; index += 1) {
@@ -1047,17 +1070,25 @@ function strandedDrafts() {
       const decisions = saved && saved.decisions && typeof saved.decisions === 'object'
         ? saved.decisions : saved;
       const count = decisions && typeof decisions === 'object' ? Object.keys(decisions).length : 0;
-      if (count) { found.push({key: key, saved: saved, count: count}); }
+      const human = humanAuthored(decisions);
+      // A sitting with nothing human in it is not worth offering, and applying it would overwrite
+      // real work with the defaults the sheet already ships.
+      if (human) { found.push({key: key, saved: saved, count: count, human: human}); }
     } catch (error) { /* a draft we cannot parse is one we cannot offer */ }
   }
-  return found.sort(function (first, second) { return second.count - first.count; });
+  return found.sort(function (first, second) {
+    return second.human - first.human || second.count - first.count;
+  });
 }
 function offerStrandedDraft(state, best, restored) {
   const button = document.createElement('button');
   button.type = 'button';
   button.className = 'secondary recover-draft';
-  button.textContent = 'Recover ' + best.count + ' decision(s) from an earlier sitting';
-  button.title = 'Found under ' + best.key + ' -- from a workspace published before this one';
+  // Count what Damien wrote, not what collect() emitted -- the raw number reads as far more work
+  // than the sitting actually holds.
+  button.textContent = 'Recover ' + best.human + ' decision(s) you entered in an earlier sitting';
+  button.title = 'Found under ' + best.key + ' -- from a workspace published before this one. '
+    + best.human + ' of its ' + best.count + ' saved entries are yours; the rest are system defaults.';
   button.addEventListener('click', function () {
     // Recovery replays a whole sitting over this one, and applyDecision clears a row's level
     // chips before replaying the saved set -- so anything entered here first would be silently
