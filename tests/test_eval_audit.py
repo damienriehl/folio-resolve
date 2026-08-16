@@ -1197,8 +1197,165 @@ def test_v2_sheet_renders_an_actionable_mapping_workspace(v2_gold: tuple[Any, li
     assert "restoreDraft" in html
     assert "reviewedIds" in html
     assert "function rowComplete(row)" in html
-    assert "saved.version >= 3" in html
+    assert "saved.version >= 4" in html
     assert html.count("document.addEventListener('change'") == 1
+
+
+def _js(html: str) -> str:
+    """The sheet's JS with ``//`` comments dropped and whitespace collapsed.
+
+    The script is emitted from a Python string constant, so its line wrapping is an artifact of
+    source formatting rather than of behaviour. Matching against the collapsed form keeps these
+    assertions from failing on a reflow, and dropping comments keeps a comment that *quotes* a
+    removed line from reading as the line itself.
+    """
+    lines = [line for line in html.splitlines() if not line.lstrip().startswith("//")]
+    return " ".join(" ".join(lines).split())
+
+
+def _js_body(html: str, start: str, end: str) -> str:
+    """The collapsed, comment-free JS between two anchors."""
+    return _js(html).split(start, 1)[1].split(end, 1)[0]
+
+
+def test_editing_a_row_never_marks_it_reviewed(v2_gold: tuple[Any, list[Any]]) -> None:
+    """Only the Mark-reviewed button may set ``reviewed`` (Damien, 2026-08-16).
+
+    The change handler used to run ``nav.dataset.reviewed = String(rowComplete(row))``, which read
+    "this row's data is complete" as "the human is done with it". Most rows load already complete,
+    so the first click on any control marked the row reviewed, hid it under the Undecided filter,
+    and bounced the reviewer to a different input mid-edit.
+    """
+    build, rows = v2_gold
+    html = render_sheet_v2(v2_packet(build, rows))
+
+    # Assert the invariant on the handler body, not the absence of one spelling -- the bug has many
+    # equivalent forms (setAttribute('data-reviewed', ...) is the same defect). Comments are
+    # stripped first because the explanatory block quotes the old line verbatim.
+    handler = _js_body(html, "document.addEventListener('change'", "document.addEventListener('input'")
+    assert "dataset.reviewed" not in handler
+    assert "data-reviewed" not in handler
+    # The two surviving writes: the Mark-reviewed button, and replaying an id Damien recorded.
+    confirm_branch = html.split("closest('.mark-reviewed')", 1)[1].split("function", 1)[0]
+    assert "nav.dataset.reviewed = 'true'" in confirm_branch
+    assert "reviewedIds.forEach" in html
+
+
+def test_a_pre_fix_draft_never_replays_inferred_reviewed_flags(
+    v2_gold: tuple[Any, list[Any]],
+) -> None:
+    """Version 3 drafts carry the old auto-marking, so their reviewedIds are not Damien's word.
+
+    Every v3 draft was written by the code this change fixes, which set ``reviewed`` on any edit.
+    Recovery replays a saved sitting, so honouring v3 reviewedIds would smuggle the inference back
+    in through the recovery path and hide rows Damien never finished.
+    """
+    build, rows = v2_gold
+    html = render_sheet_v2(v2_packet(build, rows))
+
+    assert "version: 4, decisions: payload" in html
+    assert "saved.version >= 4 && Array.isArray(saved.reviewedIds)" in html
+    assert "saved.version >= 3" not in html
+
+
+def test_editing_a_row_does_not_advance_off_it(v2_gold: tuple[Any, list[Any]]) -> None:
+    """An edit holds position; only an explicit filter change or Mark-reviewed re-homes.
+
+    Clicking a level chip used to hide the row and jump the reviewer to an unrelated input.
+    """
+    build, rows = v2_gold
+    html = render_sheet_v2(v2_packet(build, rows))
+    js = _js(html)
+
+    assert "function applyFilters(options)" in js
+    assert "const keepActive = Boolean(options && options.keepActive);" in js
+    assert "else if (!keepActive &&" in js
+    # The empty-list arm must bail BEFORE the cleanup, or the row under edit loses .active.
+    empty_arm = js.split("if (!visible.length) {", 1)[1].split("} else if", 1)[0]
+    assert "if (keepActive) { return; }" in empty_arm
+    assert empty_arm.index("keepActive") < empty_arm.index("classList.remove('active')")
+    # Anchor each hold-position call to its own branch rather than counting occurrences.
+    add_branch = js.split("setCustomValidity('');", 1)[1].split("const remove =", 1)[0]
+    assert "applyFilters({keepActive: true})" in add_branch
+    remove_branch = js.split("closest('.remove-mapping')", 1)[1].split("closest('.mark-reviewed')", 1)[0]
+    assert "applyFilters({keepActive: true})" in remove_branch
+    # Mark-reviewed is the "& continue", and recovery is a whole-sheet change: both re-home.
+    confirm_branch = js.split("closest('.mark-reviewed')", 1)[1].split("const concept =", 1)[0]
+    assert "applyFilters();" in confirm_branch and "keepActive" not in confirm_branch
+    assert "applyFilters({keepActive: Boolean(row)})" in js
+    # the search and status-filter listeners keep the plain advancing form
+    assert "addEventListener('input', applyFilters)" in js
+    assert "addEventListener('change', applyFilters)" in js
+
+
+def test_an_unassigned_concept_survives_a_level_filter(v2_gold: tuple[Any, list[Any]]) -> None:
+    """A concept with no level decision stays visible, or its level can never be assigned.
+
+    A freshly added FOLIO concept has no level yet, so the old filter hid the very row whose chips
+    were needed to give it one. An excluded or removed concept has its chips cleared too, so the
+    exemption must not swallow those or the filter stops filtering at all.
+    """
+    build, rows = v2_gold
+    html = render_sheet_v2(v2_packet(build, rows))
+    js = _js(html)
+
+    assert "const decided = li.querySelector('input[data-level-map]:checked, " in js
+    assert "|| verdictExcluded(li) || li.classList.contains('mapping-removed');" in js
+    assert "li.hidden = selected !== 'all' && Boolean(decided)" in js
+    # adding a concept must also re-run the row's filter, or the new line renders unfiltered
+    add_branch = js.split("setCustomValidity('');", 1)[1].split("const remove =", 1)[0]
+    assert "applyLevelFilter(row, currentLevelFilter(row))" in add_branch
+
+
+def test_a_stranded_sitting_can_be_recovered(v2_gold: tuple[Any, list[Any]]) -> None:
+    """Republishing over a re-derived packet mints a new draft key; the old work stays reachable.
+
+    The packet key carries the row count and a content fingerprint, so a regenerated workspace
+    looks for a draft that never existed. The baseline id is the stable prefix.
+    """
+    build, rows = v2_gold
+    html = render_sheet_v2(v2_packet(build, rows))
+    js = _js(html)
+
+    assert "function draftBaseline(key)" in js
+    assert "function strandedDrafts()" in js
+    assert "function offerStrandedDraft(state, best, restored)" in js
+    assert "draftBaseline(key) !== draftBaseline(draftKey)" in js
+    assert "'secondary recover-draft'" in js
+    # The offer must NOT be gated on the draft key's absence: beforeunload writes that key on the
+    # way out of the first visit, so one reload would retire the offer and strand the sitting.
+    assert "if (!raw) { offerStrandedDraft(state); return; }" not in js
+    # Nor on a decision-count comparison: collect() emits an entry per unfolded row, so an
+    # untouched workspace's own draft always looks fuller than a real stranded sitting.
+    assert "candidates[0].count > restored" not in js
+    # Only an explicit dismissal retires it, and dismissing never deletes the draft.
+    assert "localStorage.getItem(dismissKey) !== candidates[0].key" in js
+    assert "localStorage.setItem(dismissKey, best.key)" in js
+    assert "removeItem(best.key)" not in js
+    # recovery must not silently overwrite work already entered in this workspace
+    assert "window.confirm(" in js
+    assert "already entered in this workspace" in js
+
+
+def test_an_export_is_only_recorded_once_it_succeeded(v2_gold: tuple[Any, list[Any]]) -> None:
+    """The browser-only warning must not disarm on a copy the clipboard refused.
+
+    ``exportedJson`` drives the "not yet downloaded" indicator. Setting it before the async
+    clipboard write meant a blocked copy read as "Draft saved in this browser" -- the exact false
+    all-clear the indicator exists to prevent, on a sheet with no server behind it.
+    """
+    build, rows = v2_gold
+    html = render_sheet_v2(v2_packet(build, rows))
+    js = _js(html)
+
+    assert "decision(s) not yet downloaded" in js
+    copy_body = js.split("function copyDecisions()", 1)[1].split("document.querySelector(", 1)[0]
+    # the success continuation records it; the failure continuation clears it
+    assert "const done = function () { exportedJson = JSON.stringify(decisions);" in copy_body
+    assert "const manual = function () { exportedJson = '';" in copy_body
+    # and nothing records it before the clipboard is attempted
+    preamble = copy_body.split("const done =", 1)[0]
+    assert "exportedJson" not in preamble
 
 
 def test_v2_sheet_restores_folded_level_assignments_and_notes(

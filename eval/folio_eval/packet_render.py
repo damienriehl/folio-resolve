@@ -867,10 +867,22 @@ const rowsById = new Map(rows.map(function (row) {
 const navByDecisionId = new Map(navItems.map(function (item) {
   return [item.getAttribute('data-target'), item];
 }));
-const draftKey = 'folio-eval-draft:' + workspace.getAttribute('data-packet-key');
+// The packet key embeds the row count and a content fingerprint, so republishing the workspace
+// over a re-derived packet mints a NEW draft key and the previous sitting's work goes unreferenced
+// rather than lost (Damien, 2026-08-16 -- a 236-row draft was stranded when the packet grew to
+// 310). The baseline id is the stable prefix, so a stranded draft for the same gold baseline can
+// still be found and re-attached: decision ids are content-derived and survive the re-derivation.
+const DRAFT_PREFIX = 'folio-eval-draft:';
+const draftKey = DRAFT_PREFIX + workspace.getAttribute('data-packet-key');
+const dismissKey = draftKey + ':recovery-dismissed';
+function draftBaseline(key) { return key.slice(DRAFT_PREFIX.length).split('|')[0]; }
 let activeId = null;
 let mappingFrame = 0;
 let draftTimer = 0;
+// The exact decision payload last exported, so the draft indicator can tell "saved locally" from
+// "safe off this machine". Comparing payloads rather than setting a flag means any later edit
+// re-arms the warning on its own.
+let exportedJson = '';
 const themeKey = 'folio-eval-theme';
 
 function setTheme(theme) {
@@ -1005,35 +1017,137 @@ function rowComplete(row) {
   });
   return verdictsComplete && mappingsComplete;
 }
+function applySavedDraft(saved) {
+  const decisions = saved.decisions && typeof saved.decisions === 'object' ? saved.decisions : saved;
+  let matched = 0;
+  let orphaned = 0;
+  Object.keys(decisions).forEach(function (id) {
+    if (rowById(id)) { applyDecision(id, decisions[id]); matched += 1; } else { orphaned += 1; }
+  });
+  // Version 4 is the first format whose reviewedIds are Damien's word rather than the sheet's
+  // inference. Every v3 draft was written by the code this change fixes, which set reviewed on any
+  // edit -- replaying those would smuggle the exact false attestation back in through recovery.
+  const reviewedIds = saved.version >= 4 && Array.isArray(saved.reviewedIds) ? saved.reviewedIds : [];
+  reviewedIds.forEach(function (id) {
+    const nav = navById(id);
+    if (nav && rowById(id)) { nav.dataset.reviewed = 'true'; }
+  });
+  return {matched: matched, orphaned: orphaned};
+}
+// Any draft for the same gold baseline under a different packet key -- i.e. a sitting stranded by
+// a republish. Ranked by decision count so the fullest one is offered.
+function strandedDrafts() {
+  const found = [];
+  for (let index = 0; index < localStorage.length; index += 1) {
+    const key = localStorage.key(index);
+    if (!key || key.indexOf(DRAFT_PREFIX) !== 0 || key === draftKey) { continue; }
+    if (draftBaseline(key) !== draftBaseline(draftKey)) { continue; }
+    try {
+      const saved = JSON.parse(localStorage.getItem(key));
+      const decisions = saved && saved.decisions && typeof saved.decisions === 'object'
+        ? saved.decisions : saved;
+      const count = decisions && typeof decisions === 'object' ? Object.keys(decisions).length : 0;
+      if (count) { found.push({key: key, saved: saved, count: count}); }
+    } catch (error) { /* a draft we cannot parse is one we cannot offer */ }
+  }
+  return found.sort(function (first, second) { return second.count - first.count; });
+}
+function offerStrandedDraft(state, best, restored) {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'secondary recover-draft';
+  button.textContent = 'Recover ' + best.count + ' decision(s) from an earlier sitting';
+  button.title = 'Found under ' + best.key + ' -- from a workspace published before this one';
+  button.addEventListener('click', function () {
+    // Recovery replays a whole sitting over this one, and applyDecision clears a row's level
+    // chips before replaying the saved set -- so anything entered here first would be silently
+    // reverted. Never do that without asking.
+    const touched = Object.keys(collect()).length;
+    if (touched && !window.confirm(
+        'Recovering will overwrite ' + touched + ' decision(s) already entered in this workspace. '
+        + 'Download JSON first if you want to keep them. Continue?')) { return; }
+    const result = applySavedDraft(best.saved);
+    rows.forEach(function (row) { applyLevelFilter(row, currentLevelFilter(row)); });
+    const decisions = refresh();
+    const stored = persistDraft(decisions);
+    updateProgress();
+    // Recovery is a whole-sheet change, not an in-row edit, so let the list re-home normally.
+    applyFilters();
+    button.remove();
+    state.textContent = 'Recovered ' + result.matched + ' decision(s)'
+      + (result.orphaned ? ' -- ' + result.orphaned + ' no longer match a row in this packet' : '')
+      + (stored ? '. Download JSON to keep them.'
+                : '. NOT saved to this browser (storage full or blocked) -- Download JSON now.');
+  });
+  const dismiss = document.createElement('button');
+  dismiss.type = 'button';
+  dismiss.className = 'secondary dismiss-draft';
+  dismiss.textContent = 'x';
+  dismiss.title = 'Do not offer this earlier sitting again (it stays in this browser)';
+  dismiss.setAttribute('aria-label', dismiss.title);
+  dismiss.addEventListener('click', function () {
+    // Remember the dismissal against this specific stranded key, never delete the draft itself.
+    try { localStorage.setItem(dismissKey, best.key); } catch (error) { /* best effort */ }
+    button.remove();
+    dismiss.remove();
+  });
+  if (!restored) {
+    state.textContent = 'An earlier sitting is still in this browser.';
+  }
+  state.insertAdjacentElement('afterend', dismiss);
+  state.insertAdjacentElement('afterend', button);
+  return true;
+}
 function restoreDraft() {
+  const state = document.getElementById('draft-state');
+  let restored = 0;
   try {
     const raw = localStorage.getItem(draftKey);
-    if (!raw) { return; }
-    const saved = JSON.parse(raw);
-    const decisions = saved.decisions && typeof saved.decisions === 'object' ? saved.decisions : saved;
-    Object.keys(decisions).forEach(function (id) { applyDecision(id, decisions[id]); });
-    const reviewedIds = saved.version >= 3 && Array.isArray(saved.reviewedIds)
-      ? saved.reviewedIds : [];
-    reviewedIds.forEach(function (id) {
-      const nav = navById(id);
-      const row = rowById(id);
-      if (nav && row && rowComplete(row)) { nav.dataset.reviewed = 'true'; }
-    });
-    document.getElementById('draft-state').textContent = 'Draft restored from this browser';
+    if (raw) {
+      const result = applySavedDraft(JSON.parse(raw));
+      restored = result.matched;
+      state.textContent = 'Draft restored from this browser'
+        + (result.orphaned ? ' (' + result.orphaned + ' entr(y/ies) no longer match a row)' : '');
+    }
   } catch (error) {
-    document.getElementById('draft-state').textContent = 'Draft could not be restored';
+    state.textContent = 'Draft could not be restored';
   }
+  // Offer whenever a stranded sitting exists and Damien has not dismissed that specific one.
+  // Two gates were tried and rejected: keying on the draft key's ABSENCE died the moment
+  // beforeunload minted a key on the way out of the first visit, and comparing decision counts
+  // died because collect() emits an entry for every unfolded row, so an untouched workspace's
+  // "empty" draft already carries dozens of machine-derived entries and always looks fuller.
+  // Only an explicit dismissal is a reliable signal that the offer is unwanted.
+  try {
+    const candidates = strandedDrafts();
+    if (candidates.length && localStorage.getItem(dismissKey) !== candidates[0].key) {
+      offerStrandedDraft(state, candidates[0], restored);
+    }
+  } catch (error) { /* an unreadable store simply means no offer */ }
 }
 function persistDraft(decisions) {
   try {
     const reviewedIds = navItems.filter(function (item) { return item.dataset.reviewed === 'true'; })
       .map(function (item) { return item.getAttribute('data-target'); });
+    const payload = decisions || collect();
     localStorage.setItem(draftKey, JSON.stringify({
-      version: 3, decisions: decisions || collect(), reviewedIds: reviewedIds
+      version: 4, decisions: payload, reviewedIds: reviewedIds
     }));
-    document.getElementById('draft-state').textContent = 'Draft saved in this browser';
+    // This sheet has no server -- no fetch, no form, nowhere for a decision to go on entry. The
+    // only durable copy is the one Damien exports, so say plainly how much is browser-only rather
+    // than letting "Draft saved" imply it is safe somewhere.
+    const pending = Object.keys(payload).length;
+    const isExported = JSON.stringify(payload) === exportedJson;
+    document.getElementById('draft-state').textContent = pending && !isExported
+      ? 'Saved in this browser only — ' + pending + ' decision(s) not yet downloaded'
+      : 'Draft saved in this browser';
+    return true;
   } catch (error) {
+    // Report the failure rather than swallowing it: a caller that overwrites this message with its
+    // own success text would otherwise hide the one signal that nothing was persisted.
+    console.error('folio-eval: draft write failed', error);
     document.getElementById('draft-state').textContent = 'Local draft unavailable — download often';
+    return false;
   }
 }
 function scheduleDraft(decisions) {
@@ -1172,7 +1286,16 @@ function applyLevelFilter(row, level) {
     control.setAttribute('aria-pressed', String(control.dataset.levelFilter === selected));
   });
   row.querySelectorAll('.mapping-pane li[data-iri]').forEach(function (li) {
-    li.hidden = selected !== 'all'
+    // A concept carrying no level decision at all stays visible under every filter. Hiding it was
+    // a catch-22: a freshly added concept has no level yet, so the filter hid the one row whose
+    // chips you needed in order to give it one. Explicitly marking it Unassigned (the "--" chip)
+    // is a decision, so those filter out normally.
+    // "Decided" has to match rowComplete's own notion of a concept that owes nothing: an excluded
+    // or removed concept has its chips cleared too, so testing the chips alone would exempt every
+    // un-elevated pipeline candidate and leave the filter showing the whole list.
+    const decided = li.querySelector('input[data-level-map]:checked, input[data-unassigned]:checked')
+      || verdictExcluded(li) || li.classList.contains('mapping-removed');
+    li.hidden = selected !== 'all' && Boolean(decided)
       && !li.querySelector('input[data-level-map][value="' + CSS.escape(selected) + '"]:checked');
   });
   scheduleMappingLines();
@@ -1233,7 +1356,13 @@ function move(delta) {
   const next = Math.min(Math.max(current + delta, 0), visible.length - 1);
   activate(visible[next].getAttribute('data-target'));
 }
-function applyFilters() {
+// ``options.keepActive`` suppresses the auto-advance below. Editing inside a row passes it, so a
+// row can never move out from under the reviewer; an explicit filter or search change does not,
+// because re-homing onto a still-matching item is the whole point of changing a filter. Note the
+// two addEventListener call sites hand this an Event, whose ``keepActive`` is undefined -- that
+// reads as false, which is the advancing behaviour those two want.
+function applyFilters(options) {
+  const keepActive = Boolean(options && options.keepActive);
   const query = document.getElementById('review-search').value.trim().toLowerCase();
   const status = document.getElementById('status-filter').value;
   navItems.forEach(function (item) {
@@ -1250,22 +1379,30 @@ function applyFilters() {
   });
   const visible = visibleItems();
   if (!visible.length) {
+    if (keepActive) { return; }
     rows.forEach(function (row) { row.classList.remove('active'); });
     stage.classList.add('empty');
     document.getElementById('mapping-lines').innerHTML = '';
-  } else if (!navById(activeId) || navById(activeId).hidden) {
+  } else if (!keepActive && (!navById(activeId) || navById(activeId).hidden)) {
     activate(visible[0].getAttribute('data-target'), {scroll: false});
   }
 }
 function downloadDecisions() {
   const decisions = refresh();
-  flushDraft(decisions);
   const blob = new Blob([document.getElementById('out').value + '\\n'], {type: 'application/json'});
   const link = document.createElement('a');
-  link.href = URL.createObjectURL(blob);
+  const url = URL.createObjectURL(blob);
+  link.href = url;
   link.download = 'folio-eval-decisions.json';
+  // Append before clicking and defer the revoke: an unattached link with a synchronously revoked
+  // URL is a known way for the download never to start.
+  document.body.appendChild(link);
   link.click();
-  URL.revokeObjectURL(link.href);
+  link.remove();
+  window.setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+  // Only claim exported once the download has actually been handed to the browser.
+  exportedJson = JSON.stringify(decisions);
+  flushDraft(decisions);
 }
 function copyDecisions() {
   const out = document.getElementById('out');
@@ -1275,8 +1412,17 @@ function copyDecisions() {
   out.select();
   out.setSelectionRange(0, out.value.length);
   const hint = document.getElementById('hint');
-  const done = function () { hint.textContent = 'Copied. Paste it back into the chat.'; };
+  // The clipboard write is async and has a real failure path. Marking the payload exported up
+  // front made a blocked copy read as "Draft saved in this browser" -- the precise false all-clear
+  // this indicator exists to prevent -- so only the success continuation records the export.
+  const done = function () {
+    exportedJson = JSON.stringify(decisions);
+    persistDraft(decisions);
+    hint.textContent = 'Copied. Paste it back into the chat.';
+  };
   const manual = function () {
+    exportedJson = '';
+    persistDraft(decisions);
     hint.textContent = 'Clipboard blocked \\u2014 the text is selected above, press \\u2318C / Ctrl+C.';
   };
   if (navigator.clipboard && navigator.clipboard.writeText) {
@@ -1313,8 +1459,12 @@ stage.addEventListener('click', function (event) {
     panel.querySelector('.add-iri').setCustomValidity('');
     addConceptRow(row, label, iri);
     panel.querySelector('.add-label').value = ''; panel.querySelector('.add-iri').value = '';
+    // Adding a concept is the start of assigning it, not the end of the row: stay put so the new
+    // line is visible and its level chips are reachable.
+    applyLevelFilter(row, currentLevelFilter(row));
     scheduleMappingLines();
-    const decisions = refresh(); persistDraft(decisions); updateProgress(); applyFilters(); return;
+    const decisions = refresh(); persistDraft(decisions); updateProgress();
+    applyFilters({keepActive: true}); return;
   }
   const remove = event.target.closest('.remove-mapping');
   if (remove) {
@@ -1333,7 +1483,8 @@ stage.addEventListener('click', function (event) {
     const mappingRow = li.closest('.row[data-decision-id]');
     applyLevelFilter(mappingRow, currentLevelFilter(mappingRow));
     scheduleMappingLines();
-    const decisions = refresh(); persistDraft(decisions); updateProgress(); applyFilters(); return;
+    const decisions = refresh(); persistDraft(decisions); updateProgress();
+    applyFilters({keepActive: true}); return;
   }
   const confirm = event.target.closest('.mark-reviewed');
   if (confirm) {
@@ -1369,8 +1520,12 @@ document.getElementById('theme-toggle').addEventListener('click', function () {
 });
 document.addEventListener('change', function (event) {
   const row = event.target.closest('.row[data-decision-id]');
-  const nav = row ? navById(row.getAttribute('data-decision-id')) : null;
-  if (nav && row) { nav.dataset.reviewed = String(rowComplete(row)); }
+  // "Reviewed" is Damien's word, never the sheet's inference (Damien, 2026-08-16). An edit used
+  // to set nav.dataset.reviewed = rowComplete(row), which read "this row's data looks complete"
+  // as "the human is finished with it" -- and 284 of 310 rows load already complete, so the first
+  // click on any row silently marked it reviewed, hid it under the Undecided filter, and bounced
+  // the reviewer to another input mid-thought. Only .mark-reviewed sets this now. Editing a row
+  // that is already reviewed leaves it reviewed: an edit is an improvement, not a retraction.
   if (row && event.target.matches('input[data-kind=pairing]')) {
     row.querySelectorAll('.pairing .opt').forEach(function (opt) {
       opt.classList.toggle('picked', opt.getAttribute('data-choice') === event.target.value);
@@ -1404,7 +1559,9 @@ document.addEventListener('change', function (event) {
   }
   persistDraft(decisions);
   updateProgress();
-  applyFilters();
+  // An edit inside a row holds position; the status-filter select and anything else outside a row
+  // reaches this with row === null and keeps the re-homing behaviour.
+  applyFilters({keepActive: Boolean(row)});
 });
 document.addEventListener('input', function (event) {
   if (event.target.matches('textarea.note')) {
