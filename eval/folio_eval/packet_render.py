@@ -453,7 +453,10 @@ _STYLE_V2 = (
               padding: 0 .35rem; margin: .1rem .25rem .1rem 0; }
 .block { border: 1px solid var(--line); border-radius: 7px; padding: .55rem .7rem; margin: .6rem 0; }
 .block > h4 { margin: 0 0 .4rem; font-size: .78rem; text-transform: uppercase;
-              letter-spacing: .06em; color: var(--muted); }
+              letter-spacing: .06em; color: var(--muted); display: flex; flex-wrap: wrap;
+              gap: .4rem; align-items: baseline; }
+.block > h4 .who { font-size: .7rem; letter-spacing: .04em; text-transform: none;
+                   font-style: italic; }
 .block.gold { border-left: 3px solid var(--good); }
 .block.pipeline { border-left: 3px solid var(--accent); }
 ul.grade { list-style: none; margin: 0; padding: 0; }
@@ -621,35 +624,66 @@ body.eval-workspace { padding: 0; overflow: hidden; font-family: Inter, ui-sans-
 .mapping-pane .panel.proposed { margin: 0; background: transparent; border: 0; padding: 0; }
 .mapping-pane .panel.proposed > h4 { display: none; }
 .mapping-pane .block { margin: 0 0 .7rem; background: var(--card); }
-.mapping-pane ul.grade > li { position: relative; border: 1px solid transparent;
-                              border-bottom-color: var(--line); border-radius: 5px;
-                              padding: .38rem .45rem; cursor: pointer; }
+/* One output per line: checkbox, rdfs:label, level chips. Nothing is disclosed behind a
+   chevron, so the pane scans top-to-bottom and fits roughly three times as many rows. */
+.mapping-pane ul.grade { border-top: 1px solid var(--line); }
+/* The base grade list reserves a second column for the verdict; a one-line row has no second
+   column, so it would sit on ~55% of the pane and truncate the label to nothing. */
+.mapping-pane ul.grade > li { display: block; position: relative; border: 1px solid transparent;
+                              border-bottom-color: var(--line); border-radius: 4px;
+                              padding: 0 .3rem; cursor: pointer; }
 .mapping-pane ul.grade > li[hidden] { display: none; }
-.concept-row-head { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .35rem;
-                    align-items: center; }
-.concept-row-head > div:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis;
-                                      white-space: nowrap; }
-.concept-row-head .verdict { margin: 0; white-space: nowrap; }
-.concept-details { margin-top: .18rem; }
-.concept-details > summary { color: var(--muted); font-size: .67rem; cursor: pointer; }
-.concept-details[open] > summary { margin-bottom: .35rem; }
-.concept-details .def { margin: .2rem 0; }
-.mapping-summary { display: inline-flex; gap: .2rem; margin-left: .3rem; }
-.mapping-summary .tag { font-size: .61rem; }
+.concept-row-head { display: flex; align-items: center; gap: .4rem; min-width: 0;
+                    min-height: 1.7rem; }
+.verdict-toggle { display: inline-flex; flex: 0 0 auto; align-items: center; cursor: pointer;
+                  padding: .25rem .1rem; }
+.verdict-toggle input { width: .95rem; height: .95rem; margin: 0; cursor: pointer;
+                        accent-color: var(--good); }
+.block.pipeline .verdict-toggle input { accent-color: #2563eb; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0);
+           clip-path: inset(50%); white-space: nowrap; }
+.concept-label { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+                 white-space: nowrap; font-size: .82rem; font-weight: 600; }
+.concept-row-head > .tag { flex: 0 0 auto; }
+/* Struck out only in the gold block, where unchecking really is a deletion. An un-elevated
+   pipeline candidate is the resting state, so it merely recedes -- striking all of them would
+   paint the whole block as rejected before the reviewer has decided anything. */
+.block.gold ul.grade > li:has(input[data-verdict]:not(:checked)) .concept-label {
+  color: var(--muted); font-weight: 500; text-decoration: line-through;
+  text-decoration-thickness: 1px; }
+.block.pipeline ul.grade > li:has(input[data-verdict]:not(:checked)) .concept-label {
+  color: var(--muted); font-weight: 500; }
 .mapping-pane ul.grade > li:hover, .mapping-pane ul.grade > li.concept-selected {
   border-color: #60a5fa; background: var(--selected-bg); color: var(--selected-fg); }
+.remove-mapping { flex: 0 0 auto; padding: .1rem .3rem; border-radius: 4px; font-size: .68rem;
+                  line-height: 1.2; opacity: .35; }
+.mapping-pane ul.grade > li:hover .remove-mapping,
+.mapping-pane ul.grade > li.concept-selected .remove-mapping,
+.mapping-pane ul.grade > li.mapping-removed .remove-mapping { opacity: 1; }
 .mapping-pane .pairing { grid-template-columns: 1fr; }
 .mapping-pane .taglist .concept { cursor: pointer; }
 .mapping-pane .taglist .concept:hover, .mapping-pane .taglist .concept.concept-selected {
   border-color: #60a5fa; background: var(--selected-bg); color: var(--selected-fg); }
 .mapping-pane .row-note { margin-top: .8rem; }
-.level-choices { display: flex; flex-wrap: wrap; align-items: center; gap: .3rem; margin-top: .45rem; }
-.level-choice { display: inline-flex; align-items: center; gap: .2rem; padding: .2rem .4rem;
-                border: 1px solid var(--line); border-radius: 999px; background: var(--tag-bg);
-                font-size: .66rem; cursor: pointer; }
+/* Level chips sit on the same line as the label: the checkbox itself is the chip, so an
+   assignment is one glance and one click instead of an expand-then-read. */
+.level-choices { display: inline-flex; flex: 0 0 auto; align-items: center; gap: .12rem; }
+.level-choice { position: relative; display: inline-flex; align-items: center; justify-content: center;
+                min-width: 1.45rem; padding: .12rem .22rem; border: 1px solid var(--line);
+                border-radius: 4px; background: var(--tag-bg); color: var(--muted);
+                font: 700 .6rem/1.35 ui-monospace, monospace; cursor: pointer; }
+.level-choice input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0;
+                      opacity: 0; cursor: pointer; }
+.level-choice:has(input:checked) { border-color: var(--good); background: var(--good);
+                                   color: #fff; }
+.block.pipeline .level-choice:has(input:checked) { border-color: #2563eb; background: #2563eb; }
+.level-choice:has(input:focus-visible) { outline: 2px solid #60a5fa; outline-offset: 1px; }
+.unassigned-choice:has(input:checked) { border-color: var(--muted); background: var(--muted); }
 .mapping-state { color: var(--muted); font-size: .67rem; }
-.mapping-removed { opacity: .55; text-decoration: line-through; }
-.mapping-removed .remove-mapping { font-weight: 700; color: var(--good); border-color: var(--good); }
+.mapping-removed { opacity: .5; }
+.mapping-removed .concept-label { text-decoration: line-through; }
+.mapping-removed .remove-mapping { opacity: 1; font-weight: 700; color: var(--good);
+                                   border-color: var(--good); }
 .add-concept { margin: .75rem 0; padding: .65rem; border: 1px dashed var(--line); border-radius: 7px; }
 .add-concept-fields { display: grid; grid-template-columns: minmax(8rem, 1fr) minmax(12rem, 2fr) auto;
                       gap: .35rem; margin-top: .4rem; }
@@ -690,11 +724,30 @@ body.eval-workspace { padding: 0; overflow: hidden; font-family: Inter, ui-sans-
 )
 
 _SCRIPT_V2 = """
+// A concept's verdict is one checkbox: checked emits data-on ("keep"/"elevate"), unchecked emits
+// data-off ("remove"/"not_gold"). The radio branch stays for the pairing block, which is still a
+// one-of-many choice and cannot collapse to a single toggle.
+function verdictValue(li) {
+  const toggle = li.querySelector('input[data-verdict]');
+  if (toggle) { return toggle.checked ? toggle.dataset.on : toggle.dataset.off; }
+  const picked = li.querySelector('input[type=radio]:checked');
+  return picked ? picked.value : '';
+}
+function setVerdictValue(li, value) {
+  const toggle = li.querySelector('input[data-verdict]');
+  if (toggle) { toggle.checked = value === toggle.dataset.on; return; }
+  const radio = li.querySelector('input[type=radio][value="' + CSS.escape(value) + '"]');
+  if (radio) { radio.checked = true; }
+}
+function verdictExcluded(li) {
+  const value = verdictValue(li);
+  return value === 'remove' || value === 'not_gold';
+}
 function verdicts(row, selector) {
   const out = {};
   row.querySelectorAll(selector + ' li[data-iri]').forEach(function (li) {
-    const picked = li.querySelector('input[type=radio]:checked');
-    if (picked) { out[li.getAttribute('data-iri')] = picked.value; }
+    const value = verdictValue(li);
+    if (value) { out[li.getAttribute('data-iri')] = value; }
   });
   return out;
 }
@@ -852,42 +905,41 @@ function addConceptRow(row, label, iri) {
   const li = document.createElement('li');
   li.dataset.iri = iri; li.dataset.label = label; li.dataset.kind = 'gold'; li.dataset.added = 'true';
   const head = document.createElement('div'); head.className = 'concept-row-head';
-  const title = document.createElement('div');
-  const strong = document.createElement('strong'); strong.textContent = label + ' ';
-  const code = document.createElement('code'); code.textContent = iri.split('/').pop();
-  title.append(strong, code); head.appendChild(title);
-  const verdict = document.createElement('div'); verdict.className = 'verdict';
-  ['keep', 'remove'].forEach(function (value) {
-    const choice = document.createElement('label');
-    const radio = document.createElement('input'); radio.type = 'radio';
-    radio.name = 'gold|' + row.dataset.decisionId + '|added|' + iri; radio.value = value;
-    radio.checked = value === 'keep';
-    choice.append(radio, ' ' + (value === 'keep' ? 'Keep gold' : 'Remove from gold'));
-    verdict.appendChild(choice);
-  });
-  head.appendChild(verdict); li.appendChild(head);
-  const details = document.createElement('details'); details.className = 'concept-details';
-  const summary = document.createElement('summary'); summary.append('Mapping: ');
-  const summaryText = document.createElement('span'); summaryText.className = 'mapping-summary-text';
-  summaryText.textContent = 'Choose level'; summary.append(summaryText, ' · expand'); details.appendChild(summary);
-  const choices = document.createElement('div'); choices.className = 'level-choices';
-  const state = document.createElement('span'); state.className = 'mapping-state';
-  state.textContent = 'New mapping · choose:'; choices.appendChild(state);
+  const toggleLabel = document.createElement('label'); toggleLabel.className = 'verdict-toggle';
+  toggleLabel.title = 'Checked = Keep gold · unchecked = Remove from gold';
+  const toggle = document.createElement('input'); toggle.type = 'checkbox';
+  toggle.dataset.verdict = ''; toggle.dataset.on = 'keep'; toggle.dataset.off = 'remove';
+  toggle.name = 'gold|' + row.dataset.decisionId + '|added|' + iri; toggle.checked = true;
+  const toggleText = document.createElement('span'); toggleText.className = 'sr-only';
+  toggleText.textContent = 'Keep gold';
+  toggleLabel.append(toggle, toggleText); head.appendChild(toggleLabel);
+  const title = document.createElement('span'); title.className = 'concept-label';
+  title.textContent = label; title.title = label; head.appendChild(title);
+  const choices = document.createElement('span'); choices.className = 'level-choices';
+  choices.dataset.mappingState = 'New mapping · choose a level';
+  choices.title = choices.dataset.mappingState;
   row.querySelectorAll('.level-node').forEach(function (node) {
     const choice = document.createElement('label'); choice.className = 'level-choice';
     const checkbox = document.createElement('input'); checkbox.type = 'checkbox';
     checkbox.dataset.levelMap = ''; checkbox.dataset.iri = iri; checkbox.value = node.dataset.levelId;
     const levelLabel = node.querySelector('strong')?.textContent || '';
-    choice.append(checkbox, ' ' + node.dataset.levelId + ' · ' + levelLabel);
-    choices.appendChild(choice);
+    choice.title = node.dataset.levelId + ' · ' + levelLabel;
+    const chip = document.createElement('span'); chip.textContent = node.dataset.levelId;
+    choice.append(checkbox, chip); choices.appendChild(choice);
   });
-  const unassignedChoice = document.createElement('label'); unassignedChoice.className = 'level-choice';
+  const unassignedChoice = document.createElement('label');
+  unassignedChoice.className = 'level-choice unassigned-choice';
+  unassignedChoice.title = 'Unassigned — maps to no input level';
   const unassigned = document.createElement('input'); unassigned.type = 'checkbox';
   unassigned.dataset.unassigned = ''; unassigned.dataset.iri = iri;
-  unassignedChoice.append(unassigned, ' Unassigned'); choices.appendChild(unassignedChoice);
+  const unassignedChip = document.createElement('span'); unassignedChip.textContent = '—';
+  unassignedChoice.append(unassigned, unassignedChip); choices.appendChild(unassignedChoice);
+  head.appendChild(choices);
   const remove = document.createElement('button'); remove.className = 'secondary remove-mapping';
-  remove.type = 'button'; remove.textContent = 'Remove'; choices.appendChild(remove);
-  details.appendChild(choices); li.appendChild(details); list.appendChild(li); return li;
+  remove.type = 'button'; remove.textContent = '✕';
+  remove.title = 'Remove this mapping'; remove.setAttribute('aria-label', 'Remove this mapping');
+  head.appendChild(remove);
+  li.appendChild(head); list.appendChild(li); return li;
 }
 function applyDecision(id, decision) {
   const row = rowById(id);
@@ -901,7 +953,8 @@ function applyDecision(id, decision) {
     const verdicts = decision[kind];
     if (!verdicts || typeof verdicts !== 'object') { return; }
     Object.keys(verdicts).forEach(function (iri) {
-      setRadio(row, '.block.' + kind + ' li[data-iri="' + CSS.escape(iri) + '"]', verdicts[iri]);
+      const li = row.querySelector('.block.' + kind + ' li[data-iri="' + CSS.escape(iri) + '"]');
+      if (li) { setVerdictValue(li, verdicts[iri]); }
     });
   });
   if (decision.pairing) { setRadio(row, '.pairing', decision.pairing); }
@@ -937,16 +990,17 @@ function applyDecision(id, decision) {
   row.querySelectorAll('.mapping-pane li[data-iri]').forEach(refreshMappingSummary);
 }
 function rowComplete(row) {
+  // A checkbox verdict is answered by construction, so only the pairing radios can still be
+  // outstanding; a row with neither kind of control has nothing to confirm.
   const radios = Array.from(row.querySelectorAll('input[type=radio][name]'));
-  if (!radios.length) { return false; }
+  const toggles = Array.from(row.querySelectorAll('input[data-verdict]'));
+  if (!radios.length && !toggles.length) { return false; }
   const groups = new Set(radios.map(function (input) { return input.name; }));
   const verdictsComplete = Array.from(groups).every(function (name) {
     return radios.some(function (input) { return input.name === name && input.checked; });
   });
   const mappingsComplete = Array.from(row.querySelectorAll('.mapping-pane li[data-iri]')).every(function (li) {
-    const verdict = li.querySelector('input[type=radio]:checked');
-    const excluded = verdict && (verdict.value === 'remove' || verdict.value === 'not_gold');
-    return excluded || li.classList.contains('mapping-removed')
+    return verdictExcluded(li) || li.classList.contains('mapping-removed')
       || Boolean(li.querySelector('input[data-level-map]:checked, input[data-unassigned]:checked'));
   });
   return verdictsComplete && mappingsComplete;
@@ -1020,7 +1074,7 @@ function showConcept(li) {
     return;
   }
   li.classList.add('concept-selected');
-  const verdict = li.querySelector('input[type=radio]:checked');
+  const verdict = verdictValue(li);
   inspector.innerHTML = '';
   const title = document.createElement('h4');
   title.textContent = li.dataset.label || 'Unnamed concept';
@@ -1029,10 +1083,18 @@ function showConcept(li) {
   const iri = li.dataset.iri || li.dataset.conceptIri || '';
   const source = li.dataset.kind === 'gold' ? 'Current gold'
     : (li.dataset.kind === 'pipeline' ? 'Pipeline candidate' : 'Pairing candidate');
+  // Everything the one-line row cannot show without crowding out the label lands here instead.
   const bits = [source, iri];
   if (li.dataset.branch) { bits.push(li.dataset.branch); }
-  if (li.dataset.score) { bits.push('score ' + li.dataset.score); }
-  if (verdict) { bits.push('decision: ' + verdict.value); }
+  if (li.dataset.column) { bits.push(li.dataset.column); }
+  if (li.dataset.score) {
+    bits.push('score ' + li.dataset.score
+      + (li.dataset.probability ? ' · p=' + li.dataset.probability : ''));
+  }
+  if (li.dataset.path) { bits.push(li.dataset.path); }
+  const levelState = li.querySelector('.level-choices');
+  if (levelState && levelState.dataset.mappingState) { bits.push(levelState.dataset.mappingState); }
+  if (verdict) { bits.push('decision: ' + verdict); }
   meta.textContent = bits.filter(Boolean).join(' · ');
   const definition = document.createElement('p');
   definition.className = 'inspector-definition';
@@ -1115,14 +1177,12 @@ function applyLevelFilter(row, level) {
   });
   scheduleMappingLines();
 }
+// The chips now carry the assignment visually, so this only keeps the row's hover text honest.
 function refreshMappingSummary(li) {
   if (!li) { return; }
-  const summary = li.querySelector('.mapping-summary-text');
-  if (!summary) { return; }
-  const levels = Array.from(li.querySelectorAll('input[data-level-map]:checked'))
-    .map(function (input) { return input.value; });
-  const unassigned = Boolean(li.querySelector('input[data-unassigned]:checked'));
-  summary.textContent = levels.length ? levels.join(' · ') : (unassigned ? 'Unassigned' : 'Choose level');
+  const choices = li.querySelector('.level-choices');
+  if (!choices) { return; }
+  choices.title = choices.dataset.mappingState || '';
 }
 function mappingState(li) {
   return {
@@ -1130,7 +1190,7 @@ function mappingState(li) {
       return input.value;
     }),
     unassigned: Boolean(li.querySelector('input[data-unassigned]:checked')),
-    verdict: li.querySelector('input[type=radio]:checked')?.value || ''
+    verdict: verdictValue(li)
   };
 }
 function restoreMappingState(li, state) {
@@ -1140,12 +1200,16 @@ function restoreMappingState(li, state) {
   });
   const unassigned = li.querySelector('input[data-unassigned]');
   if (unassigned) { unassigned.checked = Boolean(state.unassigned); }
-  const verdict = li.querySelector('input[type=radio][value="' + CSS.escape(state.verdict || '') + '"]');
-  if (verdict) { verdict.checked = true; }
+  if (state.verdict) { setVerdictValue(li, state.verdict); }
 }
 function setMappingRemoved(li, removed) {
   li.classList.toggle('mapping-removed', removed);
-  li.querySelector('.remove-mapping').textContent = removed ? 'Undo remove' : 'Remove';
+  const button = li.querySelector('.remove-mapping');
+  if (button) {
+    button.textContent = removed ? '↺' : '✕';
+    button.title = removed ? 'Undo remove' : 'Remove this mapping';
+    button.setAttribute('aria-label', button.title);
+  }
   refreshMappingSummary(li);
 }
 function activate(id, options) {
@@ -1263,8 +1327,7 @@ stage.addEventListener('click', function (event) {
       li.querySelectorAll('input[data-level-map], input[data-unassigned]').forEach(function (input) {
         input.checked = false;
       });
-      const reject = li.querySelector('input[value="remove"], input[value="not_gold"]');
-      if (reject) { reject.checked = true; }
+      setVerdictValue(li, li.dataset.kind === 'gold' ? 'remove' : 'not_gold');
       setMappingRemoved(li, true);
     }
     const mappingRow = li.closest('.row[data-decision-id]');
@@ -1325,9 +1388,14 @@ document.addEventListener('change', function (event) {
   if (event.target.matches('input[data-level-map], input[data-unassigned]')) {
     refreshMappingSummary(event.target.closest('li[data-iri]'));
   }
-  if (event.target.matches('input[type=radio][value="remove"], input[type=radio][value="not_gold"]')) {
-    event.target.closest('li[data-iri]').querySelectorAll('input[data-level-map], input[data-unassigned]')
-      .forEach(function (input) { input.checked = false; });
+  // Excluding a concept drops its level assignments — an output that is not in gold is not
+  // mapped to a level either, and leaving stale chips checked would redraw phantom lines.
+  if (event.target.matches('input[data-verdict], input[type=radio][value="remove"], input[type=radio][value="not_gold"]')) {
+    const concept = event.target.closest('li[data-iri]');
+    if (concept && verdictExcluded(concept)) {
+      concept.querySelectorAll('input[data-level-map], input[data-unassigned]')
+        .forEach(function (input) { input.checked = false; });
+    }
     scheduleMappingLines();
   }
   const decisions = refresh();
@@ -1383,11 +1451,15 @@ def _grade_list(
     prefill: Mapping[str, object],
     choices: Sequence[tuple[str, str]] | None = None,
 ) -> str:
-    """One radio pair per concept: the granular grading Damien asked for.
+    """One line per concept: a single include/exclude checkbox, the label, and its level chips.
 
-    ``choices`` re-labels the pair without changing the values the fold reads, so section F can
-    ask "Accept as gold / Reject" while still emitting the ``elevate``/``not_gold`` verdicts
-    :func:`folio_eval.audit.fold_granular_decisions` already knows how to apply.
+    Damien, 2026-08-16: the pane is for scanning a mapping, so the ``rdfs:label`` has to be the
+    thing you read, one output per line, with the verdict as one checkbox rather than a stacked
+    radio pair. ``choices`` still names the pair ``(checked_value, label), (unchecked_value,
+    label)``, so section F can ask "Accept as gold / Reject" while emitting the same
+    ``elevate``/``not_gold`` verdicts :func:`folio_eval.audit.fold_granular_decisions` applies.
+    Anything that does not fit the line (definition, IRI, score provenance) rides on ``data-*``
+    and surfaces in the inspector, which costs no vertical space.
     """
     if not entries:
         return '<p class="note">none</p>'
@@ -1396,42 +1468,46 @@ def _grade_list(
         if kind == "gold"
         else (("elevate", "Elevate to gold"), ("not_gold", "Not gold"))
     )
+    (on_value, on_label), (off_value, off_label) = choices
     items: list[str] = []
     for position, entry in enumerate(entries):
         iri = str(entry.get("iri", ""))
         name = f"{kind}|{decision_id}|{position}"
-        bits = [f"<strong>{_esc(entry.get('label', ''))}</strong> <code>{_esc(_short(iri))}</code>"]
+        label_text = str(entry.get("label", ""))
+        tags: list[str] = []
         if kind != "gold":
             score = entry.get("score")
             if score is not None:
-                probability = entry.get("probability")
-                tag = f"score {_esc(score)}"
-                if probability is not None:
-                    tag += f" · p={_esc(probability)}"
-                bits.append(f'<span class="tag">{tag}</span>')
-            if entry.get("extraction_path"):
-                bits.append(f'<span class="tag">{_esc(entry["extraction_path"])}</span>')
+                tags.append(f'<span class="tag">{_esc(score)}</span>')
             if entry.get("already_gold"):
-                bits.append('<span class="tag good">already gold</span>')
-        elif entry.get("column"):
-            bits.append(f'<span class="tag">{_esc(entry["column"])}</span>')
-        line = " ".join(bits)
+                tags.append('<span class="tag good" title="already in gold">&#10003;</span>')
         picked = str(prefill.get(iri, "")) if isinstance(prefill, Mapping) else ""
         if not picked:
             picked = "keep" if kind == "gold" else "not_gold"
-        radios = "".join(
-            f'<label><input type="radio" name="{_esc(name)}" value="{value}"'
-            f"{' checked' if picked == value else ''}> {label}</label>"
-            for value, label in choices
+        toggle = (
+            f'<label class="verdict-toggle" title="Checked = {_esc(on_label)} &middot; '
+            f'unchecked = {_esc(off_label)}">'
+            f'<input type="checkbox" data-verdict name="{_esc(name)}" '
+            f'data-on="{_esc(on_value)}" data-off="{_esc(off_value)}"'
+            f"{' checked' if picked == on_value else ''}>"
+            f'<span class="sr-only">{_esc(on_label)}</span></label>'
         )
         items.append(
             f'<li data-iri="{_esc(iri)}" data-kind="{_esc(kind)}" '
-            f'data-label="{_esc(entry.get("label", ""))}" '
+            f'data-label="{_esc(label_text)}" '
             f'data-definition="{_esc(entry.get("definition", ""))}" '
             f'data-score="{_esc(entry.get("score", ""))}" '
+            f'data-probability="{_esc(entry.get("probability", ""))}" '
+            f'data-path="{_esc(entry.get("extraction_path", ""))}" '
+            f'data-column="{_esc(entry.get("column", ""))}" '
             f'data-branch="{_esc(entry.get("branch", ""))}"><div class="concept-row-head">'
-            f'<div>{line}</div><div class="verdict">{radios}</div></div>'
-            f"{_level_assignment_controls(row, entry)}</li>"
+            + toggle
+            + f'<span class="concept-label" title="{_esc(label_text)}">{_esc(label_text)}</span>'
+            + "".join(tags)
+            + _level_assignment_controls(row, entry)
+            + '<button class="secondary remove-mapping" type="button" title="Remove this mapping" '
+            'aria-label="Remove this mapping">&#10005;</button>'
+            + "</div></li>"
         )
     return '<ul class="grade">' + "".join(items) + "</ul>"
 
@@ -1539,7 +1615,12 @@ def _review_baseline(row: PacketRow) -> Mapping[str, object]:
 
 
 def _level_assignment_controls(row: PacketRow, entry: Mapping[str, object]) -> str:
-    """Expose the system's atomized input-level mapping, with human-editable assignments."""
+    """Expose the system's atomized input-level mapping, with human-editable assignments.
+
+    These ride on the concept's single line as compact ``L1``/``L2``/``L3`` chips rather than
+    behind a disclosure chevron (Damien, 2026-08-16) — the level a mapping sits at is part of
+    scanning it, and a chevron per row both hid the label and cost a line to open.
+    """
     levels = _input_levels(row)
     if not levels:
         return ""
@@ -1552,10 +1633,11 @@ def _level_assignment_controls(row: PacketRow, entry: Mapping[str, object]) -> s
     options = options_raw if isinstance(options_raw, Mapping) else {}
     unassigned = iri in _strings(options.get("unassigned"))
     labels = "".join(
-        f'<label class="level-choice"><input type="checkbox" data-level-map '
+        f'<label class="level-choice" title="L{index} &middot; {_esc(level_label)}">'
+        f'<input type="checkbox" data-level-map '
         f'data-iri="{_esc(iri)}" value="L{index}"'
         f"{' checked' if iri in _strings(known.get(f'L{index}')) else ''}>"
-        f" L{index} · {_esc(level_label)}</label>"
+        f"<span>L{index}</span></label>"
         for index, level_label in enumerate(levels, start=1)
     )
     assigned = [
@@ -1568,19 +1650,13 @@ def _level_assignment_controls(row: PacketRow, entry: Mapping[str, object]) -> s
         state = "Reviewed level mapping" if has_known or unassigned else "No reviewed mapping"
     else:
         state = "System level mapping" if has_known else "No system level mapping · choose"
-    summary = " · ".join(assigned) if assigned else ("Unassigned" if unassigned else "Choose level")
-    definition = str(entry.get("definition", ""))
     return (
-        '<details class="concept-details"><summary>Mapping: <span class="mapping-summary-text">'
-        + _esc(summary)
-        + "</span> · expand</summary>"
-        + (f'<span class="def">{_esc(definition)}</span>' if definition else "")
-        + f'<div class="level-choices"><span class="mapping-state">{state}:</span>'
+        f'<span class="level-choices" data-mapping-state="{_esc(state)}" title="{_esc(state)}">'
         + labels
-        + f'<label class="level-choice"><input type="checkbox" data-unassigned data-iri="{_esc(iri)}"'
+        + '<label class="level-choice unassigned-choice" title="Unassigned &mdash; maps to no '
+        f'input level"><input type="checkbox" data-unassigned data-iri="{_esc(iri)}"'
         + (" checked" if unassigned else "")
-        + "> Unassigned</label>"
-        + '<button class="secondary remove-mapping" type="button">Remove</button></div></details>'
+        + "><span>&mdash;</span></label></span>"
     )
 
 
@@ -1985,8 +2061,9 @@ def _improvement_block(
             )
         lines.append("".join(bits))
     return (
-        '<div class="block pipeline"><h4>Proposed atom tags — accept as gold, or reject'
-        '<span class="tag machine">machine-proposed</span></h4>'
+        '<div class="block pipeline"><h4>Proposed atom tags'
+        '<span class="tag machine">machine-proposed</span>'
+        '<span class="who">check to accept as gold</span></h4>'
         + _grade_list(
             row.pipeline,
             row=row,
@@ -2096,7 +2173,8 @@ def _proposed_panel(row: PacketRow, *, baseline: Mapping[str, object]) -> str:
         if row.section == "consistency":
             body.append(_consistency_block(row))
         body.append(
-            '<div class="block gold"><h4>Gold — keep or remove</h4>'
+            '<div class="block gold"><h4>Gold<span class="who">checked stays in gold '
+            '&middot; uncheck to remove</span></h4>'
             + _grade_list(
                 gold_entries,
                 row=row,
@@ -2115,12 +2193,11 @@ def _proposed_panel(row: PacketRow, *, baseline: Mapping[str, object]) -> str:
             + "</div>"
         )
         pipeline_title = (
-            "FOLIO proposals — elevate the right one"
-            if row.section == "resolution"
-            else "Pipeline candidates — elevate or reject"
+            "FOLIO proposals" if row.section == "resolution" else "Pipeline candidates"
         )
         body.append(
-            f'<div class="block pipeline"><h4>{_esc(pipeline_title)}</h4>'
+            f'<div class="block pipeline"><h4>{_esc(pipeline_title)}'
+            '<span class="who">check to elevate into gold</span></h4>'
             + _grade_list(
                 pipeline_entries,
                 row=row,

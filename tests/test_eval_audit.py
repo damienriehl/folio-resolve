@@ -1029,7 +1029,7 @@ def test_v2_packet_carries_the_pairing_and_consistency_sections(
 
 
 def test_v2_packet_grades_every_concept_individually(v2_gold: tuple[Any, list[Any]]) -> None:
-    """Damien's format: one radio pair per gold concept and per pipeline candidate."""
+    """Damien's format: one verdict checkbox per gold concept and per pipeline candidate."""
     build, rows = v2_gold
     target = _row_by_text(rows, "Enforcement matters")
     packet = v2_packet(
@@ -1050,10 +1050,11 @@ def test_v2_packet_grades_every_concept_individually(v2_gold: tuple[Any, list[An
     # every pipeline candidate carries its own definition snippet, not just the leader
     assert row.pipeline[0]["definition"]
     html = render_sheet_v2(packet)
-    assert 'value="keep"' in html and 'value="remove"' in html
-    assert 'value="elevate"' in html and 'value="not_gold"' in html
-    assert 'value="keep" checked' in html
-    assert 'value="not_gold" checked' in html
+    assert 'data-on="keep" data-off="remove"' in html
+    assert 'data-on="elevate" data-off="not_gold"' in html
+    # gold defaults to kept (checked), a pipeline candidate to not_gold (unchecked)
+    assert 'data-on="keep" data-off="remove" checked' in html
+    assert 'data-on="elevate" data-off="not_gold">' in html
     for entry in row.gold:
         assert any(
             f'data-iri="{entry["iri"]}" value="L{level}" checked' in html for level in (1, 2, 3)
@@ -1154,11 +1155,16 @@ def test_v2_sheet_renders_an_actionable_mapping_workspace(v2_gold: tuple[Any, li
     assert "Option A" not in html
     assert "Option B" not in html
     assert "Option C" not in html
-    assert "L1 ·" in html and "L2 ·" in html and "L3 ·" in html
+    assert "L2 ·" in html and "L3 ·" in html
+    # the level a concept sits at reads off the chip; its full name is the chip's hover text
+    assert 'class="level-choice" title="L1 &middot;' in html
+    assert "<span>L1</span>" in html
     assert "System level mapping" in html
     assert "See all levels" in html
     assert 'data-level-filter="L1"' in html
-    assert 'class="concept-details"' in html
+    # no disclosure chevron hides a concept's label or its level assignment
+    assert "concept-details" not in html
+    assert 'class="concept-label"' in html
     assert "Undo remove" in html
     assert "applyLevelFilter" in html
     assert "Mapped outputs" in html
@@ -1181,7 +1187,7 @@ def test_v2_sheet_renders_an_actionable_mapping_workspace(v2_gold: tuple[Any, li
     assert '<option value="undecided">Undecided</option>' in html
     assert html.index('<option value="undecided">') < html.index('<option value="needs-eye">')
     assert 'class="secondary mark-reviewed"' in html
-    assert 'value="keep" checked' in html
+    assert 'data-on="keep" data-off="remove" checked' in html
     assert "entry.reviewed = true" in html
     assert "position: sticky" in html
     assert "Mark reviewed &amp; continue" in html
@@ -1280,7 +1286,9 @@ def test_v2_prefilled_ruling_is_carried_forward(v2_gold: tuple[Any, list[Any]]) 
     assert suspect.extra["prefill"]["pipeline"] == {"R-junk": "not_gold"}
     assert packet.counts["prefilled_rulings"] == 1
     html = render_sheet_v2(packet)
-    assert 'value="keep" checked' in html and 'value="not_gold" checked' in html
+    # kept gold arrives checked; a not_gold candidate arrives unchecked
+    assert 'data-on="keep" data-off="remove" checked' in html
+    assert 'data-on="elevate" data-off="not_gold">' in html
 
 
 def test_granular_fold_keeps_removes_and_elevates(v2_gold: tuple[Any, list[Any]]) -> None:
@@ -2564,8 +2572,8 @@ def test_gold_panel_sources_from_latest_gold_version_not_packet_snapshot(
 
 
 def test_folded_row_prefill_equals_the_applied_state(v2_gold: tuple[Any, list[Any]]) -> None:
-    """A previously-folded row's radios and note box pre-fill to exactly what is live, not blank
-    and not the stale carried-forward ruling (Damien, 2026-07-28)."""
+    """A previously-folded row's verdict boxes and note box pre-fill to exactly what is live, not
+    blank and not the stale carried-forward ruling (Damien, 2026-07-28)."""
     build, rows = v2_gold
     target = _row_by_text(rows, "Enforcement matters")
     predictions = {target.item_id: ranked(("R-pipe", "Enforcement Practice", 100.0, 0.9))}
@@ -2592,8 +2600,8 @@ def test_folded_row_prefill_equals_the_applied_state(v2_gold: tuple[Any, list[An
     assert baseline["gold_note"] == "both concepts stand"
 
     html = render_sheet_v2(applied)
-    assert 'value="keep" checked' in html
-    assert 'value="not_gold" checked' in html
+    assert 'data-on="keep" data-off="remove" checked' in html
+    assert 'data-on="elevate" data-off="not_gold">' in html
     # the note is pre-filled INTO the textarea (round-trippable), not just echoed as read-only text
     assert '<textarea class="note gold-note" rows="2" name="gold-note|' in html
     assert (
