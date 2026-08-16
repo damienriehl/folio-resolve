@@ -1,10 +1,11 @@
 """Independent synthetic grading, close-call routing, and audit sampling (U7).
 
 ``DEFAULT_FLOOR`` is PROVISIONAL until adjudicated examples calibrate it.  The fixed
-disagreement vocabulary is: ``set_mismatch`` (disjoint valid proposals), ``partial_overlap``
-(different valid sets sharing an IRI), ``sub_floor_confidence`` (an otherwise agreeing proposal
-has fewer than two above-floor voters), ``ambiguous_label`` / ``unresolved_label`` (U5 resolver
-quarantine), and ``empty_proposal`` (a grader supplied no concepts).
+disagreement vocabulary is: ``set_mismatch`` (no concept has two valid above-floor proposals),
+``singleton_concept`` (an additive concept proposed by one grader beside an agreed core),
+``sub_floor_confidence`` (an otherwise agreeing proposal has fewer than two above-floor voters),
+``ambiguous_label`` / ``unresolved_label`` (U5 resolver quarantine), and ``empty_proposal``
+(all graders supplied no concepts for a non-no-match item).
 
 Gate 1b policy is deliberately a dispatch concern: synthetic sittings may be dispatched only
 while the firm sheet is empty.  :func:`folio_eval.packet_render.write_sitting_v2` exposes the
@@ -35,6 +36,7 @@ DISAGREEMENT_CLASSES = frozenset(
         "partial_overlap",
         "empty_proposal",
         "missing_votes",
+        "singleton_concept",
     }
 )
 VOTE_SCHEMA_VERSION = 1
@@ -94,10 +96,15 @@ class CloseCall:
     item: SyntheticItem
     disagreement_class: str
     votes: tuple[GraderVote, ...]
+    proposed_iri: str | None = None
 
     def packet_row(self) -> PacketRow:
         return PacketRow(
-            decision_id=f"synthetic:{self.item.item_id}",
+            decision_id=(
+                f"synthetic:{self.item.item_id}:{self.proposed_iri}"
+                if self.proposed_iri is not None
+                else f"synthetic:{self.item.item_id}"
+            ),
             section="suspect",
             item_id=self.item.item_id,
             firm="synthetic",
@@ -117,7 +124,7 @@ class CloseCall:
                 }
                 for vote in self.votes
             ),
-            extra={"verification": self.item.verification},
+            extra={"verification": self.item.verification, "proposed_iri": self.proposed_iri},
         )
 
 
@@ -206,23 +213,22 @@ def load_vote_file(
 class _ResolvedVote:
     vote: GraderVote
     iris: frozenset[str]
-    mean: float
+    confidences: Mapping[str, float]
     issue: str | None = None
 
 
 def _resolve_vote(vote: GraderVote, dictionary: LabelIndex) -> _ResolvedVote:
-    iris: set[str] = set()
+    confidences: dict[str, float] = {}
     issue: str | None = None
-    for label in vote.concepts:
+    for label, confidence in vote.concepts.items():
         resolution = resolve_gold_value(label, dictionary)
         if resolution.ambiguous:
             issue = "ambiguous_label"
         elif not resolution.resolved:
             issue = issue or "unresolved_label"
         elif resolution.iri is not None:
-            iris.add(resolution.iri)
-    mean = sum(vote.concepts.values()) / len(vote.concepts) if vote.concepts else 0.0
-    return _ResolvedVote(vote, frozenset(iris), mean, issue)
+            confidences[resolution.iri] = max(confidences.get(resolution.iri, 0.0), confidence)
+    return _ResolvedVote(vote, frozenset(confidences), confidences, issue)
 
 
 def _reason(resolved: Sequence[_ResolvedVote], floor: float) -> str:
@@ -233,15 +239,24 @@ def _reason(resolved: Sequence[_ResolvedVote], floor: float) -> str:
         return "ambiguous_label"
     if "unresolved_label" in issues:
         return "unresolved_label"
-    if any(not entry.iris for entry in resolved):
+    if not any(entry.iris for entry in resolved):
         return "empty_proposal"
-    sets = {entry.iris for entry in resolved}
-    if len(sets) > 1:
-        common = set.intersection(*(set(value) for value in sets))
-        return "partial_overlap" if common else "set_mismatch"
-    if sum(entry.mean >= floor for entry in resolved) < 2:
+    proposal_counts = Counter(iri for entry in resolved for iri in entry.iris)
+    above_floor_counts = Counter(
+        iri
+        for entry in resolved
+        for iri, confidence in entry.confidences.items()
+        if confidence >= floor
+    )
+    if any(count >= 2 and above_floor_counts[iri] < 2 for iri, count in proposal_counts.items()):
         return "sub_floor_confidence"
     return "set_mismatch"
+
+
+def _with_vote_provenance(item: SyntheticItem, resolved: Sequence[_ResolvedVote]) -> dict[str, object]:
+    provenance = dict(item.provenance)
+    provenance["grader_votes"] = [entry.vote.to_json() for entry in resolved]
+    return provenance
 
 
 def fold_votes(
@@ -272,21 +287,51 @@ def fold_votes(
         if len({vote.model_family for vote in item_votes}) < 2:
             raise GradeError(f"item {item.item_id!r} requires at least two model_family values")
         resolved = tuple(_resolve_vote(vote, dictionary) for vote in item_votes)
-        set_counts = Counter(entry.iris for entry in resolved if entry.issue is None and entry.iris)
-        winner = set_counts.most_common(1)[0][0] if set_counts else frozenset()
-        agreeing = [entry for entry in resolved if entry.iris == winner and entry.mean >= floor]
-        unanimous_sets = len({entry.iris for entry in resolved}) == 1
-        if winner and len(resolved) == 3 and unanimous_sets and len(agreeing) >= 2 and not any(entry.issue for entry in resolved):
-            labels = tuple(sorted({label for entry in resolved for label in entry.vote.concepts}))
-            provenance = dict(item.provenance)
-            provenance["grader_votes"] = [entry.vote.to_json() for entry in resolved]
-            folded.append(
-                replace(item, gold_labels=labels, gold_iris=winner, verification="deterministic", provenance=provenance)
-            )
-        else:
+        if len(resolved) != 3 or any(entry.issue for entry in resolved):
             quarantined = replace(item, gold_iris=frozenset(), verification="needs_review")
             folded.append(quarantined)
             queue.append(CloseCall(quarantined, _reason(resolved, floor), item_votes))
+            continue
+
+        above_floor_counts = Counter(
+            iri
+            for entry in resolved
+            for iri, confidence in entry.confidences.items()
+            if confidence >= floor
+        )
+        agreed = frozenset(iri for iri, count in above_floor_counts.items() if count >= 2)
+        if agreed:
+            labels = tuple(sorted(dictionary.labels_by_iri[iri] for iri in agreed))
+            deterministic = replace(
+                item,
+                gold_labels=labels,
+                gold_iris=agreed,
+                verification="deterministic",
+                provenance=_with_vote_provenance(item, resolved),
+            )
+            folded.append(deterministic)
+            singletons = sorted(iri for iri, count in above_floor_counts.items() if count == 1)
+            queue.extend(
+                CloseCall(deterministic, "singleton_concept", item_votes, proposed_iri=iri)
+                for iri in singletons
+            )
+            continue
+
+        if not any(entry.iris for entry in resolved) and item.is_nomatch:
+            folded.append(
+                replace(
+                    item,
+                    gold_labels=(),
+                    gold_iris=frozenset(),
+                    verification="deterministic",
+                    provenance=_with_vote_provenance(item, resolved),
+                )
+            )
+            continue
+
+        quarantined = replace(item, gold_iris=frozenset(), verification="needs_review")
+        folded.append(quarantined)
+        queue.append(CloseCall(quarantined, _reason(resolved, floor), item_votes))
     return GradeOutcome(tuple(folded), tuple(queue), tuple(skipped))
 
 

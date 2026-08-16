@@ -30,6 +30,7 @@ def dictionary() -> LabelIndex:
         [
             IndexedConcept("R-a", ("Alpha",)),
             IndexedConcept("R-b", ("Beta",)),
+            IndexedConcept("R-c", ("Gamma",)),
         ]
     )
 
@@ -51,15 +52,37 @@ def vote(grader: int, concepts: dict[str, float], item_id: str = "i1") -> Grader
     return GraderVote(item_id, f"grader-{grader}", f"family-{grader}", concepts, "gen-1")
 
 
-def test_two_to_one_split_above_floor_routes_set_mismatch(dictionary: LabelIndex) -> None:
+def test_two_to_one_split_folds_agreed_core_and_queues_singleton(dictionary: LabelIndex) -> None:
     outcome = fold_votes(
         [item()],
         [vote(1, {"Alpha": 0.9}), vote(2, {"Alpha": 0.8}), vote(3, {"Beta": 0.9})],
         floor=0.6,
         dictionary=dictionary,
     )
-    assert outcome.items[0].verification == "needs_review"
-    assert outcome.close_calls[0].disagreement_class == "set_mismatch"
+    assert outcome.items[0].verification == "deterministic"
+    assert outcome.items[0].gold_iris == frozenset({"R-a"})
+    assert len(outcome.close_calls) == 1
+    assert outcome.close_calls[0].disagreement_class == "singleton_concept"
+    assert outcome.close_calls[0].proposed_iri == "R-b"
+
+
+def test_partial_sets_fold_each_concept_with_two_above_floor_votes(
+    dictionary: LabelIndex,
+) -> None:
+    outcome = fold_votes(
+        [item()],
+        [
+            vote(1, {"Alpha": 0.9, "Beta": 0.8}),
+            vote(2, {"Alpha": 0.7}),
+            vote(3, {"Beta": 0.95}),
+        ],
+        floor=0.6,
+        dictionary=dictionary,
+    )
+
+    assert outcome.items[0].verification == "deterministic"
+    assert outcome.items[0].gold_iris == frozenset({"R-a", "R-b"})
+    assert not outcome.close_calls
 
 
 def test_ratified_row_is_never_regraded(dictionary: LabelIndex) -> None:
@@ -93,7 +116,7 @@ def _vote_file(tmp_path: Path, *, concepts: dict[str, object], grader="grader-1"
 
 def test_vote_loader_rejects_off_dictionary_label(tmp_path: Path, dictionary: LabelIndex) -> None:
     with pytest.raises(ValueError, match="off-dictionary"):
-        load_vote_file(_vote_file(tmp_path, concepts={"Gamma": 0.8}), [item()], dictionary=dictionary)
+        load_vote_file(_vote_file(tmp_path, concepts={"Delta": 0.8}), [item()], dictionary=dictionary)
 
 
 def test_vote_loader_rejects_matching_generator_id(
@@ -172,6 +195,52 @@ def test_three_empty_votes_route_empty_proposal(dictionary: LabelIndex) -> None:
     )
     assert outcome.items[0].verification == "needs_review"
     assert outcome.close_calls[0].disagreement_class == "empty_proposal"
+
+
+def test_three_empty_votes_confirm_no_match(dictionary: LabelIndex) -> None:
+    no_match = replace(item(), provenance={**item().provenance, "no_match": True})
+
+    outcome = fold_votes(
+        [no_match], [vote(1, {}), vote(2, {}), vote(3, {})], floor=0.6, dictionary=dictionary
+    )
+
+    assert outcome.items[0].verification == "deterministic"
+    assert outcome.items[0].gold_iris == frozenset()
+    assert not outcome.close_calls
+
+
+def test_disjoint_nonempty_proposals_remain_full_item_set_mismatch(
+    dictionary: LabelIndex,
+) -> None:
+    outcome = fold_votes(
+        [item()],
+        [vote(1, {"Alpha": 0.9}), vote(2, {"Beta": 0.8}), vote(3, {"Gamma": 0.9})],
+        floor=0.6,
+        dictionary=dictionary,
+    )
+
+    assert outcome.items[0].verification == "needs_review"
+    assert outcome.items[0].gold_iris == frozenset()
+    assert len(outcome.close_calls) == 1
+    assert outcome.close_calls[0].disagreement_class == "set_mismatch"
+    assert outcome.close_calls[0].proposed_iri is None
+
+
+def test_ambiguous_resolution_quarantines_item_despite_other_agreement() -> None:
+    ambiguous_dictionary = LabelIndex.from_concepts(
+        [IndexedConcept("R-a", ("Shared",)), IndexedConcept("R-b", ("Shared",))]
+    )
+
+    outcome = fold_votes(
+        [item()],
+        [vote(1, {"Shared": 0.9}), vote(2, {"Shared": 0.8}), vote(3, {})],
+        floor=0.6,
+        dictionary=ambiguous_dictionary,
+    )
+
+    assert outcome.items[0].verification == "needs_review"
+    assert outcome.items[0].gold_iris == frozenset()
+    assert outcome.close_calls[0].disagreement_class == "ambiguous_label"
 
 
 def test_provisional_gold_provenance_carries_all_votes(dictionary: LabelIndex) -> None:
