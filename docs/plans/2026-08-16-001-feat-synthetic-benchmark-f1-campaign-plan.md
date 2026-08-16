@@ -24,7 +24,7 @@ execution: code
 
 ### Summary
 
-Finish the Gate 1b adjudication in ~25-row sittings and fold the results into the firm gold, then build a public, committable synthetic benchmark: Codex agents generate label-blind synthetic legal text, folio-resolve classifies it, grader agents score the classifications, and only genuine close calls reach Damien. Iterate against the synthetic F1 until returns diminish, with the firm-gold owner-run exam remaining the sole release gate.
+Finish the Gate 1b adjudication in ~25-row sittings and fold the results into the firm gold, then build a public, committable synthetic benchmark: Codex agents generate label-blind synthetic legal text, folio-resolve classifies it, grader agents score the classifications, and only genuine close calls reach Damien. Iterate against the synthetic F1 until returns diminish, with the firm-gold owner-run exam remaining the sole release gate. The same corpus then scores the unmodified downstream pipelines, and that head-to-head comparison — improve, never degrade — is the gate the deferred adoption round must pass through.
 
 ### Problem Frame
 
@@ -39,6 +39,7 @@ The v0.4.0 release proved the loop works — the recall engine measured tune F1 
 - KD5. **Resolved close calls graduate into ratified synthetic gold.** (session-settled: user-approved — chosen over discarding adjudications after scoring: each sitting permanently hardens the benchmark.) Governs R11.
 - KD6. **Agents pre-resolve aggressively; only badged judgment rows reach Damien.** (session-settled: user-approved — chosen over routing every ambiguous row to him: at 25 rows per sitting the queue must carry only high-information decisions.) Governs R4, R10.
 - KD7. **Ranking, not retrieval, is the iteration lever.** Measured, not assumed: the label-limit probe showed more candidates slightly lower F1 while recall@10 rises — the misses live in ordering and calibration. Governs R5.
+- KD8. **The synthetic corpus doubles as a cross-stack comparison baseline: the unmodified downstream pipelines are scored on the same corpus and gold before any adoption.** (session-settled: user-directed — chosen over comparing each stack's existing metrics: today's numbers come from different tasks and different gold, so only a shared benchmark makes folio-resolve and the downstream incumbents comparable; the working hypothesis that downstream may currently score higher is testable, not assumed away.) Governs R15, R16, R17.
 
 ### Requirements
 
@@ -61,9 +62,15 @@ The v0.4.0 release proved the loop works — the recall engine measured tune F1 
 - R12. The loop iterates until diminishing returns; the default stop rule is two consecutive iterations with negligible synthetic-F1 gain and no novel disagreement classes, overridable by Damien.
 - R13. No release or improvement claim rests on synthetic F1 alone: the owner-run firm-gold exam remains the release gate, and the frozen 79 stay unscored until the campaign's final report.
 
+**Stage 2b — downstream comparison baseline**
+
+- R15. The existing folio-enrich and folio-mapper pipelines, unmodified, run the synthetic corpus and receive per-repo precision, recall, and F1 on the shared gold.
+- R16. folio-resolve and each downstream incumbent are compared on the same corpus and gold, reported per consumer.
+- R17. The comparison is the adoption round's entry gate: adoption proceeds per consumer only where the folio-resolve-backed path measures at least as well as that consumer's incumbent — improve, never degrade; a losing comparison feeds the next iteration instead of the adoption round.
+
 **Continuity**
 
-- R14. The deferred rounds are recorded as standing reminders in the cockpit work queue so they cannot be forgotten: downstream adoption + per-consumer P/R/F1 measurement, and the ontokit integration decision.
+- R14. The deferred rounds are recorded as standing reminders in the cockpit work queue so they cannot be forgotten: downstream adoption + per-consumer P/R/F1 measurement (entered only through the R17 gate), and the ontokit integration decision.
 
 ### Actors
 
@@ -82,7 +89,7 @@ The v0.4.0 release proved the loop works — the recall engine measured tune F1 
 - F2. Synthetic iteration
   - **Trigger:** A candidate improvement to folio-resolve exists, or the benchmark needs its initial baseline.
   - **Steps:** Generators write label-blind synthetic text; folio-resolve classifies; graders score by agreement; agreed rows score immediately; disputed rows queue for Damien; his rulings graduate to ratified gold; synthetic F1 is computed and compared to the prior iteration.
-  - **Outcome:** Continue, or stop on the R12 rule; a stopped loop hands a hardened F1 to the firm-gold exam and then to the downstream-adoption round.
+  - **Outcome:** Continue, or stop on the R12 rule; a stopped loop hands a hardened F1 to the firm-gold exam and the R15–R17 downstream comparison, which together decide the adoption round.
   - **Covers:** R6–R13.
 
 ```mermaid
@@ -104,18 +111,20 @@ flowchart TB
 - AE2. **Covers R8, R10.** Given three graders score a classification 2-to-1 with the dissent above the confidence floor, when the batch closes, then the row enters the close-call queue rather than the scored aggregate.
 - AE3. **Covers R11.** Given Damien ruled a queued row correct, when any later iteration re-runs grading, then that row's verdict comes from ratified gold and no grader re-scores it.
 - AE4. **Covers R12.** Given two consecutive iterations each moved synthetic F1 by less than the agreed epsilon and surfaced no new disagreement class, when the next iteration is proposed, then the loop stops and the firm-gold exam is requested instead.
+- AE5. **Covers R17.** Given the shared-benchmark comparison shows folio-resolve below folio-enrich's incumbent pipeline, when the adoption round is proposed, then adoption for folio-enrich holds, the gap is characterized, and it becomes the next iteration's target.
 
 ### Success Criteria
 
 - The final owner-run firm-gold exam shows tune and Firm-2 F1 above the v0.4.0-accepted levels, with zero correct-to-incorrect regressions on Firm-2.
 - A synthetic iteration completes end-to-end by agents alone, and its corpus, gold, and scores are committed publicly with the surface-string check passing.
+- A published per-consumer comparison on the shared benchmark gives each downstream repo a go/no-go adoption verdict per R17.
 - Damien's total adjudication load stays in ~25-row sittings; no sitting requires a desktop.
 
 ### Scope Boundaries
 
 **Deferred for later — standing reminders, per R14**
 
-- Downstream adoption + measurement: wire the recall engine into folio-enrich and folio-mapper behind opt-in flags, and measure per-consumer P/R/F1. Gated on this campaign's converged F1.
+- Downstream adoption + measurement: wire the recall engine into folio-enrich and folio-mapper behind opt-in flags, and measure per-consumer P/R/F1. Gated on this campaign's converged F1 and a passing R17 comparison per consumer.
 - Ontokit integration: ontokit-api/web consume folio-python only today; whether they should consume folio-resolve is a separate future decision, not an assumption.
 
 **Outside this campaign**
@@ -138,6 +147,7 @@ flowchart TB
 - Grader design: ensemble size, agreement threshold, confidence floor, and which models grade.
 - Corpus composition: document types, branch coverage, size per iteration, and whether generation reuses folio-enrich's existing synthetic-document machinery.
 - The R12 epsilon value and how disagreement classes are detected as novel.
+- Score alignment across stacks for R15/R16: the level at which one gold scores both folio-resolve and the downstream pipelines (document-level concept sets vs span-level annotations), and whether folio-insights joins the comparison.
 - Where the benchmark lives in this repo and how its runner integrates with `eval/folio_eval/`.
 - Sitting delivery surface: how batches render for phone adjudication (the reconciled workspace, cockpit sheets, or both).
 
@@ -146,7 +156,7 @@ flowchart TB
 
 This plan owns the F1 campaign inside folio-resolve. The surrounding rounds are the current understanding, not a committed roadmap:
 
-- Downstream adoption + measurement round — **depends on** this campaign's converged F1; adopts the recall engine in consumers and measures per-consumer P/R/F1. Reminder held per R14.
+- Downstream adoption + measurement round — **depends on** this campaign's converged F1 and **enters only through** the R17 comparison gate; adopts the recall engine in consumers and measures per-consumer P/R/F1. Reminder held per R14.
 - Ontokit integration decision — **can proceed independently**; **still to decide** whether ontokit consumes folio-resolve at all. Reminder held per R14.
 - Gate 1b adjudication — owned here as Stage 1; its governing scoring protocol remains `docs/plans/2026-07-27-001-feat-f1-improvement-loop-plan.md`.
 - The completed post-hardening round — `docs/plans/2026-08-06-post-hardening-integration-plan.md` shipped v0.4.0 and the consumer pins this campaign builds on.
