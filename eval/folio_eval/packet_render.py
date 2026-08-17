@@ -875,6 +875,11 @@ const navByDecisionId = new Map(navItems.map(function (item) {
 const DRAFT_PREFIX = 'folio-eval-draft:';
 const draftKey = DRAFT_PREFIX + workspace.getAttribute('data-packet-key');
 const dismissKey = draftKey + ':recovery-dismissed';
+// rdfs:labels for every FOLIO concept, embedded at render time so pasting an IRI is enough.
+let folioLabels = {};
+try {
+  folioLabels = JSON.parse(document.getElementById('folio-labels')?.textContent || '{}');
+} catch (error) { /* no index embedded -- the label field simply stays required */ }
 function draftBaseline(key) { return key.slice(DRAFT_PREFIX.length).split('|')[0]; }
 let activeId = null;
 let mappingFrame = 0;
@@ -947,11 +952,15 @@ function addConceptRow(row, label, iri) {
   const unassignedChip = document.createElement('span'); unassignedChip.textContent = '—';
   unassignedChoice.append(unassigned, unassignedChip); choices.appendChild(unassignedChoice);
   head.appendChild(choices);
+  // Pre-select the deepest level: gold maps to the ATOMIC UNIT, and the atomic unit is the leaf
+  // of the input hierarchy (Damien, 2026-08-16). One click undoes it when a parent was meant.
+  const chips = choices.querySelectorAll('input[data-level-map]');
+  if (chips.length) { chips[chips.length - 1].checked = true; }
   const remove = document.createElement('button'); remove.className = 'secondary remove-mapping';
   remove.type = 'button'; remove.textContent = '✕';
   remove.title = 'Remove this mapping'; remove.setAttribute('aria-label', 'Remove this mapping');
   head.appendChild(remove);
-  li.appendChild(head); list.appendChild(li); return li;
+  li.appendChild(head); list.appendChild(li); refreshMappingSummary(li); return li;
 }
 function applyDecision(id, decision) {
   const row = rowById(id);
@@ -1480,13 +1489,24 @@ stage.addEventListener('click', function (event) {
   if (add) {
     const row = add.closest('.row[data-decision-id]');
     const panel = add.closest('.add-concept');
-    const label = panel.querySelector('.add-label').value.trim();
+    let label = panel.querySelector('.add-label').value.trim();
     const iri = panel.querySelector('.add-iri').value.trim();
-    if (!label || iri.indexOf('https://folio.openlegalstandard.org/') !== 0) {
-      panel.querySelector('.add-iri').setCustomValidity('Enter a full FOLIO concept URL and label.');
+    if (iri.indexOf('https://folio.openlegalstandard.org/') !== 0) {
+      panel.querySelector('.add-iri').setCustomValidity('Enter a full FOLIO concept URL.');
       panel.querySelector('.add-iri').reportValidity();
       return;
     }
+    // The label is derivable: the sheet embeds the ontology's rdfs:labels, so pasting the IRI is
+    // enough (Damien, 2026-08-16 -- typing both was the annoyance). A typed label still wins, so
+    // a concept can be renamed on entry; only an IRI unknown to the index needs one.
+    if (!label) { label = folioLabels[iri.split('/').pop()] || ''; }
+    if (!label) {
+      panel.querySelector('.add-label').setCustomValidity(
+        'This IRI is not in the embedded FOLIO index — give it a label.');
+      panel.querySelector('.add-label').reportValidity();
+      return;
+    }
+    panel.querySelector('.add-label').setCustomValidity('');
     panel.querySelector('.add-iri').setCustomValidity('');
     addConceptRow(row, label, iri);
     panel.querySelector('.add-label').value = ''; panel.querySelector('.add-iri').value = '';
@@ -2461,8 +2481,8 @@ def _render_row_v2(row: PacketRow, *, current_version: int = 0) -> str:
     proposed = _proposed_panel(row, baseline=baseline_raw)
     add_concept = (
         '<section class="add-concept"><strong>Add FOLIO concept</strong>'
-        '<p class="note">Paste a FOLIO URL/IRI and label, then assign it to one or more levels.</p>'
-        '<div class="add-concept-fields"><input class="add-label" type="text" placeholder="Concept label" '
+        '<p class="note">Paste a FOLIO URL/IRI &mdash; the label fills itself and the leaf level pre-selects. Type a label only to override.</p>'
+        '<div class="add-concept-fields"><input class="add-label" type="text" placeholder="Label (auto-filled from IRI)" '
         'aria-label="FOLIO concept label"><input class="add-iri" type="url" '
         'placeholder="https://folio.openlegalstandard.org/…" aria-label="FOLIO concept URL or IRI">'
         '<button class="secondary add-mapping" type="button">Add</button></div></section>'
@@ -2647,7 +2667,7 @@ def _metrics_table(metrics: Mapping[str, object]) -> str:
     )
 
 
-def render_sheet_v2(packet: Packet) -> str:
+def render_sheet_v2(packet: Packet, *, label_index: Mapping[str, str] | None = None) -> str:
     """Render the durable three-pane 1:many adjudication workspace."""
     meta = dict(packet.meta)
     metrics = meta.get("metrics")
@@ -2726,6 +2746,15 @@ def render_sheet_v2(packet: Packet) -> str:
         + '<section class="review-stage"><div class="empty-review">No evaluation items match this filter.</div>'
         + articles
         + "</section></div></main>"
+        # The ontology's rdfs:labels, embedded so the Add-concept flow needs only an IRI. A JSON
+        # script block is inert (never executed), so no escaping subtleties beyond </script>.
+        + (
+            '<script type="application/json" id="folio-labels">'
+            + json.dumps(dict(label_index), ensure_ascii=False, separators=(",", ":")).replace("</", "<\\/")
+            + "</script>"
+            if label_index
+            else ""
+        )
         + f"<script>{_SCRIPT_V2_WORKSPACE}</script></body></html>\n"
     )
 

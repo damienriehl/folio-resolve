@@ -15,7 +15,10 @@ as it opened exports nothing, checking a v3-only concept exports keep, uncheckin
 exports remove. Rows where v3 and v6 fully agree are excluded by construction, which is the
 requested include-only-differences filter.
 
-Usage: uv run python eval/build_v3_diff.py V3_JUDGMENT PACKET OUT_HTML
+Usage: uv run python eval/build_v3_diff.py V3_JUDGMENT PACKET OUT_HTML [LABELS_JSON]
+
+LABELS_JSON is an ``{short_iri: rdfs_label}`` map (see the loader below); when present it is
+embedded so Add-concept needs only an IRI and the label fills itself.
 """
 
 from __future__ import annotations
@@ -31,6 +34,7 @@ from folio_eval.packet_render import render_sheet_v2
 v3 = json.loads(Path(sys.argv[1]).read_text())
 packet = json.loads(Path(sys.argv[2]).read_text())
 out = Path(sys.argv[3])
+label_index = json.loads(Path(sys.argv[4]).read_text()) if len(sys.argv) > 4 else None
 
 
 def by_level(reading: object) -> dict[int, dict[str, str]]:
@@ -160,7 +164,8 @@ out.write_text(
             counts={"v3_differs": len(rows)},
             overflow={},
             meta=meta,
-        )
+        ),
+        label_index=label_index,
     ),
     encoding="utf-8",
 )

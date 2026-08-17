@@ -1307,6 +1307,28 @@ def test_an_unassigned_concept_survives_a_level_filter(v2_gold: tuple[Any, list[
     assert "applyLevelFilter(row, currentLevelFilter(row))" in add_branch
 
 
+def test_adding_a_concept_needs_only_the_iri(v2_gold: tuple[Any, list[Any]]) -> None:
+    """Damien, 2026-08-16: the label is derivable and the leaf level is the atomic unit.
+
+    The sheet embeds the ontology's rdfs:labels, so pasting an IRI auto-fills the label (a typed
+    label still wins), and the added concept's deepest level chip arrives pre-selected because
+    gold maps to the atomic unit -- the leaf of the input hierarchy.
+    """
+    build, rows = v2_gold
+    html = render_sheet_v2(v2_packet(build, rows), label_index={"RTEST1": "Test Concept"})
+    js = _js(html)
+
+    assert '<script type="application/json" id="folio-labels">{"RTEST1":"Test Concept"}</script>' in html
+    assert "folioLabels = JSON.parse(document.getElementById('folio-labels')" in js
+    assert "if (!label) { label = folioLabels[iri.split('/').pop()] || ''; }" in js
+    # unknown IRI without a typed label is refused with a pointed message, not silently mislabeled
+    assert "not in the embedded FOLIO index" in js
+    # the deepest chip pre-selects on an added concept
+    assert "if (chips.length) { chips[chips.length - 1].checked = true; }" in js
+    # rendering without an index embeds nothing and the flow still works label-first
+    assert 'id="folio-labels"' not in render_sheet_v2(v2_packet(build, rows))
+
+
 def test_a_stranded_sitting_can_be_recovered(v2_gold: tuple[Any, list[Any]]) -> None:
     """Republishing over a re-derived packet mints a new draft key; the old work stays reachable.
 

@@ -6,7 +6,7 @@ the reviewer has open. When the only change is to the renderer (CSS/JS/markup), 
 SAME packet.json keeps that key byte-identical, so a published fix reaches the reviewer without
 costing them their in-progress work.
 
-Usage: uv run python eval/rerender_sheet.py PACKET_JSON OUT_HTML
+Usage: uv run python eval/rerender_sheet.py PACKET_JSON OUT_HTML [LABELS_JSON]
 """
 
 import json
@@ -57,5 +57,8 @@ packet = Packet(
     overflow=payload["overflow"],
     meta=payload["meta"],
 )
-out_path.write_text(render_sheet_v2(packet), encoding="utf-8")
+label_index = (
+    json.loads(Path(sys.argv[3]).read_text(encoding="utf-8")) if len(sys.argv) > 3 else None
+)
+out_path.write_text(render_sheet_v2(packet, label_index=label_index), encoding="utf-8")
 print(f"wrote {out_path} ({out_path.stat().st_size} bytes) from {len(rows)} rows")
