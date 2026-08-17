@@ -1,0 +1,18 @@
+{
+  "answer_rule_config_sha256": "ac413db665602cdde841a7e7590adc4eba02cded82266df5e763d7be7dd87c03",
+  "content_sha256": "a417085a506ed52033c7aeb43d0868f1b7e7201064b8e37f03637e920afaac4d",
+  "created": "2026-08-16T23:20:00Z",
+  "item_counts": {
+    "needs_review": 15,
+    "nomatch": 30,
+    "scoreable": 225
+  },
+  "kind": "synthetic-corpus",
+  "nomatch_content_sha256": "c40b03445b4d2233d65128a506c8ddab5e44bec17159865ebbb69b0ded3fab57",
+  "non_lexical_floor": 0.3,
+  "non_lexical_fraction": 1.0,
+  "ontology_cache_sha256": "b6ed82e6d17b7cb1d468453e4111ec08ca091d72a6849be2b58dd37692cb6ef9",
+  "scoreable": true,
+  "seed": 20260816,
+  "version": 1
+}

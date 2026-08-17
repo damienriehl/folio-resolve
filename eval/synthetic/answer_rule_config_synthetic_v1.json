@@ -1,0 +1,8 @@
+{
+  "calibrated": false,
+  "calibration_steps": [],
+  "config_version": 1,
+  "rationale": "synthetic lane v1: top_k sized to corpus gold density (uncalibrated)",
+  "threshold": 0.5,
+  "top_k": 6
+}
