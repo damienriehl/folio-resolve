@@ -22,7 +22,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 from .audit import Packet, PacketRow
-from .normalize import label_key
+from .normalize import label_key, normalize_label
 from .resolve_labels import LabelIndex, resolve_gold_value
 from .synthesize import SyntheticItem
 
@@ -302,12 +302,16 @@ def fold_votes(
         agreed = frozenset(iri for iri, count in above_floor_counts.items() if count >= 2)
         if agreed:
             labels = tuple(sorted(dictionary.labels_by_iri[iri] for iri in agreed))
+            provenance = _with_vote_provenance(item, resolved)
+            provenance["resolved_labels_by_iri"] = {
+                iri: normalize_label(dictionary.labels_by_iri[iri]) for iri in sorted(agreed)
+            }
             deterministic = replace(
                 item,
                 gold_labels=labels,
                 gold_iris=agreed,
                 verification="deterministic",
-                provenance=_with_vote_provenance(item, resolved),
+                provenance=provenance,
             )
             folded.append(deterministic)
             singletons = sorted(iri for iri, count in above_floor_counts.items() if count == 1)

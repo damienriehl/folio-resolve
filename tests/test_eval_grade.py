@@ -7,6 +7,7 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
+from folio_eval.answer_rule import AnswerRuleConfig
 from folio_eval.audit import assemble_sittings
 from folio_eval.grade import (
     GradeError,
@@ -19,7 +20,7 @@ from folio_eval.grade import (
 from folio_eval.leakcheck import ScryptParams, build_manifest
 from folio_eval.packet_render import write_sitting_v2
 from folio_eval.resolve_labels import IndexedConcept, LabelIndex
-from folio_eval.synthesize import SyntheticItem
+from folio_eval.synthesize import SyntheticItem, build_corpus
 
 SALT = b"u7-test-salt"
 
@@ -28,7 +29,7 @@ SALT = b"u7-test-salt"
 def dictionary() -> LabelIndex:
     return LabelIndex.from_concepts(
         [
-            IndexedConcept("R-a", ("Alpha",)),
+            IndexedConcept("R-a", ("Alpha",), ("Alternate Alpha",)),
             IndexedConcept("R-b", ("Beta",)),
             IndexedConcept("R-c", ("Gamma",)),
         ]
@@ -83,6 +84,40 @@ def test_partial_sets_fold_each_concept_with_two_above_floor_votes(
     assert outcome.items[0].verification == "deterministic"
     assert outcome.items[0].gold_iris == frozenset({"R-a", "R-b"})
     assert not outcome.close_calls
+
+
+def test_per_concept_fold_maps_every_gold_iri_to_preferred_surface(
+    tmp_path: Path, dictionary: LabelIndex
+) -> None:
+    outcome = fold_votes(
+        [item(text="A paraphrase with no ontology labels.")],
+        [
+            vote(1, {"Alpha": 0.9, "Beta": 0.8}),
+            vote(2, {"Alternate Alpha": 0.7}),
+            vote(3, {"Beta": 0.95}),
+        ],
+        floor=0.6,
+        dictionary=dictionary,
+    )
+    folded = outcome.items[0]
+
+    assert folded.gold_iris == frozenset({"R-a", "R-b"})
+    assert folded.provenance["resolved_labels_by_iri"] == {"R-a": "Alpha", "R-b": "Beta"}
+    manifest = build_corpus(
+        [folded],
+        version=1,
+        answer_rule_config=AnswerRuleConfig(
+            threshold=0.5, top_k=2, calibrated=True, rationale="test"
+        ),
+        leak_manifest=_manifest([]),
+        salt=SALT,
+        out_dir=tmp_path,
+        seed=17,
+        ontology_cache_sha256="a" * 64,
+        created="2026-08-17T00:00:00Z",
+        non_lexical_floor=1.0,
+    )
+    assert manifest.non_lexical_fraction == 1.0
 
 
 def test_ratified_row_is_never_regraded(dictionary: LabelIndex) -> None:
