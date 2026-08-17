@@ -67,9 +67,12 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Literal
 
 from .audit import GoldRow, _score_driven_suspects
-from .clusters import assert_no_surfaces
+from .clusters import SurfaceLeakError, assert_no_surfaces
+from .grade import DISAGREEMENT_CLASSES
+from .leakcheck import Manifest, scan_text
 from .report import (
     DEFAULT_BOOTSTRAP_RESAMPLES,
     DEFAULT_BOOTSTRAP_SEED,
@@ -78,16 +81,20 @@ from .report import (
     PairedItem,
     bootstrap_ci,
     changed_item_breakdown,
+    f1_delta,
     net_changed_items,
 )
 from .score import ItemScore, MicroCounts
 from .selftest import DEFAULT_SELFTEST_TARGET, run_determinism_selftest
+from .synthetic_score import SyntheticScoreResult
 
 _EVAL_ROOT = Path(__file__).resolve().parent.parent
 _REPO_ROOT = _EVAL_ROOT.parent
 
 #: Committed (KTD1: IDs, hashes, counts, and free-text hypothesis/reason -- leak-scanned first).
 DEFAULT_EXPERIMENTS_LOG = _EVAL_ROOT / "reports" / "experiments.jsonl"
+#: Synthetic attempts are isolated from the firm-lane ledger by default.
+DEFAULT_SYNTHETIC_EXPERIMENTS_LOG = _EVAL_ROOT / "reports" / "synthetic_experiments.jsonl"
 #: Gitignored: the one in-flight attempt's captured state between ``start`` and ``finish``.
 DEFAULT_PENDING_PATH = DEFAULT_ITEM_REPORT_DIR / "experiment_pending.json"
 #: Gitignored: the running suspect stream the incremental triage hook maintains.
@@ -101,6 +108,8 @@ RECORD_BOUNDARY = "boundary"
 
 DECISIONS = ("keep", "revert", "park")
 AUTO_DECISION = "auto"
+LeverScope = Literal["shared", "adapter_only"]
+StopState = Literal["continue", "stopped", "escalate"]
 
 
 class ExperimentError(RuntimeError):
@@ -113,6 +122,10 @@ class WindowRefusalError(ExperimentError):
 
 class PendingAttemptError(ExperimentError):
     """Raised for pending-attempt state violations: none in progress, or one already is."""
+
+
+class StopRuleError(ExperimentError):
+    """Raised when iteration records cannot support a safe stop-rule computation."""
 
 
 def _now() -> str:
@@ -129,6 +142,16 @@ def _as_int(value: object, default: int = 0) -> int:
 
 def _mapping(value: object) -> dict[str, object]:
     return dict(value) if isinstance(value, Mapping) else {}
+
+
+def _string_tuple(value: object) -> tuple[str, ...]:
+    return tuple(str(entry) for entry in value) if isinstance(value, list | tuple) else ()
+
+
+def _lever_scope(value: object) -> LeverScope | None:
+    if value in ("shared", "adapter_only"):
+        return value
+    return None
 
 
 def _atomic_write_text(path: Path, text: str) -> None:
@@ -178,10 +201,11 @@ class ItemOutcome:
 
 @dataclass(frozen=True, slots=True)
 class SliceOutcome:
-    """One slice's (tune or firm2) item outcomes, ready to aggregate or pair."""
+    """One named slice's item outcomes, optionally carrying an aggregate-only report."""
 
     slice_name: str
     items: tuple[ItemOutcome, ...]
+    reported_aggregate: Mapping[str, object] | None = None
 
     def aggregate(self) -> MicroCounts:
         counts = MicroCounts()
@@ -193,28 +217,57 @@ class SliceOutcome:
             counts.exact_items += 1 if outcome.exact else 0
         return counts
 
+    def aggregate_json(self) -> dict[str, object]:
+        return dict(self.reported_aggregate) if self.reported_aggregate is not None else self.aggregate().to_json()
 
-def build_scores_json(tune: SliceOutcome, firm2: SliceOutcome) -> dict[str, object]:
-    """The ``scores_before``/``scores_after`` shape a record carries: tune aggregate, Firm-2
-    aggregate plus its item outcomes (the AE4 pairing unit for the *next* attempt). Frozen never
-    appears here (R6, KTD4)."""
-    return {
-        "tune": tune.aggregate().to_json(),
-        "firm2": {
-            "aggregate": firm2.aggregate().to_json(),
-            "items": [item.to_json() for item in sorted(firm2.items, key=lambda entry: entry.item_id)],
-        },
-    }
+    @classmethod
+    def from_synthetic_report(
+        cls, source: SyntheticScoreResult | Mapping[str, object]
+    ) -> SliceOutcome:
+        """Adapt either U8's ``SyntheticScoreResult`` or its aggregate report dictionary."""
+        if isinstance(source, Mapping):
+            overall = source.get("overall")
+            if not isinstance(overall, Mapping):
+                raise ValueError("synthetic report requires an overall aggregate")
+            return cls("synthetic", (), dict(overall))
+        return cls(
+            "synthetic",
+            tuple(ItemOutcome.from_item_score(item) for item in source.run.item_scores),
+        )
+
+
+def build_scores_json(slices: Mapping[str, SliceOutcome]) -> dict[str, object]:
+    """Serialize an arbitrary map of named slices."""
+    output: dict[str, object] = {}
+    for name, outcome in sorted(slices.items()):
+        aggregate = outcome.aggregate_json()
+        # Preserve the established tune/Firm-2 wire shape while allowing arbitrary named slices.
+        output[name] = aggregate if name == "tune" else {
+            "aggregate": aggregate,
+            "items": [item.to_json() for item in sorted(outcome.items, key=lambda entry: entry.item_id)],
+        }
+    return output
+
+
+def slice_items_from_scores_json(
+    payload: Mapping[str, object], slice_name: str
+) -> tuple[ItemOutcome, ...]:
+    raw = payload.get(slice_name)
+    if not isinstance(raw, Mapping) or not isinstance(raw.get("items"), list):
+        return ()
+    return tuple(ItemOutcome.from_json(item) for item in raw["items"] if isinstance(item, Mapping))
+
+
+def slice_item_count_from_scores_json(payload: Mapping[str, object], slice_name: str) -> int:
+    raw = payload.get(slice_name)
+    if not isinstance(raw, Mapping):
+        return 0
+    aggregate = raw.get("aggregate")
+    return _as_int(aggregate.get("items"), 0) if isinstance(aggregate, Mapping) else 0
 
 
 def firm2_items_from_scores_json(payload: Mapping[str, object]) -> tuple[ItemOutcome, ...]:
-    firm2 = payload.get("firm2")
-    if not isinstance(firm2, Mapping):
-        return ()
-    items_raw = firm2.get("items")
-    if not isinstance(items_raw, list):
-        return ()
-    return tuple(ItemOutcome.from_json(entry) for entry in items_raw if isinstance(entry, Mapping))
+    return slice_items_from_scores_json(payload, "firm2")
 
 
 # --------------------------------------------------------------------------------------
@@ -316,9 +369,15 @@ class ExperimentRecord:
     decision: str
     reason: str
     recorded_at: str
+    lever_scope: LeverScope | None = None
+    corpus_version: str | None = None
+    answer_rule_config_sha256: str | None = None
+    item_count: int | None = None
+    bootstrap_ci: Mapping[str, object] | None = None
+    disagreement_classes_seen: tuple[str, ...] = ()
 
     def to_json(self) -> dict[str, object]:
-        return {
+        payload: dict[str, object] = {
             "record_type": RECORD_ATTEMPT,
             "attempt_id": self.attempt_id,
             "iteration": self.iteration,
@@ -337,6 +396,16 @@ class ExperimentRecord:
             "reason": self.reason,
             "recorded_at": self.recorded_at,
         }
+        if self.lever_scope is not None:
+            payload.update(
+                lever_scope=self.lever_scope,
+                corpus_version=self.corpus_version,
+                answer_rule_config_sha256=self.answer_rule_config_sha256,
+                item_count=self.item_count,
+                bootstrap_ci=dict(self.bootstrap_ci or {}),
+                disagreement_classes_seen=list(self.disagreement_classes_seen),
+            )
+        return payload
 
     @classmethod
     def from_json(cls, payload: Mapping[str, object]) -> ExperimentRecord:
@@ -357,6 +426,22 @@ class ExperimentRecord:
             decision=str(payload.get("decision", "")),
             reason=str(payload.get("reason", "")),
             recorded_at=str(payload.get("recorded_at", "")),
+            lever_scope=_lever_scope(payload.get("lever_scope")),
+            corpus_version=str(payload["corpus_version"])
+            if payload.get("corpus_version") is not None
+            else None,
+            answer_rule_config_sha256=str(payload["answer_rule_config_sha256"])
+            if payload.get("answer_rule_config_sha256") is not None
+            else None,
+            item_count=_as_int(payload.get("item_count"))
+            if payload.get("item_count") is not None
+            else None,
+            bootstrap_ci=_mapping(payload.get("bootstrap_ci"))
+            if payload.get("bootstrap_ci") is not None
+            else None,
+            disagreement_classes_seen=_string_tuple(
+                payload.get("disagreement_classes_seen")
+            ),
         )
 
 
@@ -388,10 +473,30 @@ def load_raw_records(path: Path) -> list[dict[str, object]]:
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
-def append_record(path: Path, payload: Mapping[str, object], *, surfaces: Iterable[str]) -> Path:
+ManifestChecker = tuple[Manifest, bytes]
+
+
+def append_record(
+    path: Path,
+    payload: Mapping[str, object],
+    *,
+    surfaces: Iterable[str],
+    manifest_checker: ManifestChecker | None = None,
+) -> Path:
     """Append one JSON line, refusing a firm-surface leak before it ever touches disk (KTD1)."""
     text = json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n"
-    assert_no_surfaces(text, surfaces, what=str(path))
+    surface_list = tuple(surfaces)
+    if not surface_list and manifest_checker is None:
+        raise ValueError("empty surfaces require an explicit manifest_checker")
+    if surface_list:
+        assert_no_surfaces(text, surface_list, what=str(path))
+    if manifest_checker is not None:
+        manifest, salt = manifest_checker
+        collisions = scan_text(text, manifest, salt)
+        if collisions:
+            raise SurfaceLeakError(
+                f"{path} contains {collisions} manifest-matched firm surface(s) — refusing write"
+            )
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as handle:
         handle.write(text)
@@ -503,6 +608,119 @@ def status(experiments_log: Path = DEFAULT_EXPERIMENTS_LOG) -> WindowStatus:
     return compute_status(load_raw_records(experiments_log))
 
 
+@dataclass(frozen=True, slots=True)
+class StopStatus:
+    """Guarded diminishing-return state for the synthetic iteration lane."""
+
+    status: StopState
+    consecutive_sub_epsilon: int
+    eligible: bool
+    reason: str
+
+    def to_json(self) -> dict[str, object]:
+        return {
+            "status": self.status,
+            "consecutive_sub_epsilon": self.consecutive_sub_epsilon,
+            "eligible": self.eligible,
+            "reason": self.reason,
+        }
+
+
+def stop_status(
+    records: Sequence[Mapping[str, object]],
+    *,
+    epsilon: float = 0.005,
+    interim_checkpoint: Mapping[str, object] | None,
+) -> StopStatus:
+    """Stop after two corroborated shared attempts with ``abs(delta) < epsilon``.
+
+    A regression, however large in the negative direction, is not diminishing returns. Empty
+    (zero-unit) confidence intervals and structurally incomplete checkpoints never advance or
+    corroborate the stop gate.
+    """
+    if epsilon <= 0:
+        raise ValueError("epsilon must be positive")
+    seen_classes: set[str] = set()
+    consecutive = 0
+    shared_version: str | None = None
+    rebaseline_available = False
+    for record in records:
+        if record.get("record_type") == RECORD_BOUNDARY:
+            rebaseline_available = True
+            consecutive = 0
+            shared_version = None
+            continue
+        if record.get("rebaseline") is True:
+            rebaseline_available = True
+            consecutive = 0
+            shared_version = None
+
+        raw_classes = record.get("disagreement_classes_seen", [])
+        classes = {str(value) for value in raw_classes} if isinstance(raw_classes, list | tuple) else set()
+        novel = classes - seen_classes
+        seen_classes.update(classes)
+        if novel:
+            consecutive = 0
+
+        if record.get("lever_scope") != "shared":
+            continue
+        version = str(record.get("corpus_version", ""))
+        if not version:
+            raise StopRuleError("shared iteration is missing corpus_version")
+        if shared_version is not None and version != shared_version:
+            if not rebaseline_available:
+                raise StopRuleError(
+                    "cross-version delta requires an explicit rebaseline marker"
+                )
+            consecutive = 0
+        shared_version = version
+        rebaseline_available = False
+
+        ci = record.get("bootstrap_ci")
+        if not isinstance(ci, Mapping):
+            consecutive = 0
+            continue
+        if _as_int(ci.get("n_units"), 0) == 0:
+            consecutive = 0
+            continue
+        delta_raw = ci.get("point")
+        low = ci.get("low")
+        high = ci.get("high")
+        if (
+            not isinstance(delta_raw, int | float)
+            or not isinstance(low, int | float)
+            or not isinstance(high, int | float)
+        ):
+            consecutive = 0
+            continue
+        delta = float(delta_raw)
+        in_band = float(low) <= delta <= float(high)
+        if not novel and abs(delta) < epsilon and in_band:
+            consecutive += 1
+        elif not novel:
+            consecutive = 0
+
+    eligible = consecutive >= 2
+    if not eligible:
+        return StopStatus("continue", consecutive, False, "diminishing returns not yet corroborated")
+    checkpoint_complete = (
+        interim_checkpoint is not None
+        and interim_checkpoint.get("corroborates") is True
+        and isinstance(interim_checkpoint.get("tune"), Mapping)
+        and bool(interim_checkpoint["tune"])
+        and isinstance(interim_checkpoint.get("firm2"), Mapping)
+        and bool(interim_checkpoint["firm2"])
+    )
+    if checkpoint_complete:
+        return StopStatus("stopped", consecutive, True, "interim tune/Firm-2 checkpoint corroborates")
+    return StopStatus(
+        "escalate",
+        consecutive,
+        True,
+        "stop is eligible but requires Damien decision without a corroborating checkpoint",
+    )
+
+
 # --------------------------------------------------------------------------------------
 # Pending attempt (gitignored scratch state between start and finish)
 # --------------------------------------------------------------------------------------
@@ -524,9 +742,13 @@ class PendingAttempt:
     determinism_selftest: Mapping[str, object]
     scores_before: Mapping[str, object]
     firm2_before_items: tuple[ItemOutcome, ...]
+    lever_scope: LeverScope | None = None
+    corpus_version: str | None = None
+    answer_rule_config_sha256: str | None = None
+    disagreement_classes_seen: tuple[str, ...] = ()
 
     def to_json(self) -> dict[str, object]:
-        return {
+        payload: dict[str, object] = {
             "attempt_id": self.attempt_id,
             "iteration": self.iteration,
             "hypothesis": self.hypothesis,
@@ -540,6 +762,14 @@ class PendingAttempt:
             "scores_before": dict(self.scores_before),
             "firm2_before_items": [item.to_json() for item in self.firm2_before_items],
         }
+        if self.lever_scope is not None:
+            payload.update(
+                lever_scope=self.lever_scope,
+                corpus_version=self.corpus_version,
+                answer_rule_config_sha256=self.answer_rule_config_sha256,
+                disagreement_classes_seen=list(self.disagreement_classes_seen),
+            )
+        return payload
 
     @classmethod
     def from_json(cls, payload: Mapping[str, object]) -> PendingAttempt:
@@ -559,6 +789,16 @@ class PendingAttempt:
             scores_before=_mapping(payload.get("scores_before")),
             firm2_before_items=tuple(
                 ItemOutcome.from_json(entry) for entry in items if isinstance(entry, Mapping)
+            ),
+            lever_scope=_lever_scope(payload.get("lever_scope")),
+            corpus_version=str(payload["corpus_version"])
+            if payload.get("corpus_version") is not None
+            else None,
+            answer_rule_config_sha256=str(payload["answer_rule_config_sha256"])
+            if payload.get("answer_rule_config_sha256") is not None
+            else None,
+            disagreement_classes_seen=_string_tuple(
+                payload.get("disagreement_classes_seen")
             ),
         )
 
@@ -615,7 +855,16 @@ def incremental_triage(
 # --------------------------------------------------------------------------------------
 
 
-ScoreFn = Callable[[], tuple[SliceOutcome, SliceOutcome]]
+SliceMap = Mapping[str, SliceOutcome]
+ScoreResult = SliceMap | tuple[SliceOutcome, SliceOutcome]
+ScoreFn = Callable[[], ScoreResult]
+
+
+def _as_slice_map(scores: ScoreResult) -> dict[str, SliceOutcome]:
+    if isinstance(scores, Mapping):
+        return dict(scores)
+    tune, firm2 = scores
+    return {tune.slice_name: tune, firm2.slice_name: firm2}
 
 
 def start_attempt(
@@ -627,13 +876,18 @@ def start_attempt(
     ontology_hash: str,
     config_hash: str,
     surfaces: Iterable[str],
+    manifest_checker: ManifestChecker | None = None,
     score_tune_firm2: ScoreFn | None = None,
-    prior_scores: tuple[SliceOutcome, SliceOutcome] | None = None,
+    prior_scores: ScoreResult | None = None,
+    lever_scope: LeverScope | None = None,
+    corpus_version: str | None = None,
+    answer_rule_config_sha256: str | None = None,
+    disagreement_classes_seen: Iterable[str] = (),
     rebaseline: bool = False,
     rebaseline_reason: str = "",
     determinism_target: str = DEFAULT_SELFTEST_TARGET,
     run_selftest: bool = True,
-    experiments_log: Path = DEFAULT_EXPERIMENTS_LOG,
+    experiments_log: Path | None = None,
     pending_path: Path = DEFAULT_PENDING_PATH,
     now: str | None = None,
 ) -> PendingAttempt:
@@ -650,7 +904,26 @@ def start_attempt(
             f"an attempt is already pending at {pending_path} — finish or discard it first"
         )
     surface_list = tuple(surfaces)
-    assert_no_surfaces(hypothesis, surface_list, what="hypothesis")
+    if not surface_list and manifest_checker is None:
+        raise ValueError("empty surfaces require an explicit manifest_checker")
+    if surface_list:
+        assert_no_surfaces(hypothesis, surface_list, what="hypothesis")
+    if manifest_checker is not None and scan_text(hypothesis, *manifest_checker):
+        raise SurfaceLeakError("hypothesis contains a manifest-matched firm surface")
+    seen_classes = tuple(sorted(set(disagreement_classes_seen)))
+    unknown_classes = set(seen_classes) - DISAGREEMENT_CLASSES
+    if unknown_classes:
+        raise ValueError(f"unknown disagreement classes: {sorted(unknown_classes)}")
+    if lever_scope not in (None, "shared", "adapter_only"):
+        raise ValueError("lever_scope must be 'shared' or 'adapter_only'")
+    if lever_scope is not None and not corpus_version:
+        raise ValueError("synthetic iterations require corpus_version")
+    if lever_scope is not None and not answer_rule_config_sha256:
+        answer_rule_config_sha256 = config_hash
+
+    experiments_log = experiments_log or (
+        DEFAULT_SYNTHETIC_EXPERIMENTS_LOG if lever_scope is not None else DEFAULT_EXPERIMENTS_LOG
+    )
 
     records = load_raw_records(experiments_log)
     baseline = current_window_baseline(records)
@@ -673,7 +946,12 @@ def start_attempt(
                 reason=rebaseline_reason,
                 recorded_at=now or _now(),
             )
-            append_record(experiments_log, boundary.to_json(), surfaces=surface_list)
+            append_record(
+                experiments_log,
+                boundary.to_json(),
+                surfaces=surface_list,
+                manifest_checker=manifest_checker,
+            )
             records = [*records, boundary.to_json()]
 
     started_at = now or _now()
@@ -683,7 +961,7 @@ def start_attempt(
 
     source_record = _last_attempt_in_window(records)
     if prior_scores is not None:
-        scores_before = build_scores_json(*prior_scores)
+        scores_before = build_scores_json(_as_slice_map(prior_scores))
     elif source_record is not None:
         scores_after_raw = source_record.get("scores_after")
         if not isinstance(scores_after_raw, Mapping):
@@ -692,7 +970,7 @@ def start_attempt(
             )
         scores_before = dict(scores_after_raw)
     elif score_tune_firm2 is not None:
-        scores_before = build_scores_json(*score_tune_firm2())
+        scores_before = build_scores_json(_as_slice_map(score_tune_firm2()))
     else:
         raise ExperimentError(
             "no scores_before source available: pass prior_scores, or score_tune_firm2 for a "
@@ -714,6 +992,10 @@ def start_attempt(
         determinism_selftest=selftest_json,
         scores_before=scores_before,
         firm2_before_items=firm2_before_items,
+        lever_scope=lever_scope,
+        corpus_version=corpus_version,
+        answer_rule_config_sha256=answer_rule_config_sha256,
+        disagreement_classes_seen=seen_classes,
     )
     _atomic_write_text(
         pending_path, json.dumps(pending.to_json(), ensure_ascii=False, sort_keys=True) + "\n"
@@ -726,13 +1008,16 @@ def finish_attempt(
     decision: str,
     reason: str,
     surfaces: Iterable[str],
+    manifest_checker: ManifestChecker | None = None,
     score_tune_firm2: ScoreFn | None = None,
-    after_scores: tuple[SliceOutcome, SliceOutcome] | None = None,
+    after_scores: ScoreResult | None = None,
+    corpus_version: str | None = None,
+    answer_rule_config_sha256: str | None = None,
     commit_sha: str | None = None,
     cluster_rows: Sequence[Mapping[str, object]] | None = None,
     gold_rows: Sequence[GoldRow] | None = None,
     live_suspects_path: Path = DEFAULT_LIVE_SUSPECTS_PATH,
-    experiments_log: Path = DEFAULT_EXPERIMENTS_LOG,
+    experiments_log: Path | None = None,
     pending_path: Path = DEFAULT_PENDING_PATH,
     now: str | None = None,
     ci_resamples: int = DEFAULT_BOOTSTRAP_RESAMPLES,
@@ -753,21 +1038,49 @@ def finish_attempt(
             f"no attempt in progress at {pending_path} — call start_attempt first"
         )
     pending = PendingAttempt.from_json(json.loads(pending_path.read_text(encoding="utf-8")))
+    experiments_log = experiments_log or (
+        DEFAULT_SYNTHETIC_EXPERIMENTS_LOG
+        if pending.lever_scope is not None
+        else DEFAULT_EXPERIMENTS_LOG
+    )
+
+    if pending.lever_scope is not None:
+        finishing_version = corpus_version or pending.corpus_version
+        finishing_config = answer_rule_config_sha256 or pending.answer_rule_config_sha256
+        if finishing_version != pending.corpus_version:
+            raise ExperimentError("finishing synthetic report corpus_version differs from start")
+        if finishing_config != pending.answer_rule_config_sha256:
+            raise ExperimentError(
+                "finishing synthetic report answer_rule_config_sha256 differs from start"
+            )
 
     if after_scores is not None:
-        tune_after, firm2_after = after_scores
+        after_map = _as_slice_map(after_scores)
     elif score_tune_firm2 is not None:
-        tune_after, firm2_after = score_tune_firm2()
+        after_map = _as_slice_map(score_tune_firm2())
     else:
         raise ExperimentError(
             "finish_attempt needs after_scores or score_tune_firm2 to measure the outcome"
         )
 
-    scores_after = build_scores_json(tune_after, firm2_after)
+    scores_after = build_scores_json(after_map)
     firm2_after_items = firm2_items_from_scores_json(scores_after)
     tripwire = evaluate_ae4_tripwire(
         pending.firm2_before_items, firm2_after_items, n_resamples=ci_resamples, seed=ci_seed
     )
+
+    synthetic_ci: BootstrapCI | None = None
+    synthetic_after_items = slice_items_from_scores_json(scores_after, "synthetic")
+    if pending.lever_scope is not None:
+        synthetic_before_items = slice_items_from_scores_json(pending.scores_before, "synthetic")
+        paired_synthetic = pair_outcomes(synthetic_before_items, synthetic_after_items)
+        if not paired_synthetic:
+            raise ExperimentError(
+                "synthetic-lever attempt requires paired per-item data (n_units must be nonzero)"
+            )
+        synthetic_ci = bootstrap_ci(
+            paired_synthetic, f1_delta, n_resamples=ci_resamples, seed=ci_seed
+        )
 
     if decision == AUTO_DECISION:
         before_tune = pending.scores_before.get("tune")
@@ -819,8 +1132,25 @@ def finish_attempt(
         decision=decision,
         reason=reason,
         recorded_at=now or _now(),
+        lever_scope=pending.lever_scope,
+        corpus_version=pending.corpus_version,
+        answer_rule_config_sha256=pending.answer_rule_config_sha256,
+        item_count=len(synthetic_after_items)
+        or slice_item_count_from_scores_json(scores_after, "synthetic"),
+        bootstrap_ci={
+            **synthetic_ci.to_json(),
+            "width": round(synthetic_ci.high - synthetic_ci.low, 6),
+        }
+        if synthetic_ci is not None
+        else None,
+        disagreement_classes_seen=pending.disagreement_classes_seen,
     )
-    append_record(experiments_log, record.to_json(), surfaces=surfaces)
+    append_record(
+        experiments_log,
+        record.to_json(),
+        surfaces=surfaces,
+        manifest_checker=manifest_checker,
+    )
     pending_path.unlink()
     return record
 
@@ -863,9 +1193,15 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - I/O or
     common_paths.add_argument("--split-manifest", type=Path, default=DEFAULT_SPLIT_MANIFEST)
     common_paths.add_argument("--label-search-limit", type=int, default=10)
     common_paths.add_argument("--multi-strategy-recall", action="store_true")
-    common_paths.add_argument("--experiments-log", type=Path, default=DEFAULT_EXPERIMENTS_LOG)
+    common_paths.add_argument("--experiments-log", type=Path, default=None)
     common_paths.add_argument("--pending", type=Path, default=DEFAULT_PENDING_PATH)
     common_paths.add_argument("--allow-ontology-bump", action="store_true")
+    common_paths.add_argument(
+        "--slice", choices=("tune-firm2", "synthetic"), default="tune-firm2"
+    )
+    common_paths.add_argument("--synthetic-report", type=Path)
+    common_paths.add_argument("--leak-manifest", type=Path)
+    common_paths.add_argument("--salt-file", type=Path)
 
     start_p = sub.add_parser("start", parents=[common_paths])
     start_p.add_argument("--hypothesis", required=True)
@@ -874,6 +1210,10 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - I/O or
     start_p.add_argument("--rebaseline", action="store_true")
     start_p.add_argument("--rebaseline-reason", default="")
     start_p.add_argument("--determinism-target", default=DEFAULT_SELFTEST_TARGET)
+    start_p.add_argument("--lever-scope", choices=("shared", "adapter_only"), default="shared")
+    start_p.add_argument(
+        "--disagreement-class", action="append", choices=tuple(sorted(DISAGREEMENT_CLASSES))
+    )
 
     finish_p = sub.add_parser("finish", parents=[common_paths])
     finish_p.add_argument("--decision", required=True, choices=(*DECISIONS, AUTO_DECISION))
@@ -888,6 +1228,69 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - I/O or
     if args.command == "status":
         result = status(args.experiments_log)
         print(json.dumps(result.to_json(), indent=2, sort_keys=True))
+        return 0
+
+    if args.slice == "synthetic":
+        from .leakcheck import load_manifest
+
+        required = {
+            "--synthetic-report": args.synthetic_report,
+            "--leak-manifest": args.leak_manifest,
+            "--salt-file": args.salt_file,
+        }
+        missing = [flag for flag, value in required.items() if value is None]
+        if missing:
+            parser.error(f"synthetic slice requires {', '.join(missing)}")
+        report = json.loads(args.synthetic_report.read_text(encoding="utf-8"))
+        if not isinstance(report, Mapping):
+            parser.error("synthetic report must be a JSON object")
+        manifest_checker = (load_manifest(args.leak_manifest), args.salt_file.read_bytes())
+        synthetic = SliceOutcome.from_synthetic_report(report)
+        corpus_version = str(report.get("corpus_version", ""))
+        if not corpus_version:
+            parser.error("synthetic report requires corpus_version")
+        ontology_hash = str(report.get("ontology_cache_sha256", ""))
+        config_hash = str(report.get("answer_rule_config_sha256", ""))
+        if not config_hash:
+            parser.error("synthetic report requires answer_rule_config_sha256")
+        def score_synthetic() -> ScoreResult:
+            return {"synthetic": synthetic}
+        if args.command == "start":
+            pending = start_attempt(
+                hypothesis=args.hypothesis,
+                cluster_targeted=args.cluster_targeted,
+                cluster_size=args.cluster_size,
+                gold_version=0,
+                ontology_hash=ontology_hash,
+                config_hash=config_hash,
+                surfaces=(),
+                manifest_checker=manifest_checker,
+                score_tune_firm2=score_synthetic,
+                lever_scope=args.lever_scope,
+                corpus_version=corpus_version,
+                answer_rule_config_sha256=config_hash,
+                disagreement_classes_seen=args.disagreement_class or (),
+                rebaseline=args.rebaseline,
+                rebaseline_reason=args.rebaseline_reason,
+                determinism_target=args.determinism_target,
+                experiments_log=args.experiments_log,
+                pending_path=args.pending,
+            )
+            print(json.dumps(pending.to_json(), indent=2, sort_keys=True))
+            return 0
+        record = finish_attempt(
+            decision=args.decision,
+            reason=args.reason,
+            surfaces=(),
+            manifest_checker=manifest_checker,
+            score_tune_firm2=score_synthetic,
+            corpus_version=corpus_version,
+            answer_rule_config_sha256=config_hash,
+            commit_sha=args.commit_sha,
+            experiments_log=args.experiments_log,
+            pending_path=args.pending,
+        )
+        print(json.dumps(record.to_json(), indent=2, sort_keys=True))
         return 0
 
     ensure_hash_seed()
@@ -942,7 +1345,7 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - I/O or
             rebaseline=args.rebaseline,
             rebaseline_reason=args.rebaseline_reason,
             determinism_target=args.determinism_target,
-            experiments_log=args.experiments_log,
+            experiments_log=args.experiments_log or DEFAULT_EXPERIMENTS_LOG,
             pending_path=args.pending,
         )
         print(json.dumps(pending.to_json(), indent=2, sort_keys=True))

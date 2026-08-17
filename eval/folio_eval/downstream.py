@@ -144,12 +144,20 @@ class ConsumerSpec:
 
 def mapper_spec(repo_root: Path | None = None) -> ConsumerSpec:
     root = (repo_root or DEFAULT_MAPPER_ROOT).resolve()
-    return ConsumerSpec(name="folio-mapper", repo_root=root, venv_python=root / "backend" / ".venv" / "bin" / "python")
+    return ConsumerSpec(
+        name="folio-mapper",
+        repo_root=root,
+        venv_python=root / "backend" / ".venv" / "bin" / "python",
+    )
 
 
 def enrich_spec(repo_root: Path | None = None) -> ConsumerSpec:
     root = (repo_root or DEFAULT_ENRICH_ROOT).resolve()
-    return ConsumerSpec(name="folio-enrich", repo_root=root, venv_python=root / "backend" / ".venv" / "bin" / "python")
+    return ConsumerSpec(
+        name="folio-enrich",
+        repo_root=root,
+        venv_python=root / "backend" / ".venv" / "bin" / "python",
+    )
 
 
 def editable_install(spec: ConsumerSpec, folio_resolve_root: Path = FOLIO_RESOLVE_ROOT) -> str:
@@ -186,7 +194,11 @@ def editable_install(spec: ConsumerSpec, folio_resolve_root: Path = FOLIO_RESOLV
 
 def _resolved_module_file(venv_python: Path, module: str, *, timeout: float = 30.0) -> Path:
     completed = subprocess.run(
-        [str(venv_python), "-c", f"import {module}, os; print(os.path.realpath({module}.__file__))"],
+        [
+            str(venv_python),
+            "-c",
+            f"import {module}, os; print(os.path.realpath({module}.__file__))",
+        ],
         capture_output=True,
         text=True,
         timeout=timeout,
@@ -197,11 +209,15 @@ def _resolved_module_file(venv_python: Path, module: str, *, timeout: float = 30
         )
     line = completed.stdout.strip().splitlines()[-1] if completed.stdout.strip() else ""
     if not line:
-        raise EditableInstallMismatch(f"{module}.__file__ resolved to an empty path via {venv_python}")
+        raise EditableInstallMismatch(
+            f"{module}.__file__ resolved to an empty path via {venv_python}"
+        )
     return Path(line)
 
 
-def assert_within_root(resolved: Path, expected_root: Path, *, module: str = "folio_resolve") -> Path:
+def assert_within_root(
+    resolved: Path, expected_root: Path, *, module: str = "folio_resolve"
+) -> Path:
     """Pure containment check — the assertion's logic, separated so it is testable without a venv."""
     root = expected_root.resolve()
     if not resolved.is_relative_to(root):
@@ -234,7 +250,9 @@ class TestSuiteResult:
     command: tuple[str, ...]
     returncode: int
     elapsed_s: float
-    outcomes: Mapping[str, str] = field(default_factory=dict)  # test nodeid -> passed/failed/error/skipped
+    outcomes: Mapping[str, str] = field(
+        default_factory=dict
+    )  # test nodeid -> passed/failed/error/skipped
     collect_error: str = ""
 
     @property
@@ -452,7 +470,9 @@ def run_mapper_probe(
     except subprocess.TimeoutExpired as error:
         elapsed = time.perf_counter() - started
         _restore_bytes(candidates_path, original)
-        return ProbeAreaResult(area=area, items=(), elapsed_s=elapsed, returncode=124, error=str(error))
+        return ProbeAreaResult(
+            area=area, items=(), elapsed_s=elapsed, returncode=124, error=str(error)
+        )
     elapsed = time.perf_counter() - started
 
     if completed.returncode != 0 or not candidates_path.exists():
@@ -564,7 +584,9 @@ def run_enrich_harness(
     except subprocess.TimeoutExpired as error:
         elapsed = time.perf_counter() - started
         out_path.unlink(missing_ok=True)
-        return HarnessResult(label_resolution=(), elapsed_s=elapsed, returncode=124, error=str(error))
+        return HarnessResult(
+            label_resolution=(), elapsed_s=elapsed, returncode=124, error=str(error)
+        )
     elapsed = time.perf_counter() - started
 
     if completed.returncode != 0 or not out_path.exists():
@@ -711,9 +733,10 @@ def build_aggregate(
     return {
         "label": label,
         "kind": "downstream_baseline",
-        "consumers": {snap.consumer: snap.to_summary_json() for snap in sorted(
-            snapshots, key=lambda s: s.consumer
-        )},
+        "consumers": {
+            snap.consumer: snap.to_summary_json()
+            for snap in sorted(snapshots, key=lambda s: s.consumer)
+        },
     }
 
 
@@ -856,7 +879,8 @@ def diff_snapshots(before: Mapping[str, object], after: Mapping[str, object]) ->
         )
     if "harness" in before or "harness" in after:
         verdict += classify_probe_diff(
-            _iri_sets_from_harness(before.get("harness")), _iri_sets_from_harness(after.get("harness"))
+            _iri_sets_from_harness(before.get("harness")),
+            _iri_sets_from_harness(after.get("harness")),
         )
     if "tests" in before or "tests" in after:
         verdict += classify_test_diff(
@@ -928,7 +952,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
-    snap = sub.add_parser("snapshot", help="run the consumers and write a baseline/check-in snapshot")
+    snap = sub.add_parser(
+        "snapshot", help="run the consumers and write a baseline/check-in snapshot"
+    )
     snap.add_argument("--consumer", choices=["mapper", "enrich", "all"], default="all")
     snap.add_argument("--mapper-root", type=Path, default=None)
     snap.add_argument("--enrich-root", type=Path, default=None)
@@ -938,13 +964,71 @@ def main(argv: Sequence[str] | None = None) -> int:
     snap.add_argument("--gold", type=Path, default=None, help="optional -- enables the leak scan")
     snap.add_argument("--test-timeout", type=float, default=DEFAULT_TEST_TIMEOUT_S)
 
-    diff = sub.add_parser("diff", help="classify blocking/advisory deltas between two row snapshots")
+    diff = sub.add_parser(
+        "diff", help="classify blocking/advisory deltas between two row snapshots"
+    )
     diff.add_argument("--before", type=Path, required=True)
     diff.add_argument("--after", type=Path, required=True)
+
+    comparison = sub.add_parser(
+        "run_synthetic_comparison",
+        help="compare local folio-resolve with pinned downstream incumbent lanes",
+    )
+    comparison.add_argument("--corpus-manifest", type=Path, required=True)
+    comparison.add_argument("--config", type=Path, required=True)
+    comparison.add_argument("--out", type=Path, required=True)
+    comparison.add_argument("--items", type=Path, required=True)
+    comparison.add_argument("--row-snapshot-dir", type=Path, required=True)
+    comparison.add_argument("--leak-manifest", type=Path, required=True)
+    comparison.add_argument("--salt-file", type=Path, required=True)
+    comparison.add_argument("--mapper-root", type=Path, default=None)
+    comparison.add_argument("--enrich-root", type=Path, default=None)
+    comparison.add_argument("--consumer", choices=["mapper", "enrich", "all"], default="all")
+    comparison.add_argument("--incumbent-version", default="0.4.0")
+    comparison.add_argument("--limit", type=int, default=None)
 
     args = parser.parse_args(argv)
     if args.command == "snapshot":
         return _cmd_snapshot(args)
+    if args.command == "run_synthetic_comparison":
+        from folio import FOLIO
+
+        from folio_resolve.ontology import FolioPythonProvider
+
+        from .answer_rule import load_config
+        from .comparison import run_synthetic_comparison, write_comparison
+        from .leakcheck import load_manifest
+        from .synthesize import load_corpus
+        from .synthetic_score import DocumentAdapter
+
+        corpus = load_corpus(args.corpus_manifest)
+        config = load_config(args.config)
+        adapter = DocumentAdapter(FolioPythonProvider(_folio=FOLIO()))
+        specs = []
+        if args.consumer in {"mapper", "all"}:
+            specs.append(mapper_spec(args.mapper_root))
+        if args.consumer in {"enrich", "all"}:
+            specs.append(enrich_spec(args.enrich_root))
+        payload = run_synthetic_comparison(
+            corpus,
+            adapter=adapter,
+            config=config,
+            consumers=specs,
+            items_path=args.items,
+            row_snapshot_dir=args.row_snapshot_dir,
+            leak_manifest=load_manifest(args.leak_manifest),
+            salt=args.salt_file.read_bytes(),
+            limit=args.limit,
+            incumbent_version=args.incumbent_version,
+        )
+        write_comparison(
+            args.out,
+            payload,
+            leak_manifest=load_manifest(args.leak_manifest),
+            salt=args.salt_file.read_bytes(),
+        )
+        print(canonical_json(payload))
+        return 0
     return _cmd_diff(args)
 
 

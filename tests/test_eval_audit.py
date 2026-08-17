@@ -8,9 +8,11 @@ mapping or callable, so the whole gate is exercised offline.
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
+import folio_eval.packet_render as packet_render
 import pytest
 from fixtures.eval_synthetic_workbook import (
     FIRM1_PIPE_ROWS,
@@ -39,13 +41,17 @@ from folio_eval.audit import (
     LabelProposal,
     Packet,
     PacketRow,
+    SittingManifest,
     SplitFacts,
+    _atomized_level_mappings,
     append_decisions,
+    assemble_sittings,
     build_packet,
     build_packet_v2,
     fold_decisions,
     fold_granular_decisions,
     gold_row_v2_from_json,
+    latest_folded_path,
     load_decisions,
     load_gold_rows,
     load_gold_rows_v2,
@@ -62,14 +68,18 @@ from folio_eval.audit import (
     variant_stats,
     variant_table,
     write_decision_notes,
+    write_folded_history,
     write_gold_version,
 )
+from folio_eval.audit import main as audit_main
 from folio_eval.gold import build_gold_v2, parse_firm1_v2, parse_firm2_v2
 from folio_eval.packet_render import (
     render_sheet,
     render_sheet_v2,
+    validate_sitting_output,
     write_packet,
     write_packet_v2,
+    write_sitting_v2,
 )
 from folio_eval.resolve_labels import IndexedConcept, LabelIndex
 from folio_eval.splits import DEFAULT_GOLD_DIR, sha256_text
@@ -459,7 +469,9 @@ def test_new_gold_ties_break_on_an_exact_label_match(rows: list[Any]) -> None:
         gold_rows=load_rows_from_payloads([row.payload for row in rows] + blanks),
         predictions={
             # identical calibrated probability and raw score; only the label match separates them
-            "blank-acronym": ranked(("R-court", "Quorum Regional Tribunal - D. Vellaton", 100.0, 0.37)),
+            "blank-acronym": ranked(
+                ("R-court", "Quorum Regional Tribunal - D. Vellaton", 100.0, 0.37)
+            ),
             "blank-exact": ranked(("R-esch", "Escheat", 100.0, 0.37)),
         },
         ontology_sha256=ONTOLOGY_SHA,
@@ -503,9 +515,7 @@ def label_index() -> LabelIndex:
                 preferred_labels=("Kingdom of Northmarch and the Outer Isles",),
                 alternative_labels=("Northmarch",),
             ),
-            IndexedConcept(
-                iri="R-escrow", preferred_labels=("Escrow Services (non-dispute)",)
-            ),
+            IndexedConcept(iri="R-escrow", preferred_labels=("Escrow Services (non-dispute)",)),
             IndexedConcept(iri="R-freight", preferred_labels=("Freight Escrow Practice",)),
         ]
     )
@@ -513,7 +523,9 @@ def label_index() -> LabelIndex:
 
 def test_containment_finds_the_longer_folio_label() -> None:
     index = label_index()
-    proposals = propose_for_label("Kingdom of Northmarch", index=index, search=lambda _q, limit=20: [])
+    proposals = propose_for_label(
+        "Kingdom of Northmarch", index=index, search=lambda _q, limit=20: []
+    )
     assert proposals[0].iri == "R-realm"
     assert proposals[0].method == "containment"
 
@@ -529,7 +541,9 @@ def test_direct_search_supplies_candidates_containment_misses() -> None:
     proposals = propose_for_label(
         "Freight Escrow Cover",
         index=index,
-        search=lambda _q, limit=20: [LabelProposal("R-freight", "Freight Escrow Practice", 41.0, "search")],
+        search=lambda _q, limit=20: [
+            LabelProposal("R-freight", "Freight Escrow Practice", 41.0, "search")
+        ],
     )
     assert [entry.method for entry in proposals] == ["search"]
 
@@ -611,7 +625,9 @@ def test_rows_with_no_plausible_candidate_are_coverage_gaps(rows: list[Any]) -> 
 # --------------------------------------------------------------------------------------
 
 
-def rejected_record(item_id: str, iris: tuple[str, ...], *, ontology: str = ONTOLOGY_SHA) -> DecisionRecord:
+def rejected_record(
+    item_id: str, iris: tuple[str, ...], *, ontology: str = ONTOLOGY_SHA
+) -> DecisionRecord:
     return DecisionRecord(
         decision_id=f"suspect:{item_id}:x",
         item_id=item_id,
@@ -930,7 +946,7 @@ def test_sheet_renders_every_section_and_is_self_contained(rows: list[Any], tmp_
     assert "prefers-color-scheme" in html
     # self-contained: no external asset may be referenced
     assert "http://" not in html and "https://folio" not in html
-    assert "<script src=" not in html and "<link rel=\"stylesheet\"" not in html
+    assert "<script src=" not in html and '<link rel="stylesheet"' not in html
 
     paths = write_packet(packet, tmp_path)
     assert paths["packet"].exists() and paths["sheet"].exists()
@@ -987,7 +1003,9 @@ def v2_packet(
     )
 
 
-def test_v2_packet_carries_the_pairing_and_consistency_sections(v2_gold: tuple[Any, list[Any]]) -> None:
+def test_v2_packet_carries_the_pairing_and_consistency_sections(
+    v2_gold: tuple[Any, list[Any]],
+) -> None:
     """Sections A and B exist because the per-cell derivation cannot decide them alone."""
     build, rows = v2_gold
     packet = v2_packet(build, rows)
@@ -1001,9 +1019,7 @@ def test_v2_packet_carries_the_pairing_and_consistency_sections(v2_gold: tuple[A
     assert heuristic["Uneven Category"] == [W_LITIGATION]
     assert sorted(heuristic["Odd attribute"]) == sorted([W_ARBITRATION, W_ADVISORY])
     assert alternative["Uneven Category"] == []
-    assert sorted(alternative["Odd attribute"]) == sorted(
-        [W_LITIGATION, W_ARBITRATION, W_ADVISORY]
-    )
+    assert sorted(alternative["Odd attribute"]) == sorted([W_LITIGATION, W_ARBITRATION, W_ADVISORY])
 
     consistency = packet.section("consistency")
     assert len(consistency) == 1
@@ -1013,7 +1029,7 @@ def test_v2_packet_carries_the_pairing_and_consistency_sections(v2_gold: tuple[A
 
 
 def test_v2_packet_grades_every_concept_individually(v2_gold: tuple[Any, list[Any]]) -> None:
-    """Damien's format: one radio pair per gold concept and per pipeline candidate."""
+    """Damien's format: one verdict checkbox per gold concept and per pipeline candidate."""
     build, rows = v2_gold
     target = _row_by_text(rows, "Enforcement matters")
     packet = v2_packet(
@@ -1029,15 +1045,85 @@ def test_v2_packet_grades_every_concept_individually(v2_gold: tuple[Any, list[An
     row = packet.section("consistency")[0]
     assert len(row.gold) == 2
     assert [entry["iri"] for entry in row.pipeline] == ["R-pipe", "R-junk"]
+    assert all(entry.get("origin") for entry in row.gold)
+    assert row.extra.get("system_level_mappings")
     # every pipeline candidate carries its own definition snippet, not just the leader
     assert row.pipeline[0]["definition"]
     html = render_sheet_v2(packet)
-    assert 'value="keep"' in html and 'value="remove"' in html
-    assert 'value="elevate"' in html and 'value="not_gold"' in html
+    assert 'data-on="keep" data-off="remove"' in html
+    assert 'data-on="elevate" data-off="not_gold"' in html
+    # gold defaults to kept (checked), a pipeline candidate to not_gold (unchecked)
+    assert 'data-on="keep" data-off="remove" checked' in html
+    assert 'data-on="elevate" data-off="not_gold">' in html
+    for entry in row.gold:
+        assert any(
+            f'data-iri="{entry["iri"]}" value="L{level}" checked' in html for level in (1, 2, 3)
+        )
+    assert any(f'data-iri="R-pipe" value="L{level}" checked' in html for level in (1, 2, 3))
     assert 'class="note gold-note"' in html and 'class="note pipeline-note"' in html
 
 
-def test_v2_sheet_is_self_contained_and_renders_the_hierarchy(v2_gold: tuple[Any, list[Any]]) -> None:
+def test_atomized_level_mappings_assign_exact_input_levels() -> None:
+    row = PacketRow(
+        decision_id="suspect:test",
+        section="suspect",
+        reason_class="test",
+        input_text=(
+            "Banking, Finance & Struct Fin > Insurance Finance (non-structured) > Borrower"
+        ),
+        item_id="item-1",
+        firm="Firm",
+        stratum="test",
+        stratum_id="test",
+        surface_label="Borrower",
+        ancestor_path=("Banking, Finance & Struct Fin", "Insurance Finance (non-structured)"),
+        slice_name="tune",
+        suggested_action="review",
+        gold=(
+            {
+                "iri": "https://folio.openlegalstandard.org/banking",
+                "label": "Banking Law",
+                "column": "SALI 2",
+            },
+            {
+                "iri": "https://folio.openlegalstandard.org/structured",
+                "label": "Structured Finance Law",
+                "column": "SALI 4",
+            },
+            {
+                "iri": "https://folio.openlegalstandard.org/industry",
+                "label": "Finance and Insurance Services Industry",
+                "column": "SALI 2",
+            },
+            {
+                "iri": "https://folio.openlegalstandard.org/insurance",
+                "label": "Insurance Law",
+                "column": "SALI 0 (cascade down)",
+            },
+            {
+                "iri": "https://folio.openlegalstandard.org/lending",
+                "label": "Finance and Lending Law",
+                "column": "SALI 0 (cascade down)",
+            },
+        ),
+        pipeline=({"iri": "https://folio.openlegalstandard.org/borrower", "label": "Borrower"},),
+    )
+
+    assert _atomized_level_mappings(row) == {
+        "L1": [
+            "https://folio.openlegalstandard.org/banking",
+            "https://folio.openlegalstandard.org/structured",
+            "https://folio.openlegalstandard.org/industry",
+            "https://folio.openlegalstandard.org/lending",
+        ],
+        "L2": ["https://folio.openlegalstandard.org/insurance"],
+        "L3": ["https://folio.openlegalstandard.org/borrower"],
+    }
+
+
+def test_v2_sheet_is_self_contained_and_renders_the_hierarchy(
+    v2_gold: tuple[Any, list[Any]],
+) -> None:
     build, rows = v2_gold
     packet = v2_packet(build, rows)
     html = render_sheet_v2(packet)
@@ -1052,6 +1138,341 @@ def test_v2_sheet_is_self_contained_and_renders_the_hierarchy(v2_gold: tuple[Any
     assert "Copy decisions" in html and '<textarea id="out" readonly' in html
 
 
+def test_v2_sheet_renders_an_actionable_mapping_workspace(v2_gold: tuple[Any, list[Any]]) -> None:
+    """The durable sheet is a navigable 1:many review tool, not a long stack of cards."""
+    build, rows = v2_gold
+    packet = v2_packet(build, rows)
+    html = render_sheet_v2(packet)
+
+    assert 'data-review-workspace="folio-eval-v1"' in html
+    assert 'aria-label="Evaluation items"' in html
+    assert 'id="mapping-lines"' in html
+    assert 'class="level-pane"' in html
+    assert "pane-resizer" in html
+    assert 'data-level-id="L1"' in html
+    assert 'data-level-id="L2"' in html
+    assert 'data-level-id="L3"' in html
+    assert "Option A" not in html
+    assert "Option B" not in html
+    assert "Option C" not in html
+    assert "L2 ·" in html and "L3 ·" in html
+    # the level a concept sits at reads off the chip; its full name is the chip's hover text
+    assert 'class="level-choice" title="L1 &middot;' in html
+    assert "<span>L1</span>" in html
+    assert "System level mapping" in html
+    assert "See all levels" in html
+    assert 'data-level-filter="L1"' in html
+    # no disclosure chevron hides a concept's label or its level assignment
+    assert "concept-details" not in html
+    assert 'class="concept-label"' in html
+    assert "Undo remove" in html
+    assert "applyLevelFilter" in html
+    assert "Mapped outputs" in html
+    assert "Add FOLIO concept" in html
+    assert "level_mappings" in html
+    assert "level_notes" in html
+    assert "mapping_options" in html
+    assert "initPaneResizers" in html
+    assert 'class="concept-inspector"' in html
+    assert 'id="review-search"' in html
+    assert 'id="status-filter"' in html
+    assert 'id="previous-row"' in html and 'id="next-row"' in html
+    assert 'id="download"' in html
+    assert 'id="theme-toggle"' in html
+    assert 'data-theme="light"' in html
+    assert "folio-eval-theme" in html
+    assert "setTheme" in html
+    assert "--tag-bg:" in html
+    assert "background: var(--tag-bg)" in html
+    assert '<option value="undecided">Undecided</option>' in html
+    assert html.index('<option value="undecided">') < html.index('<option value="needs-eye">')
+    assert 'class="secondary mark-reviewed"' in html
+    assert 'data-on="keep" data-off="remove" checked' in html
+    assert "entry.reviewed = true" in html
+    assert "position: sticky" in html
+    assert "Mark reviewed &amp; continue" in html
+    assert "localStorage" in html
+    assert "drawMappingLines" in html
+    assert "scheduleMappingLines" in html
+    assert "restoreDraft" in html
+    assert "reviewedIds" in html
+    assert "function rowComplete(row)" in html
+    assert "saved.version >= 4" in html
+    assert html.count("document.addEventListener('change'") == 1
+
+
+def _js(html: str) -> str:
+    """The sheet's JS with ``//`` comments dropped and whitespace collapsed.
+
+    The script is emitted from a Python string constant, so its line wrapping is an artifact of
+    source formatting rather than of behaviour. Matching against the collapsed form keeps these
+    assertions from failing on a reflow, and dropping comments keeps a comment that *quotes* a
+    removed line from reading as the line itself.
+    """
+    lines = [line for line in html.splitlines() if not line.lstrip().startswith("//")]
+    return " ".join(" ".join(lines).split())
+
+
+def _js_body(html: str, start: str, end: str) -> str:
+    """The collapsed, comment-free JS between two anchors."""
+    return _js(html).split(start, 1)[1].split(end, 1)[0]
+
+
+def test_editing_a_row_never_marks_it_reviewed(v2_gold: tuple[Any, list[Any]]) -> None:
+    """Only the Mark-reviewed button may set ``reviewed`` (Damien, 2026-08-16).
+
+    The change handler used to run ``nav.dataset.reviewed = String(rowComplete(row))``, which read
+    "this row's data is complete" as "the human is done with it". Most rows load already complete,
+    so the first click on any control marked the row reviewed, hid it under the Undecided filter,
+    and bounced the reviewer to a different input mid-edit.
+    """
+    build, rows = v2_gold
+    html = render_sheet_v2(v2_packet(build, rows))
+
+    # Assert the invariant on the handler body, not the absence of one spelling -- the bug has many
+    # equivalent forms (setAttribute('data-reviewed', ...) is the same defect). Comments are
+    # stripped first because the explanatory block quotes the old line verbatim.
+    handler = _js_body(html, "document.addEventListener('change'", "document.addEventListener('input'")
+    assert "dataset.reviewed" not in handler
+    assert "data-reviewed" not in handler
+    # The two surviving writes: the Mark-reviewed button, and replaying an id Damien recorded.
+    confirm_branch = html.split("closest('.mark-reviewed')", 1)[1].split("function", 1)[0]
+    assert "nav.dataset.reviewed = 'true'" in confirm_branch
+    assert "reviewedIds.forEach" in html
+
+
+def test_a_pre_fix_draft_never_replays_inferred_reviewed_flags(
+    v2_gold: tuple[Any, list[Any]],
+) -> None:
+    """Version 3 drafts carry the old auto-marking, so their reviewedIds are not Damien's word.
+
+    Every v3 draft was written by the code this change fixes, which set ``reviewed`` on any edit.
+    Recovery replays a saved sitting, so honouring v3 reviewedIds would smuggle the inference back
+    in through the recovery path and hide rows Damien never finished.
+    """
+    build, rows = v2_gold
+    html = render_sheet_v2(v2_packet(build, rows))
+
+    assert "version: 4, decisions: payload" in html
+    assert "saved.version >= 4 && Array.isArray(saved.reviewedIds)" in html
+    assert "saved.version >= 3" not in html
+
+
+def test_editing_a_row_does_not_advance_off_it(v2_gold: tuple[Any, list[Any]]) -> None:
+    """An edit holds position; only an explicit filter change or Mark-reviewed re-homes.
+
+    Clicking a level chip used to hide the row and jump the reviewer to an unrelated input.
+    """
+    build, rows = v2_gold
+    html = render_sheet_v2(v2_packet(build, rows))
+    js = _js(html)
+
+    assert "function applyFilters(options)" in js
+    assert "const keepActive = Boolean(options && options.keepActive);" in js
+    assert "else if (!keepActive &&" in js
+    # The empty-list arm must bail BEFORE the cleanup, or the row under edit loses .active.
+    empty_arm = js.split("if (!visible.length) {", 1)[1].split("} else if", 1)[0]
+    assert "if (keepActive) { return; }" in empty_arm
+    assert empty_arm.index("keepActive") < empty_arm.index("classList.remove('active')")
+    # Anchor each hold-position call to its own branch rather than counting occurrences.
+    add_branch = js.split("setCustomValidity('');", 1)[1].split("const remove =", 1)[0]
+    assert "applyFilters({keepActive: true})" in add_branch
+    remove_branch = js.split("closest('.remove-mapping')", 1)[1].split("closest('.mark-reviewed')", 1)[0]
+    assert "applyFilters({keepActive: true})" in remove_branch
+    # Mark-reviewed is the "& continue", and recovery is a whole-sheet change: both re-home.
+    confirm_branch = js.split("closest('.mark-reviewed')", 1)[1].split("const concept =", 1)[0]
+    assert "applyFilters();" in confirm_branch and "keepActive" not in confirm_branch
+    assert "applyFilters({keepActive: Boolean(row)})" in js
+    # the search and status-filter listeners keep the plain advancing form
+    assert "addEventListener('input', applyFilters)" in js
+    assert "addEventListener('change', applyFilters)" in js
+
+
+def test_an_unassigned_concept_survives_a_level_filter(v2_gold: tuple[Any, list[Any]]) -> None:
+    """A concept with no level decision stays visible, or its level can never be assigned.
+
+    A freshly added FOLIO concept has no level yet, so the old filter hid the very row whose chips
+    were needed to give it one. An excluded or removed concept has its chips cleared too, so the
+    exemption must not swallow those or the filter stops filtering at all.
+    """
+    build, rows = v2_gold
+    html = render_sheet_v2(v2_packet(build, rows))
+    js = _js(html)
+
+    assert "const decided = li.querySelector('input[data-level-map]:checked, " in js
+    assert "|| verdictExcluded(li) || li.classList.contains('mapping-removed');" in js
+    assert "li.hidden = selected !== 'all' && Boolean(decided)" in js
+    # adding a concept must also re-run the row's filter, or the new line renders unfiltered
+    add_branch = js.split("setCustomValidity('');", 1)[1].split("const remove =", 1)[0]
+    assert "applyLevelFilter(row, currentLevelFilter(row))" in add_branch
+
+
+def test_adding_a_concept_needs_only_the_iri(v2_gold: tuple[Any, list[Any]]) -> None:
+    """Damien, 2026-08-16: the label is derivable and the leaf level is the atomic unit.
+
+    The sheet embeds the ontology's rdfs:labels, so pasting an IRI auto-fills the label (a typed
+    label still wins), and the added concept's deepest level chip arrives pre-selected because
+    gold maps to the atomic unit -- the leaf of the input hierarchy.
+    """
+    build, rows = v2_gold
+    html = render_sheet_v2(v2_packet(build, rows), label_index={"RTEST1": "Test Concept"})
+    js = _js(html)
+
+    assert '<script type="application/json" id="folio-labels">{"RTEST1":"Test Concept"}</script>' in html
+    assert "folioLabels = JSON.parse(document.getElementById('folio-labels')" in js
+    assert "if (!label) { label = folioLabels[iri.split('/').pop()] || ''; }" in js
+    # unknown IRI without a typed label is refused with a pointed message, not silently mislabeled
+    assert "not in the embedded FOLIO index" in js
+    # the deepest chip pre-selects on an added concept
+    assert "if (chips.length) { chips[chips.length - 1].checked = true; }" in js
+    # rendering without an index embeds nothing and the flow still works label-first
+    assert 'id="folio-labels"' not in render_sheet_v2(v2_packet(build, rows))
+
+
+def test_a_stranded_sitting_can_be_recovered(v2_gold: tuple[Any, list[Any]]) -> None:
+    """Republishing over a re-derived packet mints a new draft key; the old work stays reachable.
+
+    The packet key carries the row count and a content fingerprint, so a regenerated workspace
+    looks for a draft that never existed. The baseline id is the stable prefix.
+    """
+    build, rows = v2_gold
+    html = render_sheet_v2(v2_packet(build, rows))
+    js = _js(html)
+
+    assert "function draftBaseline(key)" in js
+    assert "function strandedDrafts()" in js
+    assert "function offerStrandedDraft(state, best, restored)" in js
+    assert "draftBaseline(key) !== draftBaseline(draftKey)" in js
+    assert "'secondary recover-draft'" in js
+    # The offer must NOT be gated on the draft key's absence: beforeunload writes that key on the
+    # way out of the first visit, so one reload would retire the offer and strand the sitting.
+    assert "if (!raw) { offerStrandedDraft(state); return; }" not in js
+    # Nor on a decision-count comparison: collect() emits an entry per unfolded row, so an
+    # untouched workspace's own draft always looks fuller than a real stranded sitting.
+    assert "candidates[0].count > restored" not in js
+    # Only an explicit dismissal retires it, and dismissing never deletes the draft.
+    assert "localStorage.getItem(dismissKey) !== candidates[0].key" in js
+    assert "localStorage.setItem(dismissKey, best.key)" in js
+    assert "removeItem(best.key)" not in js
+
+
+def test_recovery_ranks_by_what_a_person_wrote(v2_gold: tuple[Any, list[Any]]) -> None:
+    """A raw decision count is mostly machine state, so ranking on it offers the emptiest sitting.
+
+    Observed against real drafts: one stranded sitting held 104 entries of pure default and another
+    held 31 carrying six genuine calls. Raw-count ranking offered the empty one first, and accepting
+    it would have overwritten live work with the defaults the sheet already ships.
+    """
+    build, rows = v2_gold
+    html = render_sheet_v2(v2_packet(build, rows))
+    js = _js(html)
+
+    assert "function humanAuthored(decisions)" in js
+    # a note, a pairing reading or an added concept is authorship; so is a non-default verdict
+    for field in ("'note'", "'gold_note'", "'pipeline_note'", "'level_notes'", "'added_mappings'"):
+        assert field in js
+    assert "entry.gold[iri] !== 'keep'" in js
+    assert "entry.pipeline[iri] !== 'not_gold'" in js
+    # ranked by authorship first, and a sitting with none of it is not offered at all
+    assert "second.human - first.human || second.count - first.count" in js
+    assert "if (human) { found.push(" in js
+    # the label reports authored entries, not the inflated raw count
+    assert "'Recover ' + best.human + ' decision(s) you entered in an earlier sitting'" in js
+    # recovery must not silently overwrite work already entered in this workspace
+    assert "window.confirm(" in js
+    assert "already entered in this workspace" in js
+
+
+def test_an_export_is_only_recorded_once_it_succeeded(v2_gold: tuple[Any, list[Any]]) -> None:
+    """The browser-only warning must not disarm on a copy the clipboard refused.
+
+    ``exportedJson`` drives the "not yet downloaded" indicator. Setting it before the async
+    clipboard write meant a blocked copy read as "Draft saved in this browser" -- the exact false
+    all-clear the indicator exists to prevent, on a sheet with no server behind it.
+    """
+    build, rows = v2_gold
+    html = render_sheet_v2(v2_packet(build, rows))
+    js = _js(html)
+
+    assert "decision(s) not yet downloaded" in js
+    copy_body = js.split("function copyDecisions()", 1)[1].split("document.querySelector(", 1)[0]
+    # the success continuation records it; the failure continuation clears it
+    assert "const done = function () { exportedJson = JSON.stringify(decisions);" in copy_body
+    assert "const manual = function () { exportedJson = '';" in copy_body
+    # and nothing records it before the clipboard is attempted
+    preamble = copy_body.split("const done =", 1)[0]
+    assert "exportedJson" not in preamble
+
+
+def test_v2_sheet_restores_folded_level_assignments_and_notes(
+    v2_gold: tuple[Any, list[Any]],
+) -> None:
+    build, rows = v2_gold
+    packet = v2_packet(build, rows)
+    target = next(row for row in packet.rows if row.gold and row.section != "pairing")
+    iri = str(target.gold[0]["iri"])
+    folded = {
+        "gold_version": 3,
+        "gold_id": "v3-test",
+        "level_mappings": {"L1": [iri]},
+        "level_notes": {"L1": "Keep this level-specific explanation."},
+        "mapping_options": {"unassigned": []},
+    }
+    updated = replace(target, extra={**target.extra, "folded": folded, "baseline": folded})
+    packet = replace(
+        packet,
+        rows=tuple(
+            updated if row.decision_id == target.decision_id else row for row in packet.rows
+        ),
+    )
+
+    html = render_sheet_v2(packet)
+
+    assert f'data-iri="{iri}" value="L1" checked' in html
+    assert "System level mapping" in html
+    assert "Keep this level-specific explanation." in html
+
+
+def test_v2_sheet_draft_key_tracks_the_live_gold_baseline(v2_gold: tuple[Any, list[Any]]) -> None:
+    """A regenerated packet must not restore decisions made against a different live gold."""
+    build, rows = v2_gold
+    first = render_sheet_v2(
+        v2_packet(build, rows, current_gold_version=2, current_gold_id="live-gold-2")
+    )
+    second = render_sheet_v2(
+        v2_packet(build, rows, current_gold_version=3, current_gold_id="live-gold-3")
+    )
+
+    assert 'data-packet-key="live-gold-2|' in first
+    assert 'data-packet-key="live-gold-3|' in second
+
+
+def test_v2_sheet_draft_key_tracks_the_decision_shaping_packet(
+    v2_gold: tuple[Any, list[Any]],
+) -> None:
+    """Candidate changes under one gold ID must not inherit stale browser decisions."""
+    build, rows = v2_gold
+    packet = v2_packet(build, rows, current_gold_version=3, current_gold_id="live-gold-3")
+    changed_row = replace(
+        packet.rows[0],
+        pipeline=(*packet.rows[0].pipeline, {"iri": "R-new", "label": "New candidate"}),
+    )
+    changed_packet = replace(packet, rows=(changed_row, *packet.rows[1:]))
+
+    original_key = render_sheet_v2(packet).split('data-packet-key="', 1)[1].split('"', 1)[0]
+    changed_key = render_sheet_v2(changed_packet).split('data-packet-key="', 1)[1].split('"', 1)[0]
+    assert original_key != changed_key
+
+
+def test_v2_sheet_warns_when_suspect_rows_overflow(v2_gold: tuple[Any, list[Any]]) -> None:
+    build, rows = v2_gold
+    packet = replace(v2_packet(build, rows), overflow={"candidate tail": 7})
+    html = render_sheet_v2(packet)
+
+    assert "More suspect rows remain." in html
+    assert "candidate tail: 7" in html
+
+
 def test_v2_prefilled_ruling_is_carried_forward(v2_gold: tuple[Any, list[Any]]) -> None:
     """A ruling Damien already made shows up pre-checked instead of being asked again."""
     build, rows = v2_gold
@@ -1063,14 +1484,14 @@ def test_v2_prefilled_ruling_is_carried_forward(v2_gold: tuple[Any, list[Any]]) 
         prefill_rulings={"unsettled matters": "already ruled: gold stands"},
     )
     assert packet.section("consistency")[0].extra["prefill"] == {}
-    suspect = next(
-        entry for entry in packet.section("suspect") if entry.item_id == target.item_id
-    )
+    suspect = next(entry for entry in packet.section("suspect") if entry.item_id == target.item_id)
     assert suspect.extra["prefill"]["gold"] == {W_LITIGATION: "keep"}
     assert suspect.extra["prefill"]["pipeline"] == {"R-junk": "not_gold"}
     assert packet.counts["prefilled_rulings"] == 1
     html = render_sheet_v2(packet)
-    assert 'value="keep" checked' in html and 'value="not_gold" checked' in html
+    # kept gold arrives checked; a not_gold candidate arrives unchecked
+    assert 'data-on="keep" data-off="remove" checked' in html
+    assert 'data-on="elevate" data-off="not_gold">' in html
 
 
 def test_granular_fold_keeps_removes_and_elevates(v2_gold: tuple[Any, list[Any]]) -> None:
@@ -1312,19 +1733,34 @@ def test_real_packet_confirming_all_prechecked_heuristic_pairings_is_a_no_op(
     contributed -- 36 items changed for a sheet Damien never touched.
     """
     packet_path = DEFAULT_PACKET_DIR_V2 / "packet.json"
-    gold_path = DEFAULT_GOLD_DIR / "gold_v2.jsonl"
-    manifest_path = DEFAULT_GOLD_DIR / "gold_v2.manifest.json"
-    if not (packet_path.exists() and gold_path.exists() and manifest_path.exists()):
-        pytest.skip("real audit packet / gold v2 not present in this checkout")
+    if not packet_path.exists():
+        pytest.skip("real audit packet not present in this checkout")
 
     packet = packet_v2_from_json(json.loads(packet_path.read_text(encoding="utf-8")))
+    current_version = int(packet.meta.get("current_gold_version", packet.meta["gold_version"]))
+    current_gold_id = str(packet.meta.get("current_gold_id", packet.meta["gold_id"]))
+    gold_path = DEFAULT_GOLD_DIR / f"gold_v{current_version}.jsonl"
+    manifest_path = DEFAULT_GOLD_DIR / f"gold_v{current_version}.manifest.json"
+    if not (gold_path.exists() and manifest_path.exists()):
+        pytest.skip(f"real live gold v{current_version} not present in this checkout")
+    # Characterize the original unsubmitted packet state even after the live artifact starts
+    # carrying folded-history panels from later adjudication passes.
+    packet = replace(
+        packet,
+        rows=tuple(
+            replace(row, extra={key: value for key, value in row.extra.items() if key != "folded"})
+            for row in packet.rows
+        ),
+    )
     rows = load_gold_rows_v2(gold_path)
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     ontology_sha256 = str(manifest["ontology_cache_sha256"])
 
     pairing = packet.section("pairing")
     heuristic_prechecked = [
-        row for row in pairing if row.extra.get("precheck", {}).get("choice") == "heuristic"  # type: ignore[union-attr]
+        row
+        for row in pairing
+        if row.extra.get("precheck", {}).get("choice") == "heuristic"  # type: ignore[union-attr]
     ]
     assert len(heuristic_prechecked) == 106  # the measured defect scenario
 
@@ -1336,17 +1772,17 @@ def test_real_packet_confirming_all_prechecked_heuristic_pairings_is_a_no_op(
     unfolded_heuristic_prechecked = [
         row for row in heuristic_prechecked if not row.extra.get("folded")
     ]
-    assert len(unfolded_heuristic_prechecked) == 100
+    assert len(unfolded_heuristic_prechecked) == 106
 
-    decisions = {
-        row.decision_id: {"pairing": "heuristic"} for row in unfolded_heuristic_prechecked
-    }
+    decisions = {row.decision_id: {"pairing": "heuristic"} for row in unfolded_heuristic_prechecked}
     result = fold_granular_decisions(
         rows,
         decisions,
         packet=packet,
         ontology_sha256=ontology_sha256,
         now="2026-07-28T00:00:00Z",
+        parent_gold_id=current_gold_id,
+        base_gold_version=current_version,
     )
     assert result.counts["changed_items"] == 0
 
@@ -1354,18 +1790,86 @@ def test_real_packet_confirming_all_prechecked_heuristic_pairings_is_a_no_op(
     assert written["gold"].exists()
     assert written["manifest"].exists()
 
-    # Sanity number: forcing every pairing row to the alternative reading is *not* a no-op.
-    all_alternative = {row.decision_id: {"pairing": "alternative"} for row in pairing}
-    alt_result = fold_granular_decisions(
-        rows,
-        all_alternative,
-        packet=packet,
-        ontology_sha256=ontology_sha256,
-        now="2026-07-28T00:00:00Z",
-    )
-    assert alt_result.counts["changed_items"] > 0
     print(f"\n[dry-run] all-heuristic confirm changed_items = {result.counts['changed_items']}")
-    print(f"[dry-run] all-alternative sanity changed_items = {alt_result.counts['changed_items']}")
+
+
+def test_granular_fold_keeps_level_attribution_separate_from_gold_membership(
+    v2_gold: tuple[Any, list[Any]],
+) -> None:
+    build, rows = v2_gold
+    packet = v2_packet(build, rows)
+    row = packet.section("consistency")[0]
+    retained = str(row.gold[0]["iri"])
+    added = "https://folio.openlegalstandard.org/R-added"
+
+    result = fold_granular_decisions(
+        rows,
+        {
+            row.decision_id: {
+                "level_mappings": {"L1": [retained], "L2": [added]},
+                "mapping_options": {"unassigned": []},
+                "level_notes": {"L2": "This belongs to the second input level."},
+            }
+        },
+        packet=packet,
+        ontology_sha256=ONTOLOGY_SHA,
+        now="2026-08-10T00:00:00Z",
+    )
+
+    output = next(payload for payload in result.rows if payload["item_id"] == row.item_id)
+    assert output["gold_iris"] == sorted(str(entry["iri"]) for entry in row.gold)
+    assert result.counts["level_mapping_decisions"] == 1
+    assert result.notes[row.decision_id]["level_notes"] == {
+        "L2": "This belongs to the second input level."
+    }
+
+    rejected = fold_granular_decisions(
+        rows,
+        {
+            row.decision_id: {
+                "gold": {retained: "remove"},
+                "pipeline": {added: "elevate"},
+                "level_mappings": {"L1": [retained, added]},
+                "mapping_options": {"unassigned": []},
+            }
+        },
+        packet=packet,
+        ontology_sha256=ONTOLOGY_SHA,
+        now="2026-08-10T00:00:00Z",
+    )
+    rejected_output = next(
+        payload for payload in rejected.rows if payload["item_id"] == row.item_id
+    )
+    assert rejected_output["gold_iris"] == sorted(
+        [added, *(str(entry["iri"]) for entry in row.gold if entry["iri"] != retained)]
+    )
+
+    added_concept = "https://folio.openlegalstandard.org/R-human-added"
+    human_added = fold_granular_decisions(
+        rows,
+        {
+            row.decision_id: {
+                "gold": {added_concept: "keep"},
+                "added_mappings": [{"iri": added_concept, "label": "Human-added concept"}],
+                "level_mappings": {"L2": [added_concept]},
+            }
+        },
+        packet=packet,
+        ontology_sha256=ONTOLOGY_SHA,
+        now="2026-08-10T00:00:00Z",
+    )
+    human_output = next(
+        payload for payload in human_added.rows if payload["item_id"] == row.item_id
+    )
+    assert added_concept in human_output["gold_iris"]
+
+    with pytest.raises(ValueError, match="invalid canonical FOLIO IRI"):
+        fold_granular_decisions(
+            rows,
+            {row.decision_id: {"level_mappings": {"L1": ["javascript:bad"]}}},
+            packet=packet,
+            ontology_sha256=ONTOLOGY_SHA,
+        )
 
 
 def test_granular_fold_records_per_candidate_rejections(v2_gold: tuple[Any, list[Any]]) -> None:
@@ -1377,9 +1881,7 @@ def test_granular_fold_records_per_candidate_rejections(v2_gold: tuple[Any, list
         rows,
         predictions={target.item_id: ranked(("R-junk", "Office of Water", 90.0, 0.1))},
     )
-    suspect = next(
-        entry for entry in packet.section("suspect") if entry.item_id == target.item_id
-    )
+    suspect = next(entry for entry in packet.section("suspect") if entry.item_id == target.item_id)
     result = fold_granular_decisions(
         rows,
         {suspect.decision_id: {"pipeline": {"R-junk": "not_gold"}}},
@@ -1410,9 +1912,7 @@ def test_granular_fold_rejects_unknown_verdicts(v2_gold: tuple[Any, list[Any]]) 
             ontology_sha256=ONTOLOGY_SHA,
         )
     with pytest.raises(KeyError):
-        fold_granular_decisions(
-            rows, {"nope": {}}, packet=packet, ontology_sha256=ONTOLOGY_SHA
-        )
+        fold_granular_decisions(rows, {"nope": {}}, packet=packet, ontology_sha256=ONTOLOGY_SHA)
 
 
 def test_v2_packet_round_trips_through_json(v2_gold: tuple[Any, list[Any]], tmp_path: Path) -> None:
@@ -1424,7 +1924,11 @@ def test_v2_packet_round_trips_through_json(v2_gold: tuple[Any, list[Any]], tmp_
         rows,
         predictions={target.item_id: ranked(("R-pipe", "Enforcement Practice", 100.0, 0.9))},
     )
-    paths = write_packet_v2(packet, tmp_path)
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(packet_render, "DEFAULT_DATA_DIR", tmp_path / "eval" / "data")
+    out_dir = tmp_path / "eval" / "data" / "reports" / "packet"
+    paths = write_packet_v2(packet, out_dir, lane="firm")
+    monkeypatch.undo()
     reloaded = packet_v2_from_json(json.loads(paths["packet"].read_text(encoding="utf-8")))
     original = {row.decision_id: row for row in packet.rows}
     for row in reloaded.rows:
@@ -1435,6 +1939,131 @@ def test_v2_packet_round_trips_through_json(v2_gold: tuple[Any, list[Any]], tmp_
             entry["iri"] for entry in original[row.decision_id].pipeline
         ]
     assert reloaded.section("pairing")[0].extra["assignments"]
+
+
+def _sitting_packet(rows: list[PacketRow]) -> Packet:
+    return Packet(rows=tuple(rows), variants=(), replay={}, split=None, counts={}, overflow={}, meta={})
+
+
+def test_sittings_cap_at_25_and_put_all_badged_rows_first() -> None:
+    rows = [
+        PacketRow(
+            decision_id=f"row-{index}", section="suspect", item_id=f"item-{index}", firm="firm1",
+            stratum="s", stratum_id="sid", ancestor_path=(), surface_label=f"label-{index}",
+            input_text=f"label-{index}", slice_name="tune", reason_class="test",
+            suggested_action="review",
+            extra={
+                "precheck": {"choice": "", "needs_your_eye": index in {2, 31, 59}},
+                "item_ids": [f"dependent-{n}" for n in range(10)] if index == 7 else [],
+            },
+        )
+        for index in range(60)
+    ]
+    plan = assemble_sittings(_sitting_packet(rows))
+    assert [len(batch.packet.rows) for batch in plan.batches] == [25, 25, 10]
+    ordered = [row for batch in plan.batches for row in batch.manifest.rows]
+    assert [row.decision_id for row in ordered[:3]] == ["row-2", "row-31", "row-59"]
+    assert all(row.needs_your_eye for row in ordered[:3])
+    assert not any(row.needs_your_eye for row in ordered[3:])
+    assert ordered[3].decision_id == "row-7"
+
+
+def test_prechecked_rows_auto_fold_but_badged_rows_stay_in_sittings(
+    v2_gold: tuple[Any, list[Any]], tmp_path: Path
+) -> None:
+    build, rows = v2_gold
+    source_packet = v2_packet(build, rows)
+    base = source_packet.section("pairing")[0]
+    badged = replace(
+        base,
+        decision_id="pairing-badged",
+        surface_label="badged",
+        extra={"precheck": {"choice": "heuristic", "needs_your_eye": True}},
+    )
+    packet = replace(source_packet, rows=(base, badged))
+    plan = assemble_sittings(packet)
+    assert plan.auto_decisions == {base.decision_id: {"pairing": "heuristic"}}
+    result = fold_granular_decisions(
+        rows, plan.auto_decisions, packet=packet, ontology_sha256=ONTOLOGY_SHA
+    )
+    folded_path = write_folded_history(result, plan.auto_decisions, tmp_path)
+    folded = json.loads(folded_path.read_text(encoding="utf-8"))
+    rebuilt = replace(
+        packet,
+        rows=(replace(base, extra={**base.extra, "folded": folded[base.decision_id]}), badged),
+    )
+    remaining = assemble_sittings(rebuilt)
+    assert result.records[0].decision_id == base.decision_id
+    assert not remaining.auto_decisions
+    assert [row.decision_id for row in remaining.batches[0].packet.rows] == ["pairing-badged"]
+
+
+@pytest.mark.parametrize("mode", ["packet", "packet-v2", "sitting"])
+def test_packet_regeneration_requires_explicit_clusters_v2(
+    mode: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    with pytest.raises(SystemExit):
+        audit_main(["--mode", mode])
+    assert "clusters_v2" in capsys.readouterr().err
+
+
+def test_firm_sitting_refuses_output_outside_reports_tree(tmp_path: Path) -> None:
+    packet = _sitting_packet([])
+    manifest = SittingManifest(number=1, batch_size=25, total_batches=0, rows=())
+    with pytest.raises(ValueError, match="eval/data/reports"):
+        write_sitting_v2(packet, manifest, tmp_path, lane="firm", firm_sheet_empty=True)
+
+
+def test_firm_packet_refuses_output_outside_reports_tree(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="eval/data/reports"):
+        write_packet_v2(_sitting_packet([]), tmp_path, lane="firm")
+
+
+def test_sitting_writer_emits_round_trippable_manifest_and_v2_sheet(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(packet_render, "DEFAULT_DATA_DIR", tmp_path / "eval" / "data")
+    out_dir = tmp_path / "eval" / "data" / "reports" / "packet"
+    row = PacketRow(
+        decision_id="row-1", section="suspect", item_id="item-1", firm="firm1", stratum="s",
+        stratum_id="sid", ancestor_path=(), surface_label="one", input_text="one",
+        slice_name="tune", reason_class="test", suggested_action="review",
+    )
+    batch = assemble_sittings(_sitting_packet([row])).batches[0]
+    written = write_sitting_v2(
+        batch.packet, batch.manifest, out_dir, lane="firm", firm_sheet_empty=False
+    )
+    restored = SittingManifest.from_json(json.loads(written["manifest"].read_text(encoding="utf-8")))
+    assert restored == batch.manifest
+    assert written["manifest"].name == "sitting_1.json"
+    assert 'data-decision-id="row-1"' in written["sheet"].read_text(encoding="utf-8")
+
+
+def test_sitting_cli_requires_lane_and_accepts_synthetic_output(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    clusters = tmp_path / "clusters_v2.jsonl"
+    with pytest.raises(SystemExit):
+        audit_main(["--mode", "sitting", "--clusters", str(clusters)])
+    assert "--lane is required" in capsys.readouterr().err
+    assert validate_sitting_output(tmp_path, lane="synthetic") == tmp_path.resolve()
+
+
+def test_sitting_manifest_round_trips_and_batches_do_not_overlap() -> None:
+    rows = [
+        PacketRow(
+            decision_id=f"row-{index}", section="suspect", item_id=f"item-{index}", firm="firm1",
+            stratum="s", stratum_id="sid", ancestor_path=(), surface_label=str(index), input_text=str(index),
+            slice_name="tune", reason_class="test", suggested_action="review",
+        )
+        for index in range(30)
+    ]
+    plan = assemble_sittings(_sitting_packet(rows), batch_size=25)
+    restored = SittingManifest.from_json(plan.batches[0].manifest.to_json())
+    assert restored == plan.batches[0].manifest
+    first = {row.decision_id for row in restored.rows}
+    second = {row.decision_id for row in plan.batches[1].manifest.rows}
+    assert first.isdisjoint(second)
 
 
 def test_a_pipeline_candidate_that_is_already_gold_says_so(v2_gold: tuple[Any, list[Any]]) -> None:
@@ -1452,9 +2081,7 @@ def test_a_pipeline_candidate_that_is_already_gold_says_so(v2_gold: tuple[Any, l
         },
         prefill_rulings={"unsettled matters": "already ruled"},
     )
-    suspect = next(
-        entry for entry in packet.section("suspect") if entry.item_id == target.item_id
-    )
+    suspect = next(entry for entry in packet.section("suspect") if entry.item_id == target.item_id)
     assert suspect.pipeline[0]["already_gold"] is True
     assert suspect.pipeline[1]["already_gold"] is False
     # the carried-forward ruling rejects the junk tail only, never the concept gold already names
@@ -1593,9 +2220,7 @@ def test_a_row_whose_readings_both_break_the_rule_is_badged_and_left_unchecked(
     assert 'value="heuristic" checked' not in html
     assert 'value="alternative" checked' not in html
     # nothing pre-checked means an untouched row emits no decision at all: gold cannot move
-    result = fold_granular_decisions(
-        rows, {}, packet=packet, ontology_sha256=ONTOLOGY_SHA
-    )
+    result = fold_granular_decisions(rows, {}, packet=packet, ontology_sha256=ONTOLOGY_SHA)
     assert result.counts["changed_items"] == 0
 
 
@@ -1773,9 +2398,7 @@ def test_a_pairing_note_and_a_consistency_note_survive_the_fold(
         ontology_sha256=ONTOLOGY_SHA,
         now="2026-07-28T00:00:00Z",
     )
-    assert result.notes[pairing.decision_id] == {
-        "note": "the heading keeps the cascade-down block"
-    }
+    assert result.notes[pairing.decision_id] == {"note": "the heading keeps the cascade-down block"}
     assert result.notes[consistency.decision_id] == {
         "note": "same cell, two places, one answer",
         "gold_note": "both concepts stand",
@@ -1904,9 +2527,7 @@ def test_the_pairing_row_binds_to_its_own_firms_item_not_the_other_firms(
 
     # and therefore the Gold panel shows BOTH tags the pipe cell named
     shown = {
-        str(entry["iri"])
-        for context in pairing.extra["input_context"]
-        for entry in context["gold"]
+        str(entry["iri"]) for context in pairing.extra["input_context"] for entry in context["gold"]
     }
     assert shown == {W_MANUFACTURING, W_AGREEMENTS}
 
@@ -2128,7 +2749,11 @@ def test_gold_panel_sources_from_latest_gold_version_not_packet_snapshot(
     ]
 
     packet = v2_packet(
-        build, rows, current_gold_rows=current_rows, current_gold_version=3, current_gold_id="v3-test"
+        build,
+        rows,
+        current_gold_rows=current_rows,
+        current_gold_version=3,
+        current_gold_id="v3-test",
     )
     assert packet.meta["current_gold_version"] == 3
     assert packet.meta["current_gold_id"] == "v3-test"
@@ -2150,8 +2775,8 @@ def test_gold_panel_sources_from_latest_gold_version_not_packet_snapshot(
 
 
 def test_folded_row_prefill_equals_the_applied_state(v2_gold: tuple[Any, list[Any]]) -> None:
-    """A previously-folded row's radios and note box pre-fill to exactly what is live, not blank
-    and not the stale carried-forward ruling (Damien, 2026-07-28)."""
+    """A previously-folded row's verdict boxes and note box pre-fill to exactly what is live, not
+    blank and not the stale carried-forward ruling (Damien, 2026-07-28)."""
     build, rows = v2_gold
     target = _row_by_text(rows, "Enforcement matters")
     predictions = {target.item_id: ranked(("R-pipe", "Enforcement Practice", 100.0, 0.9))}
@@ -2178,8 +2803,8 @@ def test_folded_row_prefill_equals_the_applied_state(v2_gold: tuple[Any, list[An
     assert baseline["gold_note"] == "both concepts stand"
 
     html = render_sheet_v2(applied)
-    assert 'value="keep" checked' in html
-    assert 'value="not_gold" checked' in html
+    assert 'data-on="keep" data-off="remove" checked' in html
+    assert 'data-on="elevate" data-off="not_gold">' in html
     # the note is pre-filled INTO the textarea (round-trippable), not just echoed as read-only text
     assert '<textarea class="note gold-note" rows="2" name="gold-note|' in html
     assert (
@@ -2268,6 +2893,81 @@ def test_amendment_fold_appends_a_new_decision_without_rewriting_the_first(
     assert same_id[0].resulting_iris == ("R-pipe",)
     assert sorted(same_id[1].resulting_iris) == ["R-junk", "R-pipe"]
     assert same_id[1].gold_version == 3  # the base version THIS fold started from
+
+
+def test_a_stale_packet_can_fold_against_the_live_gold_version(
+    v2_gold: tuple[Any, list[Any]],
+) -> None:
+    """The CLI may display a stable packet while live gold has advanced since it was built."""
+    build, rows = v2_gold
+    packet = v2_packet(build, rows)
+    live_rows = [gold_row_v2_from_json({**row.payload, "gold_version": 3}) for row in rows]
+
+    result = fold_granular_decisions(
+        live_rows,
+        {},
+        packet=packet,
+        ontology_sha256=ONTOLOGY_SHA,
+        parent_gold_id="v3-live",
+        base_gold_version=3,
+    )
+
+    assert result.manifest["gold_version"] == 4
+    assert result.manifest["parent_gold_id"] == "v3-live"
+    assert all(row["gold_version"] == 4 for row in result.rows)
+
+
+def test_folded_history_carries_prior_reviews_and_records_notes(
+    v2_gold: tuple[Any, list[Any]], tmp_path: Path
+) -> None:
+    build, rows = v2_gold
+    packet = v2_packet(build, rows)
+    decision_id = packet.section("pairing")[0].decision_id
+    prior_path = tmp_path / "folded_v2.json"
+    prior_path.write_text(
+        json.dumps({"older": {"summary": "keep", "gold_version": 2, "gold_id": "v2"}}),
+        encoding="utf-8",
+    )
+    decisions = {decision_id: {"pairing": "heuristic", "note": "carry this forward"}}
+    result = fold_granular_decisions(
+        rows,
+        decisions,
+        packet=packet,
+        ontology_sha256=ONTOLOGY_SHA,
+        now="2026-07-28T00:00:00Z",
+    )
+
+    path = write_folded_history(result, decisions, tmp_path, prior_path=prior_path)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+
+    assert path.name == "folded_v3.json"
+    assert payload["older"]["gold_version"] == 2
+    assert payload[decision_id] == {
+        "summary": "heuristic",
+        "note": "carry this forward",
+        "gold_version": 3,
+        "gold_id": result.manifest["gold_id"],
+    }
+    assert latest_folded_path(tmp_path, at_most_version=2) == prior_path
+    assert latest_folded_path(tmp_path) == path
+
+    amended = write_folded_history(
+        result,
+        {decision_id: {"pairing": "alternative"}},
+        tmp_path,
+        prior_path=path,
+    )
+    amended_payload = json.loads(amended.read_text(encoding="utf-8"))
+    assert amended_payload[decision_id]["summary"] == "alternative"
+    assert amended_payload[decision_id]["note"] == "carry this forward"
+
+    (tmp_path / "folded_v4.json.tmp").write_text("{}", encoding="utf-8")
+    (tmp_path / "folded_vx.json").write_text("{}", encoding="utf-8")
+    future = tmp_path / "folded_v5.json"
+    future.write_text("{}", encoding="utf-8")
+    assert latest_folded_path(tmp_path, at_most_version=4) == path
+    assert latest_folded_path(tmp_path) == future
+    assert latest_folded_path(tmp_path / "missing") is None
 
 
 def test_pairing_amendment_diffs_against_the_applied_edit_not_the_original_heuristic(

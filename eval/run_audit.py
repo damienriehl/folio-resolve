@@ -9,6 +9,9 @@ manifest, suspects, resolution batch, and U4 clusters, running the pipeline over
 the eligible blank rows; it writes the gitignored packet under ``eval/data/reports/``.
 ``--mode fold --decisions <file>`` folds Damien's answers into the next gold version and appends
 the ID-keyed records to the committed ``eval/reports/gold_decisions.jsonl``.
+``--mode sitting --clusters <clusters_v2.jsonl> --lane firm`` auto-folds safe pairing pre-checks
+and renders the requested ranked, at-most-25-row sitting plus its JSON manifest. Packet and
+sitting regeneration always require an explicit clusters path so v1 cannot be selected silently.
 """
 
 from __future__ import annotations

@@ -69,6 +69,9 @@ from .splits import sha256_text
 #: KTD9: at most 50 detailed suspect rows per batch; the rest are reported as counts by reason.
 SUSPECT_ROW_CAP = 50
 
+#: Gate 1b sittings are deliberately short enough to finish on a phone.
+SITTING_BATCH_SIZE = 25
+
 #: KTD5: at most 25 new-gold candidates per check-in, drawn from term sets that already have gold.
 NEW_GOLD_CAP = 25
 
@@ -443,7 +446,8 @@ def containment_proposals(
                 (
                     needle
                     for needle in needles
-                    if needle != key and (_padded_contains(key, needle) or _padded_contains(needle, key))
+                    if needle != key
+                    and (_padded_contains(key, needle) or _padded_contains(needle, key))
                 ),
                 None,
             )
@@ -577,7 +581,8 @@ def append_decisions(
 ) -> Path:
     """Append to the committed decision log, refusing to write a firm surface string (KTD1)."""
     text = "".join(
-        json.dumps(record.to_json(), ensure_ascii=False, sort_keys=True) + "\n" for record in records
+        json.dumps(record.to_json(), ensure_ascii=False, sort_keys=True) + "\n"
+        for record in records
     )
     assert_no_surfaces(text, surfaces, what="gold_decisions.jsonl")
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -591,9 +596,7 @@ def rejection_key(item_id: str, iris: Iterable[str]) -> str:
     return item_id + "|" + "|".join(sorted(iris))
 
 
-def rejection_memory(
-    records: Iterable[DecisionRecord], *, ontology_sha256: str
-) -> frozenset[str]:
+def rejection_memory(records: Iterable[DecisionRecord], *, ontology_sha256: str) -> frozenset[str]:
     """Rejected (item, proposal) pairs still in force — a moved ontology releases them all."""
     return frozenset(
         rejection_key(record.item_id, record.proposed_iris)
@@ -712,6 +715,154 @@ class Packet:
         }
 
 
+@dataclass(frozen=True, slots=True)
+class SittingManifestRow:
+    """One ranked decision in a sitting's machine-readable manifest."""
+
+    decision_id: str
+    rank: int
+    needs_your_eye: bool
+    downstream_items: int
+
+    def to_json(self) -> dict[str, object]:
+        return {
+            "decision_id": self.decision_id,
+            "rank": self.rank,
+            "needs_your_eye": self.needs_your_eye,
+            "downstream_items": self.downstream_items,
+        }
+
+    @classmethod
+    def from_json(cls, payload: Mapping[str, object]) -> SittingManifestRow:
+        return cls(
+            decision_id=str(payload["decision_id"]),
+            rank=_as_int(payload.get("rank")),
+            needs_your_eye=bool(payload.get("needs_your_eye", False)),
+            downstream_items=_as_int(payload.get("downstream_items")),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class SittingManifest:
+    """Stable description of one batch, independent of its rendered HTML."""
+
+    number: int
+    batch_size: int
+    total_batches: int
+    rows: tuple[SittingManifestRow, ...]
+
+    def to_json(self) -> dict[str, object]:
+        return {
+            "number": self.number,
+            "batch_size": self.batch_size,
+            "total_batches": self.total_batches,
+            "rows": [row.to_json() for row in self.rows],
+        }
+
+    @classmethod
+    def from_json(cls, payload: Mapping[str, object]) -> SittingManifest:
+        return cls(
+            number=_as_int(payload.get("number")),
+            batch_size=_as_int(payload.get("batch_size")),
+            total_batches=_as_int(payload.get("total_batches")),
+            rows=tuple(
+                SittingManifestRow.from_json(entry)
+                for entry in _items(payload.get("rows"))
+                if isinstance(entry, Mapping)
+            ),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class SittingBatch:
+    """A renderable packet slice and the manifest describing its global ranks."""
+
+    packet: Packet
+    manifest: SittingManifest
+
+
+@dataclass(frozen=True, slots=True)
+class SittingPlan:
+    """All pending sittings plus safe defaults to send through the normal fold."""
+
+    batches: tuple[SittingBatch, ...]
+    auto_decisions: Mapping[str, Mapping[str, object]]
+
+
+def _needs_your_eye(row: PacketRow) -> bool:
+    precheck = row.extra.get("precheck")
+    return isinstance(precheck, Mapping) and bool(precheck.get("needs_your_eye"))
+
+
+def _downstream_item_count(row: PacketRow) -> int:
+    """Count distinct packet items/instances whose state is clarified by resolving ``row``."""
+    item_ids = set(_resolution_targets(row))
+    assignments = row.extra.get("assignments")
+    if isinstance(assignments, Mapping):
+        for reading in assignments.values():
+            for entry in _items(reading):
+                if isinstance(entry, Mapping) and entry.get("item_id"):
+                    item_ids.add(str(entry["item_id"]))
+    item_ids.update(str(value) for value in _items(row.extra.get("item_ids")) if value)
+    return max(len(item_ids), len(_items(row.extra.get("instances"))), row.label_frequency, 1)
+
+
+def assemble_sittings(packet: Packet, *, batch_size: int = SITTING_BATCH_SIZE) -> SittingPlan:
+    """Rank open rows, auto-resolving only non-badged pairing pre-checks through the fold.
+
+    Badged rows sort before every unbadged row. Within each tier, the row affecting the most
+    unique assignment/group items or workbook instances sorts first; ``decision_id`` breaks ties.
+    Rows already carrying ``extra.folded`` are closed. A badged row is never auto-resolved.
+    """
+    if batch_size <= 0:
+        raise ValueError("sitting batch_size must be positive")
+    pending: list[tuple[PacketRow, bool, int]] = []
+    auto_decisions: dict[str, Mapping[str, object]] = {}
+    for row in packet.rows:
+        if isinstance(row.extra.get("folded"), Mapping):
+            continue
+        precheck = row.extra.get("precheck")
+        badged = _needs_your_eye(row)
+        choice = str(precheck.get("choice", "")) if isinstance(precheck, Mapping) else ""
+        if row.section == "pairing" and choice in PAIRING_CHOICES and not badged:
+            auto_decisions[row.decision_id] = {"pairing": choice}
+            continue
+        pending.append((row, badged, _downstream_item_count(row)))
+    pending.sort(
+        key=lambda ranked: (
+            not ranked[1],
+            -ranked[2],
+            ranked[0].decision_id,
+        )
+    )
+    total_batches = (len(pending) + batch_size - 1) // batch_size
+    batches: list[SittingBatch] = []
+    for offset in range(0, len(pending), batch_size):
+        number = len(batches) + 1
+        selected = pending[offset : offset + batch_size]
+        subset = replace(
+            packet,
+            rows=tuple(row for row, _, _ in selected),
+            meta={**packet.meta, "sitting_number": number, "sitting_total": total_batches},
+        )
+        manifest = SittingManifest(
+            number=number,
+            batch_size=batch_size,
+            total_batches=total_batches,
+            rows=tuple(
+                SittingManifestRow(
+                    decision_id=row.decision_id,
+                    rank=offset + index + 1,
+                    needs_your_eye=needs_eye,
+                    downstream_items=downstream_items,
+                )
+                for index, (row, needs_eye, downstream_items) in enumerate(selected)
+            ),
+        )
+        batches.append(SittingBatch(packet=subset, manifest=manifest))
+    return SittingPlan(batches=tuple(batches), auto_decisions=auto_decisions)
+
+
 def _gold_evidence(
     row: GoldRow | None,
     iris: Sequence[str],
@@ -742,7 +893,8 @@ def _gold_evidence(
 def _pipeline_evidence(
     candidates: Sequence[RankedCandidate],
     definitions: Mapping[str, str],
-    *, shown: int = PIPELINE_CANDIDATES_SHOWN,
+    *,
+    shown: int = PIPELINE_CANDIDATES_SHOWN,
 ) -> tuple[Mapping[str, object], ...]:
     """Top pipeline candidates with labels + scores; the leader also carries its definition."""
     out: list[Mapping[str, object]] = []
@@ -1194,9 +1346,7 @@ def gold_row_v2_from_json(payload: Mapping[str, object]) -> GoldRowV2:
     """Read one ``gold_v2.jsonl`` line. Shares :func:`gold_row_from_json`'s value parsing."""
     base = gold_row_from_json(payload)
     instances_raw = payload.get("instances") or []
-    instances = tuple(
-        dict(entry) for entry in _items(instances_raw) if isinstance(entry, Mapping)
-    )
+    instances = tuple(dict(entry) for entry in _items(instances_raw) if isinstance(entry, Mapping))
     levels_raw = payload.get("levels") or []
     return GoldRowV2(
         item_id=base.item_id,
@@ -1247,6 +1397,7 @@ def _gold_block(
             {
                 "iri": iri,
                 "label": value.raw if value else label_lookup.get(iri, ""),
+                "origin": value.origin if value else "",
                 "column": value.column if value else "",
                 "branch": value.branch if value else "",
                 "definition": definition_snippet(definitions.get(iri)),
@@ -1334,6 +1485,51 @@ def _instances_json(row: GoldRowV2) -> list[Mapping[str, object]]:
         }
         for instance in row.instances
     ]
+
+
+_LEVEL_MAPPING_GENERIC_WORDS = frozenset(
+    {"and", "of", "the", "law", "laws", "practice", "service", "services", "industry", "related"}
+)
+
+
+def _mapping_words(value: object) -> frozenset[str]:
+    return frozenset(re.findall(r"[a-z0-9]+", str(value).lower())) - _LEVEL_MAPPING_GENERIC_WORDS
+
+
+def _packet_input_levels(row: PacketRow) -> tuple[str, ...]:
+    parts = tuple(part.strip() for part in row.input_text.split(">") if part.strip())
+    return parts or tuple(part for part in (*row.ancestor_path, row.surface_label) if part)
+
+
+def _atomized_level_mappings(row: PacketRow) -> dict[str, list[str]]:
+    """Derive the pairing heuristic once, as packet data every renderer/fold can inspect."""
+    levels = _packet_input_levels(row)
+    if not levels:
+        return {}
+    level_words = tuple(_mapping_words(label) for label in levels)
+    entries_by_iri: dict[str, Mapping[str, object]] = {}
+    for entry in (*row.gold, *row.pipeline):
+        iri = str(entry.get("iri", ""))
+        if iri:
+            entries_by_iri.setdefault(iri, entry)  # gold precedes pipeline when an IRI repeats
+    mappings: dict[str, list[str]] = {}
+    for iri, entry in entries_by_iri.items():
+        column = str(entry.get("column", ""))
+        origin = str(entry.get("origin", "")).lower()
+        if column and "cascade down" not in column.lower():
+            index = 1
+        elif column:
+            concept_words = _mapping_words(entry.get("label", ""))
+            scores = [len(concept_words & words) for words in level_words]
+            index = scores.index(max(scores)) + 1 if any(scores) else 1
+        elif origin == "level1":
+            index = 1
+        elif origin == "level2":
+            index = min(2, len(levels))
+        else:
+            index = len(levels)
+        mappings.setdefault(f"L{index}", []).append(iri)
+    return mappings
 
 
 def _prefill_for(
@@ -1431,14 +1627,10 @@ def sheet_source(firm: str, sheet_id: str, rows: Sequence[Sequence[object]]) -> 
         if any(pattern.search(name.strip()) for pattern in _GRID_COLUMN_PATTERNS)
     ]
     used = [
-        index
-        for index in wanted
-        if any(index < len(row) and row[index].strip() for row in body)
+        index for index in wanted if any(index < len(row) and row[index].strip() for row in body)
     ]
     columns = tuple(used or wanted or range(len(header)))
-    return SheetSource(
-        firm=firm, sheet_id=sheet_id, headers=header, rows=body, columns=columns
-    )
+    return SheetSource(firm=firm, sheet_id=sheet_id, headers=header, rows=body, columns=columns)
 
 
 def load_sheet_sources(
@@ -1492,7 +1684,8 @@ def locate_source_rows(
         matches = [
             source
             for source in firm_sources
-            if (cells := source.cells(number)) is not None and (not keys or _cell_keys(cells) & keys)
+            if (cells := source.cells(number)) is not None
+            and (not keys or _cell_keys(cells) & keys)
         ]
         if not matches:
             unlocated.append(number)
@@ -1531,9 +1724,7 @@ PAIRING_VIOLATION_EMPTY = "input_maps_to_nothing"
 PAIRING_VIOLATION_DUPLICATE = "outputs_duplicate"
 
 
-def _pairing_blocks(
-    raw: object, value_iris: Mapping[str, str]
-) -> list[dict[str, object]]:
+def _pairing_blocks(raw: object, value_iris: Mapping[str, str]) -> list[dict[str, object]]:
     """One output *cell* per block, its tags carried individually with the IRI each resolved to.
 
     A pipe cell (``A | B``) is one block holding two tags, and the sheet has to say so: rendering
@@ -1552,9 +1743,7 @@ def _pairing_blocks(
                 "column": str(block.get("column", "")),
                 "values": values,
                 "from_pipe": bool(flagged) if flagged is not None else len(values) > 1,
-                "tags": [
-                    {"label": value, "iri": value_iris.get(value, "")} for value in values
-                ],
+                "tags": [{"label": value, "iri": value_iris.get(value, "")} for value in values],
             }
         )
     return out
@@ -1675,6 +1864,10 @@ def _applied_baseline(row: PacketRow, record: Mapping[str, object]) -> dict[str,
         "note": str(record.get("note", "") or ""),
         "gold_note": str(record.get("gold_note", "") or ""),
         "pipeline_note": str(record.get("pipeline_note", "") or ""),
+        "level_mappings": record.get("level_mappings") or {},
+        "level_notes": record.get("level_notes") or {},
+        "mapping_options": record.get("mapping_options") or {},
+        "added_mappings": record.get("added_mappings") or [],
     }
 
 
@@ -1786,7 +1979,9 @@ def build_packet_v2(
     overflow: dict[str, int] = {}
     rows: list[PacketRow] = []
 
-    def source_grid(firm: str, row_numbers: Sequence[int], needles: Sequence[str]) -> dict[str, object]:
+    def source_grid(
+        firm: str, row_numbers: Sequence[int], needles: Sequence[str]
+    ) -> dict[str, object]:
         return locate_source_rows(
             sheet_sources, firm=firm, row_numbers=row_numbers, needles=needles
         )
@@ -1795,9 +1990,7 @@ def build_packet_v2(
         """The current-gold reference block for whichever row is passed (base or current)."""
         if row is None:
             return []
-        return [
-            dict(entry) for entry in _gold_block(row, row.gold_iris, definitions, label_lookup)
-        ]
+        return [dict(entry) for entry in _gold_block(row, row.gold_iris, definitions, label_lookup)]
 
     def pipeline_reference(row: GoldRowV2 | None, item_id: str) -> dict[str, object]:
         ranked = list(predictions.get(item_id, ()))
@@ -1810,17 +2003,21 @@ def build_packet_v2(
 
     # -- [A] shared-row pairing adjudications -------------------------------------------
     for entry in sorted(
-        pairing_rows, key=lambda record: (str(record.get("stratum", "")), _as_int(record.get("row")))
+        pairing_rows,
+        key=lambda record: (str(record.get("stratum", "")), _as_int(record.get("row"))),
     ):
-        inputs = [dict(value) for value in _items(entry.get("inputs")) if isinstance(value, Mapping)]
-        heuristic = [[str(text) for text in _items(block)] for block in _items(entry.get("heuristic"))]
+        inputs = [
+            dict(value) for value in _items(entry.get("inputs")) if isinstance(value, Mapping)
+        ]
+        heuristic = [
+            [str(text) for text in _items(block)] for block in _items(entry.get("heuristic"))
+        ]
         alternative = [
             [str(text) for text in _items(block)] for block in _items(entry.get("alternative"))
         ]
         pairing_firm = str(entry.get("firm", ""))
         targets = [
-            by_input.get((pairing_firm, label_key(str(value.get("text", "")))))
-            for value in inputs
+            by_input.get((pairing_firm, label_key(str(value.get("text", ""))))) for value in inputs
         ]
         counts["pairing_inputs_unmatched"] += sum(1 for target in targets if target is None)
         assignments = {
@@ -2137,7 +2334,14 @@ def build_packet_v2(
         overflow[spill.reason_class] = overflow.get(spill.reason_class, 0) + 1
     counts["suspects_shown"] = len(shown)
     # Rendered in taxonomy order, chosen by confidence x instance count.
-    shown.sort(key=lambda entry: (entry.stratum, entry.ancestor_path, entry.extra.get("level", 0), entry.input_text))
+    shown.sort(
+        key=lambda entry: (
+            entry.stratum,
+            entry.ancestor_path,
+            entry.extra.get("level", 0),
+            entry.input_text,
+        )
+    )
     rows.extend(shown)
 
     # -- [D] the R2 resolution batch ----------------------------------------------------
@@ -2357,6 +2561,21 @@ def build_packet_v2(
             )
         )
 
+    # Atomized attribution is packet data, not renderer policy: every output is assigned to the
+    # input level the pairing heuristic or current leaf query produced.
+    rows = [
+        replace(
+            packet_row,
+            extra={
+                **packet_row.extra,
+                "system_level_mappings": _atomized_level_mappings(packet_row),
+            },
+        )
+        if packet_row.section != "pairing"
+        else packet_row
+        for packet_row in rows
+    ]
+
     # -- decisions already folded into a later gold version render pre-filled, not blank --------
     # Every input on these rows stays enabled (Damien, 2026-07-28: "let me add notes and change
     # items even where you think things are settled") -- ``folded`` marks the row as decided and
@@ -2551,13 +2770,15 @@ class FoldResult:
     records: tuple[DecisionRecord, ...]
     counts: Mapping[str, int]
     gold_text: str
-    notes: Mapping[str, Mapping[str, str]] = field(default_factory=dict)
+    notes: Mapping[str, Mapping[str, object]] = field(default_factory=dict)
 
 
 def _resolution_targets(row: PacketRow) -> tuple[str, ...]:
     """Every item whose unresolved cell carried this label (the batch groups by label, not item)."""
     targets = _items(row.extra.get("item_ids"))
-    return tuple(str(item) for item in targets) if targets else ((row.item_id,) if row.item_id else ())
+    return (
+        tuple(str(item) for item in targets) if targets else ((row.item_id,) if row.item_id else ())
+    )
 
 
 def _decision_iris(decision: Mapping[str, object], row: PacketRow) -> tuple[str, ...]:
@@ -2712,9 +2933,9 @@ def fold_decisions(
 DECISION_NOTE_KEYS = ("note", "gold_note", "pipeline_note")
 
 
-def _notes(decision: Mapping[str, object], decision_id: str) -> dict[str, str]:
+def _notes(decision: Mapping[str, object], decision_id: str) -> dict[str, object]:
     """The note fields on one decision. Anything non-string is a malformed decisions file."""
-    out: dict[str, str] = {}
+    out: dict[str, object] = {}
     for key in DECISION_NOTE_KEYS:
         raw = decision.get(key)
         if raw is None:
@@ -2726,7 +2947,69 @@ def _notes(decision: Mapping[str, object], decision_id: str) -> dict[str, str]:
         text = raw.strip()
         if text:
             out[key] = text
+    level_notes = decision.get("level_notes")
+    if level_notes is not None:
+        if not isinstance(level_notes, Mapping):
+            raise ValueError(f"decision {decision_id}: level_notes must be an object")
+        cleaned: dict[str, str] = {}
+        for level, note in level_notes.items():
+            if not isinstance(note, str):
+                raise ValueError(f"decision {decision_id}: level note {level} must be a string")
+            if note.strip():
+                cleaned[str(level)] = note.strip()
+        if cleaned:
+            out["level_notes"] = cleaned
     return out
+
+
+def _level_mapping_result(decision: Mapping[str, object], decision_id: str) -> set[str] | None:
+    """Aggregate per-level assignments without discarding mappings left explicitly unassigned."""
+    mappings = decision.get("level_mappings")
+    options = decision.get("mapping_options")
+    if mappings is None and options is None:
+        return None
+    if mappings is not None and not isinstance(mappings, Mapping):
+        raise ValueError(f"decision {decision_id}: level_mappings must be an object")
+    if options is not None and not isinstance(options, Mapping):
+        raise ValueError(f"decision {decision_id}: mapping_options must be an object")
+    result: set[str] = set()
+
+    def mapping_iri(raw: object) -> str:
+        iri = str(raw)
+        if not re.fullmatch(r"https://folio\.openlegalstandard\.org/[A-Za-z0-9_-]+", iri):
+            raise ValueError(f"decision {decision_id}: invalid canonical FOLIO IRI {iri!r}")
+        return iri
+
+    for iris in (mappings or {}).values():
+        if not isinstance(iris, (list, tuple)):
+            raise ValueError(f"decision {decision_id}: each level mapping must be a list of IRIs")
+        result.update(mapping_iri(iri) for iri in iris)
+    unassigned = (options or {}).get("unassigned", [])
+    if not isinstance(unassigned, (list, tuple)):
+        raise ValueError(f"decision {decision_id}: mapping_options.unassigned must be a list")
+    result.update(mapping_iri(iri) for iri in unassigned)
+    return result
+
+
+def _added_mapping_iris(decision: Mapping[str, object], decision_id: str) -> set[str]:
+    """Validate concepts added in the browser and return their canonical FOLIO IRIs."""
+    raw = decision.get("added_mappings")
+    if raw is None:
+        return set()
+    if not isinstance(raw, (list, tuple)):
+        raise ValueError(f"decision {decision_id}: added_mappings must be a list")
+    iris: set[str] = set()
+    for mapping in raw:
+        if not isinstance(mapping, Mapping):
+            raise ValueError(f"decision {decision_id}: each added mapping must be an object")
+        iri = str(mapping.get("iri", ""))
+        if not re.fullmatch(r"https://folio\.openlegalstandard\.org/[A-Za-z0-9_-]+", iri):
+            raise ValueError(f"decision {decision_id}: invalid added FOLIO IRI {iri!r}")
+        label = mapping.get("label")
+        if not isinstance(label, str) or not label.strip():
+            raise ValueError(f"decision {decision_id}: added mapping {iri!r} needs a label")
+        iris.add(iri)
+    return iris
 
 
 def _verdicts(decision: Mapping[str, object], key: str, allowed: frozenset[str]) -> dict[str, str]:
@@ -2742,7 +3025,9 @@ def _verdicts(decision: Mapping[str, object], key: str, allowed: frozenset[str])
     return out
 
 
-def _pairing_reading_by_item(assignments: Mapping[str, object], reading: str) -> dict[str, set[str]]:
+def _pairing_reading_by_item(
+    assignments: Mapping[str, object], reading: str
+) -> dict[str, set[str]]:
     """One pairing row's per-item IRI contribution under one reading (heuristic|alternative).
 
     A single pairing packet row can name more than one target item id (its input cells); a single
@@ -2793,9 +3078,7 @@ def _pairing_edits(
                 f"this row's input cells ({sorted(known)})"
             )
         if not isinstance(iris, (list, tuple)):
-            raise ValueError(
-                f"decision {decision_id}: edited_iris[{key}] must be a list of IRIs"
-            )
+            raise ValueError(f"decision {decision_id}: edited_iris[{key}] must be a list of IRIs")
         out[key] = {str(iri) for iri in iris}
     return out
 
@@ -2808,6 +3091,7 @@ def fold_granular_decisions(
     ontology_sha256: str,
     now: str | None = None,
     parent_gold_id: str | None = None,
+    base_gold_version: int | None = None,
 ) -> FoldResult:
     """Apply the v2 sheet's per-concept verdicts and emit gold v3 + manifest + decision records.
 
@@ -2820,7 +3104,11 @@ def fold_granular_decisions(
     stamp = now or _now()
     rows_by_decision = {row.decision_id: row for row in packet.rows}
     parent = parent_gold_id or str(packet.meta.get("gold_id", ""))
-    base_version = _as_version(packet.meta.get("gold_version", 2))
+    base_version = (
+        _as_version(base_gold_version)
+        if base_gold_version is not None
+        else _as_version(packet.meta.get("gold_version", 2))
+    )
     next_version = base_version + 1
 
     replacements: dict[str, tuple[tuple[str, ...], str]] = {}
@@ -2841,8 +3129,9 @@ def fold_granular_decisions(
         "pairing_alternative": 0,
         "pairing_gold_edited": 0,
         "notes_recorded": 0,
+        "level_mapping_decisions": 0,
     }
-    notes: dict[str, Mapping[str, str]] = {}
+    notes: dict[str, Mapping[str, object]] = {}
 
     for decision_id in sorted(decisions):
         decision = decisions[decision_id]
@@ -2860,6 +3149,15 @@ def fold_granular_decisions(
         counts["pipeline_elevated"] += sum(1 for v in pipeline_verdicts.values() if v == "elevate")
         counts["pipeline_rejected"] += sum(1 for v in pipeline_verdicts.values() if v == "not_gold")
         elevated = {iri for iri, verdict in pipeline_verdicts.items() if verdict == "elevate"}
+        added_iris = _added_mapping_iris(decision, decision_id)
+        human_added = {iri for iri in added_iris if gold_verdicts.get(iri) == "keep"}
+        level_mapping_result = _level_mapping_result(decision, decision_id)
+        if level_mapping_result is not None:
+            counts["level_mapping_decisions"] += 1
+            rejected_mappings = {
+                iri for iri, verdict in gold_verdicts.items() if verdict == "remove"
+            } | {iri for iri, verdict in pipeline_verdicts.items() if verdict == "not_gold"}
+            level_mapping_result.difference_update(rejected_mappings)
         offered = tuple(sorted(str(entry["iri"]) for entry in row.pipeline))
         resulting: tuple[str, ...] = ()
         action = "accept"
@@ -2931,7 +3229,7 @@ def fold_granular_decisions(
         else:
             current = {str(entry["iri"]) for entry in row.gold}
             kept = {iri for iri in current if gold_verdicts.get(iri, "keep") == "keep"}
-            resulting = tuple(sorted(kept | elevated))
+            resulting = tuple(sorted(kept | elevated | human_added))
             if set(resulting) != current:
                 action = "edit"
                 provenance = (
@@ -2956,7 +3254,9 @@ def fold_granular_decisions(
             )
         )
         # Per-candidate rejection memory: a concept graded 'not gold' never resurfaces unchanged.
-        for iri in sorted(iri for iri, verdict in pipeline_verdicts.items() if verdict == "not_gold"):
+        for iri in sorted(
+            iri for iri, verdict in pipeline_verdicts.items() if verdict == "not_gold"
+        ):
             records.append(
                 DecisionRecord(
                     decision_id=f"{decision_id}#not_gold:{iri.rsplit('/', 1)[-1]}",
@@ -3047,6 +3347,61 @@ def write_decision_notes(result: FoldResult, out_dir: Path) -> Path | None:
             sort_keys=True,
         )
         + "\n",
+    )
+    return path
+
+
+def latest_folded_path(out_dir: Path, *, at_most_version: int | None = None) -> Path | None:
+    """Return the newest ``folded_vN.json`` history, optionally capped at a gold version."""
+    best: tuple[int, Path] | None = None
+    if out_dir.exists():
+        for candidate in out_dir.glob("folded_v*.json"):
+            match = re.fullmatch(r"folded_v(\d+)\.json", candidate.name)
+            if not match:
+                continue
+            version = int(match.group(1))
+            if at_most_version is not None and version > at_most_version:
+                continue
+            if best is None or version > best[0]:
+                best = (version, candidate)
+    return best[1] if best else None
+
+
+def write_folded_history(
+    result: FoldResult,
+    decisions: Mapping[str, Mapping[str, object]],
+    out_dir: Path,
+    *,
+    prior_path: Path | None = None,
+) -> Path:
+    """Carry reviewed-row history into the next packet without requiring a manual sidecar."""
+    prior: dict[str, object] = {}
+    if prior_path is not None and prior_path.exists():
+        loaded = json.loads(prior_path.read_text(encoding="utf-8"))
+        if isinstance(loaded, Mapping):
+            prior = {str(key): value for key, value in loaded.items()}
+    version = int(result.manifest["gold_version"])  # type: ignore[call-overload]
+    gold_id = str(result.manifest["gold_id"])
+    for decision_id, decision in decisions.items():
+        choice = str(decision.get("pairing") or decision.get("action") or "reviewed")
+        existing = prior.get(str(decision_id))
+        entry = dict(existing) if isinstance(existing, Mapping) else {}
+        entry.update({"summary": choice, "gold_version": version, "gold_id": gold_id})
+        for key in DECISION_NOTE_KEYS:
+            if key in decision:
+                value = str(decision.get(key, "") or "")
+                if value:
+                    entry[key] = value
+                else:
+                    entry.pop(key, None)
+        for key in ("level_notes", "level_mappings", "mapping_options", "added_mappings"):
+            if key in decision:
+                entry[key] = decision[key]
+        prior[str(decision_id)] = entry
+    path = out_dir / f"folded_v{version}.json"
+    _atomic_write_text(
+        path,
+        json.dumps(prior, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
     )
     return path
 
@@ -3165,7 +3520,8 @@ def _main_v2(args: Any, parser: Any) -> int:  # pragma: no cover - I/O orchestra
 
     from .answer_rule import load_config, rank_candidates
     from .clusters import collect_raw_candidates, surface_strings
-    from .packet_render import write_packet_v2
+    from .leakcheck import _read_salt, load_manifest
+    from .packet_render import validate_sitting_output, write_packet_v2, write_sitting_v2
     from .resolve_labels import index_from_folio
     from .score import PipelineAdapter, build_folio_provider, build_pipeline
     from .selftest import OntologyPinError, assert_ontology_pin
@@ -3182,16 +3538,23 @@ def _main_v2(args: Any, parser: Any) -> int:  # pragma: no cover - I/O orchestra
         pin = assert_ontology_pin("")
     rows = load_gold_rows_v2(args.gold)
     out_dir = Path(args.out)
+    validate_sitting_output(out_dir, lane=args.lane)
+    leak_manifest = load_manifest(args.leak_manifest) if args.leak_manifest else None
+    salt = _read_salt(args.salt_file) if args.salt_file else None
     packet_path = out_dir / "packet.json"
 
-    current_gold_path = Path(args.current_gold) if args.current_gold else latest_gold_path(Path(args.gold))
+    current_gold_path = (
+        Path(args.current_gold) if args.current_gold else latest_gold_path(Path(args.gold))
+    )
     if current_gold_path == Path(args.gold):
         current_rows = rows
         current_gold_version = gold_set.gold_version
         current_gold_id = gold_set.gold_id
     else:
         current_rows = load_gold_rows_v2(current_gold_path)
-        current_manifest_path = current_gold_path.parent / (current_gold_path.stem + ".manifest.json")
+        current_manifest_path = current_gold_path.parent / (
+            current_gold_path.stem + ".manifest.json"
+        )
         current_manifest = (
             json.loads(current_manifest_path.read_text(encoding="utf-8"))
             if current_manifest_path.exists()
@@ -3215,15 +3578,27 @@ def _main_v2(args: Any, parser: Any) -> int:  # pragma: no cover - I/O orchestra
         packet = packet_v2_from_json(json.loads(packet_path.read_text(encoding="utf-8")))
         decisions = json.loads(Path(args.decisions).read_text(encoding="utf-8"))
         result = fold_granular_decisions(
-            rows, decisions, packet=packet, ontology_sha256=pin.sha256
+            current_rows,
+            decisions,
+            packet=packet,
+            ontology_sha256=pin.sha256,
+            parent_gold_id=current_gold_id,
+            base_gold_version=current_gold_version,
         )
         written = write_gold_version(result, Path(args.gold_out))
         append_decisions(
             Path(args.decision_log), result.records, surfaces=surface_strings(gold_set)
         )
         notes_path = write_decision_notes(result, Path(args.gold_out))
+        prior_folded = args.folded or latest_folded_path(
+            Path(args.gold_out), at_most_version=current_gold_version
+        )
+        folded_path = write_folded_history(
+            result, decisions, Path(args.gold_out), prior_path=prior_folded
+        )
         print(json.dumps(dict(result.manifest), indent=2, sort_keys=True))
         print(f"wrote {written['gold']} and {written['manifest']}")
+        print(f"wrote folded review history to {folded_path}")
         if notes_path is not None:
             print(f"wrote {len(result.notes)} decision note(s) to {notes_path}")
         return 0
@@ -3276,9 +3651,7 @@ def _main_v2(args: Any, parser: Any) -> int:  # pragma: no cover - I/O orchestra
     cache_path = out_dir / "predictions.json"
     # Top the cache up rather than replacing it: adding a panel must not cost a 3,000-item re-run.
     cache = {} if args.refresh_predictions else _read_prediction_cache(cache_path)
-    fresh = [
-        item_id for item_id in needed if item_id not in cache and item_id in gold_records
-    ]
+    fresh = [item_id for item_id in needed if item_id not in cache and item_id in gold_records]
     if fresh:
         print(
             f"matching {len(fresh)} items not in the cache ({len(cache)} replayed)…",
@@ -3296,8 +3669,7 @@ def _main_v2(args: Any, parser: Any) -> int:  # pragma: no cover - I/O orchestra
     else:
         print(f"replaying {len(cache)} cached prediction lists from {cache_path}", file=sys.stderr)
     predictions = {
-        item_id: tuple(rank_candidates(candidates, config))
-        for item_id, candidates in cache.items()
+        item_id: tuple(rank_candidates(candidates, config)) for item_id, candidates in cache.items()
     }
 
     wanted: set[str] = set()
@@ -3338,11 +3710,15 @@ def _main_v2(args: Any, parser: Any) -> int:  # pragma: no cover - I/O orchestra
         print("indexing FOLIO branches for the improvement pilot…", file=sys.stderr)
         branch_index = branch_index_from_folio(folio)
         # A cell already queued in sections A-E is not asked a second time in F.
-        asked: set[str] = pairing_targets | {
-            str(entry.get("item_id", ""))
-            for batch in (inconsistent, suspects, resolution_batch)
-            for entry in batch
-        } | {str(entry["item_id"]) for entry in _score_driven_suspects_v2(cluster_rows, by_id)}
+        asked: set[str] = (
+            pairing_targets
+            | {
+                str(entry.get("item_id", ""))
+                for batch in (inconsistent, suspects, resolution_batch)
+                for entry in batch
+            }
+            | {str(entry["item_id"]) for entry in _score_driven_suspects_v2(cluster_rows, by_id)}
+        )
         candidates: list[tuple[int, str, str, list[dict[str, object]]]] = []
         for row in rows:
             if row.firm != "firm1" or row.stratum_id not in wanted_strata:
@@ -3369,9 +3745,7 @@ def _main_v2(args: Any, parser: Any) -> int:  # pragma: no cover - I/O orchestra
         chosen.sort(key=lambda entry: (entry[1], entry[2]))
         by_text_item = {(row.stratum, row.input_text): row.item_id for row in rows}
         for _, stratum, text, payloads in chosen:
-            improvements.append(
-                {"item_id": by_text_item[(stratum, text)], "proposals": payloads}
-            )
+            improvements.append({"item_id": by_text_item[(stratum, text)], "proposals": payloads})
             for payload in payloads:
                 iri = str(payload["iri"])
                 concept = provider.get_concept(iri)
@@ -3379,8 +3753,12 @@ def _main_v2(args: Any, parser: Any) -> int:  # pragma: no cover - I/O orchestra
                     definitions.setdefault(iri, concept.definition)
         print(f"improvement pilot: {len(improvements)} cells", file=sys.stderr)
 
+    review_history_path = args.folded or latest_folded_path(
+        Path(args.gold).parent, at_most_version=current_gold_version
+    )
     folded_decisions = (
-        json.loads(args.folded.read_text(encoding="utf-8")) if args.folded and args.folded.exists()
+        json.loads(review_history_path.read_text(encoding="utf-8"))
+        if review_history_path and review_history_path.exists()
         else {}
     )
 
@@ -3408,53 +3786,118 @@ def _main_v2(args: Any, parser: Any) -> int:  # pragma: no cover - I/O orchestra
         ),
     }
 
-    packet = build_packet_v2(
-        gold_rows=rows,
-        current_gold_rows=current_rows,
-        current_gold_version=current_gold_version,
-        current_gold_id=current_gold_id,
-        pairing_rows=pairing_rows,
-        inconsistent_groups=inconsistent,
-        suspects=suspects,
-        resolution_batch=resolution_batch,
-        cluster_rows=cluster_rows,
-        predictions=predictions,
-        definitions=definitions,
-        label_proposals=proposals,
-        value_iris=value_iris,
-        frozen_ids=split_manifest.slices[FROZEN_SLICE],
-        rejected=rejection_memory(
-            load_decisions(Path(args.decision_log)), ontology_sha256=pin.sha256
-        ),
-        eligible_strata=eligible,
-        slice_by_item=slice_by_item,
-        split=split_facts,
-        metrics=metrics,
-        ontology_sha256=pin.sha256,
-        gold_version=gold_set.gold_version,
-        gold_id=gold_set.gold_id,
-        parent_gold_id=str(gold_set.manifest.get("parent_gold_id", "")),
-        prefill_rulings=load_prefill_rulings(args.prefill),
-        sheet_sources=load_sheet_sources(
-            data_dir=args.data_dir, manifest_path=args.intake_manifest
-        ),
-        answer_config=config,
-        pairing_note=load_pairing_note(args.pairing_note),
-        harness_config_sha256=config.content_sha256(),
-        suspect_cap=args.suspect_cap,
-        new_gold_cap=args.new_gold_cap,
-        improvements=improvements,
-        improvement_cap=args.improvement_cap,
-        folded_decisions=folded_decisions,
+    rejected = rejection_memory(
+        load_decisions(Path(args.decision_log)), ontology_sha256=pin.sha256
     )
-    written = write_packet_v2(packet, out_dir)
+    prefill_rulings = load_prefill_rulings(args.prefill)
+    sheet_sources = load_sheet_sources(data_dir=args.data_dir, manifest_path=args.intake_manifest)
+    pairing_note = load_pairing_note(args.pairing_note)
+
+    def make_packet(
+        live_rows: Sequence[GoldRowV2],
+        live_version: int,
+        live_id: str,
+        review_history: Mapping[str, Mapping[str, object]],
+    ) -> Packet:
+        return build_packet_v2(
+            gold_rows=rows,
+            current_gold_rows=live_rows,
+            current_gold_version=live_version,
+            current_gold_id=live_id,
+            pairing_rows=pairing_rows,
+            inconsistent_groups=inconsistent,
+            suspects=suspects,
+            resolution_batch=resolution_batch,
+            cluster_rows=cluster_rows,
+            predictions=predictions,
+            definitions=definitions,
+            label_proposals=proposals,
+            value_iris=value_iris,
+            frozen_ids=split_manifest.slices[FROZEN_SLICE],
+            rejected=rejected,
+            eligible_strata=eligible,
+            slice_by_item=slice_by_item,
+            split=split_facts,
+            metrics=metrics,
+            ontology_sha256=pin.sha256,
+            gold_version=gold_set.gold_version,
+            gold_id=gold_set.gold_id,
+            parent_gold_id=str(gold_set.manifest.get("parent_gold_id", "")),
+            prefill_rulings=prefill_rulings,
+            sheet_sources=sheet_sources,
+            answer_config=config,
+            pairing_note=pairing_note,
+            harness_config_sha256=config.content_sha256(),
+            suspect_cap=args.suspect_cap,
+            new_gold_cap=args.new_gold_cap,
+            improvements=improvements,
+            improvement_cap=args.improvement_cap,
+            folded_decisions=review_history,
+        )
+
+    packet = make_packet(current_rows, current_gold_version, current_gold_id, folded_decisions)
+    if args.mode == "sitting":
+        plan = assemble_sittings(packet, batch_size=args.batch_size)
+        auto_resolved = len(plan.auto_decisions)
+        if args.sitting_number < 1:
+            parser.error("--sitting-number must be positive")
+        if plan.auto_decisions:
+            result = fold_granular_decisions(
+                current_rows,
+                plan.auto_decisions,
+                packet=packet,
+                ontology_sha256=pin.sha256,
+                parent_gold_id=current_gold_id,
+                base_gold_version=current_gold_version,
+            )
+            write_gold_version(result, Path(args.gold_out))
+            append_decisions(
+                Path(args.decision_log), result.records, surfaces=surface_strings(gold_set)
+            )
+            prior_folded = args.folded or latest_folded_path(
+                Path(args.gold_out), at_most_version=current_gold_version
+            )
+            folded_path = write_folded_history(
+                result, plan.auto_decisions, Path(args.gold_out), prior_path=prior_folded
+            )
+            current_rows = [gold_row_v2_from_json(payload) for payload in result.rows]
+            current_gold_version = _as_version(result.manifest.get("gold_version"))
+            current_gold_id = str(result.manifest.get("gold_id", ""))
+            folded_decisions = json.loads(folded_path.read_text(encoding="utf-8"))
+            packet = make_packet(
+                current_rows, current_gold_version, current_gold_id, folded_decisions
+            )
+            plan = assemble_sittings(packet, batch_size=args.batch_size)
+        if not plan.batches:
+            print(f"auto-resolved {auto_resolved} row(s); no sitting remains")
+            return 0
+        if args.sitting_number > len(plan.batches):
+            parser.error(
+                f"--sitting-number must be between 1 and {len(plan.batches)} for this packet"
+            )
+        batch = plan.batches[args.sitting_number - 1]
+        written = write_sitting_v2(
+            batch.packet,
+            batch.manifest,
+            out_dir,
+            lane=args.lane,
+            leak_manifest=leak_manifest,
+            salt=salt,
+            firm_sheet_empty=not any(row.firm != "synthetic" for row in batch.packet.rows),
+        )
+    else:
+        written = write_packet_v2(
+            packet,
+            out_dir,
+            lane=args.lane,
+            leak_manifest=leak_manifest,
+            salt=salt,
+        )
     print(json.dumps(dict(packet.counts), indent=2, sort_keys=True))
     print(f"overflow by reason: {json.dumps(dict(packet.overflow), sort_keys=True)}")
     print(
         "rows per section: "
-        + json.dumps(
-            {name: len(packet.section(name)) for name in SECTIONS_V2}, sort_keys=True
-        )
+        + json.dumps({name: len(packet.section(name)) for name in SECTIONS_V2}, sort_keys=True)
     )
     for name, path in written.items():
         print(f"{name}: {path} ({path.stat().st_size} bytes)")
@@ -3486,7 +3929,7 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - I/O or
         description="U5 audit gate: assemble the decision packet, or fold Damien's decisions.",
     )
     parser.add_argument(
-        "--mode", choices=("packet", "fold", "packet-v2", "fold-v2"), default="packet"
+        "--mode", choices=("packet", "fold", "packet-v2", "fold-v2", "sitting"), default="packet"
     )
     parser.add_argument("--gold", type=Path, default=DEFAULT_GOLD_DIR / "gold_v1.jsonl")
     parser.add_argument(
@@ -3505,12 +3948,15 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - I/O or
     parser.add_argument(
         "--resolution-batch", type=Path, default=DEFAULT_GOLD_DIR / "resolution_batch_v1.jsonl"
     )
-    parser.add_argument(
-        "--clusters", type=Path, default=DEFAULT_ITEM_REPORT_DIR / "clusters_v1.jsonl"
-    )
+    parser.add_argument("--clusters", type=Path, default=None)
     parser.add_argument("--item-report-dir", type=Path, default=DEFAULT_ITEM_REPORT_DIR)
     parser.add_argument("--item-csv-label", default="baseline-v1")
-    parser.add_argument("--out", type=Path, default=DEFAULT_PACKET_DIR)
+    parser.add_argument(
+        "--out",
+        type=Path,
+        default=None,
+        help="packet directory (defaults to audit_packet_v1 or audit_packet_v2 by mode)",
+    )
     parser.add_argument("--decision-log", type=Path, default=DEFAULT_DECISION_LOG)
     parser.add_argument("--decisions", type=Path, default=None, help="decisions file (--mode fold)")
     parser.add_argument("--gold-out", type=Path, default=DEFAULT_GOLD_DIR)
@@ -3522,6 +3968,11 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - I/O or
         help="detailed suspect rows in this batch (KTD9 default 50; the rest report as counts)",
     )
     parser.add_argument("--new-gold-cap", type=int, default=NEW_GOLD_CAP)
+    parser.add_argument("--batch-size", type=int, default=SITTING_BATCH_SIZE)
+    parser.add_argument("--sitting-number", type=int, default=1)
+    parser.add_argument("--lane", choices=("firm", "synthetic"), default=None)
+    parser.add_argument("--leak-manifest", type=Path, default=None)
+    parser.add_argument("--salt-file", type=Path, default=None)
     parser.add_argument(
         "--improvement-cap",
         type=int,
@@ -3570,11 +4021,35 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - I/O or
         "--baseline-v2", type=Path, default=_EVAL_ROOT / "reports" / "baseline-v2.json"
     )
     args = parser.parse_args(argv)
+    if args.mode in ("packet", "packet-v2", "sitting") and args.clusters is None:
+        parser.error(
+            "--clusters is required for packet/sitting regeneration; pass the explicit "
+            "clusters_v2.jsonl path"
+        )
+    if args.mode in ("packet-v2", "fold-v2", "sitting") and args.lane is None:
+        parser.error("--lane is required in v2 modes (firm or synthetic)")
+    if (
+        args.mode in ("packet-v2", "fold-v2", "sitting")
+        and args.lane == "synthetic"
+        and (args.leak_manifest is None or args.salt_file is None)
+    ):
+        parser.error("--lane synthetic requires --leak-manifest and --salt-file")
+    if args.out is None:
+        args.out = (
+            DEFAULT_PACKET_DIR_V2
+            if args.mode in ("packet-v2", "fold-v2", "sitting")
+            else DEFAULT_PACKET_DIR
+        )
+
+    if args.mode in ("packet-v2", "fold-v2", "sitting"):
+        from .packet_render import validate_sitting_output
+
+        validate_sitting_output(Path(args.out), lane=args.lane)
 
     import sys
 
     ensure_hash_seed()
-    if args.mode in ("packet-v2", "fold-v2"):
+    if args.mode in ("packet-v2", "fold-v2", "sitting"):
         return _main_v2(args, parser)
     gold_set = load_gold(args.gold)
     try:
@@ -3601,9 +4076,7 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - I/O or
             return 2
         packet = _packet_from_json(json.loads(packet_path.read_text(encoding="utf-8")))
         decisions = json.loads(Path(args.decisions).read_text(encoding="utf-8"))
-        result = fold_decisions(
-            rows, decisions, packet=packet, ontology_sha256=pin.sha256
-        )
+        result = fold_decisions(rows, decisions, packet=packet, ontology_sha256=pin.sha256)
         written = write_gold_version(result, Path(args.gold_out))
         append_decisions(Path(args.decision_log), result.records, surfaces=surfaces)
         print(json.dumps(dict(result.manifest), indent=2, sort_keys=True))
@@ -3665,8 +4138,7 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - I/O or
     else:
         print(f"replaying {len(cache)} cached prediction lists from {cache_path}", file=sys.stderr)
     predictions = {
-        item_id: tuple(rank_candidates(candidates, config))
-        for item_id, candidates in cache.items()
+        item_id: tuple(rank_candidates(candidates, config)) for item_id, candidates in cache.items()
     }
 
     # definitions for every IRI the packet will show
@@ -3695,8 +4167,7 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - I/O or
 
     # variant replay from the committed tune predictions
     tune_csv = (
-        Path(args.item_report_dir)
-        / f"items-{gold_set.gold_id}-tune-{args.item_csv_label}.csv"
+        Path(args.item_report_dir) / f"items-{gold_set.gold_id}-tune-{args.item_csv_label}.csv"
     )
     replay: dict[str, dict[str, object]] = {}
     if tune_csv.exists():
