@@ -1,14 +1,19 @@
-"""Render the v3-vs-v6 pairing diff as a rulable workspace sheet.
+"""Render the v3-vs-v6 pairing diff in the one-line checkbox workspace format.
 
-Damien made 132 pairing rulings against gold v3. Two gold versions later, 62 of them are already
-the live applied reading in v6 and need nothing. This sheet carries ONLY the rows where his v3
-ruling differs from what v6 currently holds, so ruling on the discrepancy is one radio click per
-row in the exact workspace he already uses. Rows that agree are excluded by construction -- the
-requested "filter to only where v3 differs" is the sheet itself.
+(identity -v3diff2: the retired readings-block cut minted -v3diff drafts, and recovery must not
+offer those into this sheet.) First cut showed each discrepancy as the pairing readings block; Damien's verdict: unnecessarily
+confusing. This version replicates the gold-evaluation ergonomics exactly -- one line per concept
+with a single include/exclude checkbox, level chips, and the connector lines -- and expresses the
+DIFF as adornments on the concepts themselves:
 
-The baseline records the reading v6 currently applies (when it matches a named reading), so the
-export is a DIFF: re-affirming v6 exports nothing, and choosing his v3 reading -- or any other --
-exports a real pairing decision that folds into v7.
+* a concept only his v3 ruling had carries a "v3 only" tag and arrives UNCHECKED;
+* a concept only v6 holds carries a "v6 only" tag and arrives CHECKED;
+* concepts both agree on are unadorned and checked.
+
+Checked means "in gold". The baseline is the v6 state, so the export is a diff: leaving the sheet
+as it opened exports nothing, checking a v3-only concept exports keep, unchecking a v6-only one
+exports remove. Rows where v3 and v6 fully agree are excluded by construction, which is the
+requested include-only-differences filter.
 
 Usage: uv run python eval/build_v3_diff.py V3_JUDGMENT PACKET OUT_HTML
 """
@@ -28,19 +33,15 @@ packet = json.loads(Path(sys.argv[2]).read_text())
 out = Path(sys.argv[3])
 
 
-def norm(reading: object) -> tuple:
-    levels = []
+def by_level(reading: object) -> dict[int, dict[str, str]]:
+    """level -> {iri: label} for one reading."""
+    out: dict[int, dict[str, str]] = {}
     for lv in reading or []:  # type: ignore[union-attr]
-        levels.append((lv.get("level"), tuple(sorted(lv.get("iris") or []))))
-    return tuple(sorted(levels))
-
-
-def describe(reading: object) -> str:
-    bits = []
-    for lv in sorted(reading or [], key=lambda x: (x.get("level") or 0)):  # type: ignore[union-attr]
-        tags = [t.get("label", "") for t in (lv.get("tags") or [])]
-        bits.append(f"L{lv.get('level')}: {', '.join(tags) if tags else '(nothing)'}")
-    return " / ".join(bits) if bits else "(empty)"
+        level = int(lv.get("level") or 0)
+        for tag in lv.get("tags") or []:
+            if tag.get("iri"):
+                out.setdefault(level, {})[tag["iri"]] = tag.get("label", "")
+    return out
 
 
 rows = []
@@ -49,48 +50,97 @@ for raw in packet["rows"]:
     ruling = v3.get(rid)
     if raw["section"] != "pairing" or not ruling or not ruling.get("pairing"):
         continue
-    extra = dict(raw.get("extra") or {})
-    assignments = extra.get("assignments") or {}
-    choice = ruling["pairing"]
-    if norm(assignments.get(choice)) == norm(assignments.get("applied")):
-        continue  # v3 and v6 agree; nothing to rule on
-    # Which named reading is v6 actually holding? Baseline on that name keeps the export a diff.
-    applied_name = next(
-        (name for name in ("heuristic", "alternative")
-         if norm(assignments.get(name)) == norm(assignments.get("applied"))),
-        None,
-    )
-    extra["baseline"] = {"pairing": applied_name} if applied_name else {}
-    extra.pop("folded", None)  # the discrepancy is an open question, not a settled ruling
-    v6_desc = describe(assignments.get("applied"))
-    v3_desc = describe(assignments.get(choice))
+    assignments = (raw.get("extra") or {}).get("assignments") or {}
+    chosen = by_level(assignments.get(ruling["pairing"]))
+    applied = by_level(assignments.get("applied"))
+    # Compare IRI sets per level, not labels: a label-string mismatch on the same concept is not
+    # a difference anyone can rule on, and including it renders a row with nothing marked.
+    if {lv: set(d) for lv, d in chosen.items()} == {lv: set(d) for lv, d in applied.items()}:
+        continue  # v3 and v6 agree -- excluded by construction
+
+    # Input hierarchy for the level pane: the paired inputs at their own levels.
+    level_inputs: dict[int, str] = {}
+    for reading in assignments.values():
+        for lv in reading or []:
+            level = int(lv.get("level") or 0)
+            if lv.get("input"):
+                level_inputs.setdefault(level, str(lv["input"]))
+    ordered_levels = sorted(level_inputs)
+    input_text = " > ".join(level_inputs[level] for level in ordered_levels)
+    chip = {level: f"L{index}" for index, level in enumerate(ordered_levels, start=1)}
+
+    def chips_of(
+        source: dict[int, dict[str, str]], iri: str, chip: dict[int, str] = chip
+    ) -> tuple[str, ...]:
+        """The concept's level memberships under one version, in chip terms (L1, L2, ...)."""
+        return tuple(
+            chip[level] for level in sorted(source) if iri in source[level] and level in chip
+        )
+
+    gold = []
+    level_map: dict[str, list[str]] = {}  # the v6 applied state -- what the chips show on open
+    baseline_gold: dict[str, str] = {}
+    labels: dict[str, str] = {}
+    for source in (applied, chosen):
+        for concepts in source.values():
+            labels.update(concepts)
+    for iri, label in labels.items():
+        v6c, v3c = chips_of(applied, iri), chips_of(chosen, iri)
+        if v6c and v3c and v6c == v3c:
+            column, prefix = "", ""
+            definition = "Both v3 and v6 agree on this concept."
+        elif v6c and v3c:
+            column = f"levels differ · v3: {' '.join(v3c)} · v6: {' '.join(v6c)}"
+            prefix = "◆ "
+            definition = (
+                f"DIFFERENCE — same concept, different level. Your v3 ruling put it at "
+                f"{', '.join(v3c)}; v6 holds it at {', '.join(v6c)}. The chips open at the "
+                "v6 state; click chips to move it."
+            )
+        elif v6c:
+            column, prefix = "v6 only · your v3 ruling dropped this", "◇ "
+            definition = f"DIFFERENCE — {column}. Checked = keep in gold; unchecked = remove."
+        else:
+            column, prefix = "v3 only · not in current gold", "◆ "
+            definition = f"DIFFERENCE — {column}. Check it to bring your v3 ruling into gold."
+        gold.append(
+            {"iri": iri, "label": prefix + label, "column": column, "definition": definition}
+        )
+        baseline_gold[iri] = "keep" if v6c else "remove"
+        for chip_name in v6c:  # chips open at the v6 truth; edits export as level diffs
+            level_map.setdefault(chip_name, []).append(iri)
+
     note = f' Your v3 note: "{ruling["note"]}"' if ruling.get("note") else ""
+    diff_count = sum(1 for e in gold if e["column"])
+    extra = {
+        "system_level_mappings": level_map,
+        "baseline": {"gold": baseline_gold, "pipeline": {}, "level_mappings": level_map},
+    }
     rows.append(
         PacketRow(
             decision_id=rid,
-            section="pairing",
+            section="consistency",
             item_id=raw["item_id"],
             firm=raw["firm"],
             stratum=raw["stratum"],
             stratum_id=raw["stratum_id"],
             ancestor_path=tuple(raw["ancestor_path"]),
             surface_label=raw["surface_label"],
-            input_text=raw["input_text"],
+            input_text=input_text,
             slice_name=raw["slice"],
             reason_class="v3 differs from v6",
             suggested_action=(
-                f'In v3 you chose "{choice}" -> {v3_desc}. '
-                f"Gold v6 currently holds -> {v6_desc}. "
-                "Pick the reading that should stand; re-affirming v6 exports nothing."
-                + note
+                f"{diff_count} concept(s) marked ◆/◇ differ between your v3 ruling and current "
+                "gold. Check to include, uncheck to exclude; leaving the sheet as it opened "
+                "exports nothing." + note
             ),
-            gold=tuple(raw.get("gold") or ()),
+            gold=tuple(gold),
             pipeline=(),
             proposed_iris=(),
-            notes_text=raw.get("notes_text"),
-            confidence=raw.get("confidence", 0.0),
-            label_frequency=raw.get("label_frequency", 0),
-            sort_score=0.0 if ruling.get("note") else 1.0,  # noted rows first
+            notes_text=None,
+            confidence=0.0,
+            label_frequency=0,
+            sort_score=0.0 if ruling.get("note") else 1.0,
             extra=extra,
         )
     )
@@ -99,7 +149,7 @@ rows.sort(key=lambda r: (r.sort_score, r.surface_label))
 meta = dict(packet["meta"])
 for field in ("current_gold_id", "gold_id", "parent_gold_id"):
     if meta.get(field):
-        meta[field] = f"{meta[field]}-v3diff"  # own draft identity; see build_atomic_candidates
+        meta[field] = f"{meta[field]}-v3diff2"
 out.write_text(
     render_sheet_v2(
         Packet(
@@ -114,4 +164,4 @@ out.write_text(
     ),
     encoding="utf-8",
 )
-print(f"wrote {out} ({out.stat().st_size} bytes) differing_rows={len(rows)}")
+print(f"wrote {out} ({out.stat().st_size} bytes) rows={len(rows)}")
