@@ -1,0 +1,431 @@
+{
+  "by_firm": {
+    "firm1": {
+      "empty_prediction_items": 2,
+      "exact_items": 13,
+      "f1": 0.22138,
+      "fn": 1076,
+      "fp": 978,
+      "gold": 1368,
+      "items": 637,
+      "precision": 0.229921,
+      "predicted": 1270,
+      "recall": 0.21345,
+      "tp": 292
+    }
+  },
+  "by_stratum": {
+    "14f831be43d7": {
+      "empty_prediction_items": 0,
+      "exact_items": 1,
+      "f1": 0.349206,
+      "fn": 26,
+      "fp": 15,
+      "gold": 37,
+      "items": 13,
+      "precision": 0.423077,
+      "predicted": 26,
+      "recall": 0.297297,
+      "tp": 11
+    },
+    "2330f06f4d3c": {
+      "empty_prediction_items": 0,
+      "exact_items": 0,
+      "f1": 0.273973,
+      "fn": 104,
+      "fp": 108,
+      "gold": 144,
+      "items": 74,
+      "precision": 0.27027,
+      "predicted": 148,
+      "recall": 0.277778,
+      "tp": 40
+    },
+    "2f358fbb5cd5": {
+      "empty_prediction_items": 0,
+      "exact_items": 0,
+      "f1": 0.0,
+      "fn": 2,
+      "fp": 4,
+      "gold": 2,
+      "items": 2,
+      "precision": 0.0,
+      "predicted": 4,
+      "recall": 0.0,
+      "tp": 0
+    },
+    "3ce42a173062": {
+      "empty_prediction_items": 0,
+      "exact_items": 0,
+      "f1": 0.0,
+      "fn": 2,
+      "fp": 2,
+      "gold": 2,
+      "items": 1,
+      "precision": 0.0,
+      "predicted": 2,
+      "recall": 0.0,
+      "tp": 0
+    },
+    "440c205abfae": {
+      "empty_prediction_items": 0,
+      "exact_items": 0,
+      "f1": 0.166667,
+      "fn": 16,
+      "fp": 24,
+      "gold": 20,
+      "items": 14,
+      "precision": 0.142857,
+      "predicted": 28,
+      "recall": 0.2,
+      "tp": 4
+    },
+    "539027ce873c": {
+      "empty_prediction_items": 0,
+      "exact_items": 0,
+      "f1": 0.22973,
+      "fn": 67,
+      "fp": 47,
+      "gold": 84,
+      "items": 32,
+      "precision": 0.265625,
+      "predicted": 64,
+      "recall": 0.202381,
+      "tp": 17
+    },
+    "59cf7a95498c": {
+      "empty_prediction_items": 0,
+      "exact_items": 0,
+      "f1": 0.159624,
+      "fn": 84,
+      "fp": 95,
+      "gold": 101,
+      "items": 56,
+      "precision": 0.151786,
+      "predicted": 112,
+      "recall": 0.168317,
+      "tp": 17
+    },
+    "5cf8b73480f3": {
+      "empty_prediction_items": 0,
+      "exact_items": 0,
+      "f1": 0.174905,
+      "fn": 108,
+      "fp": 109,
+      "gold": 131,
+      "items": 66,
+      "precision": 0.174242,
+      "predicted": 132,
+      "recall": 0.175573,
+      "tp": 23
+    },
+    "5fc439dc2558": {
+      "empty_prediction_items": 0,
+      "exact_items": 0,
+      "f1": 0.312925,
+      "fn": 42,
+      "fp": 59,
+      "gold": 65,
+      "items": 41,
+      "precision": 0.280488,
+      "predicted": 82,
+      "recall": 0.353846,
+      "tp": 23
+    },
+    "6f5def6013c2": {
+      "empty_prediction_items": 0,
+      "exact_items": 1,
+      "f1": 0.261261,
+      "fn": 117,
+      "fp": 47,
+      "gold": 146,
+      "items": 38,
+      "precision": 0.381579,
+      "predicted": 76,
+      "recall": 0.19863,
+      "tp": 29
+    },
+    "7ab52f24b7ce": {
+      "empty_prediction_items": 0,
+      "exact_items": 0,
+      "f1": 0.0,
+      "fn": 5,
+      "fp": 6,
+      "gold": 5,
+      "items": 3,
+      "precision": 0.0,
+      "predicted": 6,
+      "recall": 0.0,
+      "tp": 0
+    },
+    "7b0d229acad3": {
+      "empty_prediction_items": 0,
+      "exact_items": 1,
+      "f1": 0.25,
+      "fn": 9,
+      "fp": 9,
+      "gold": 12,
+      "items": 6,
+      "precision": 0.25,
+      "predicted": 12,
+      "recall": 0.25,
+      "tp": 3
+    },
+    "83e79fe605dc": {
+      "empty_prediction_items": 0,
+      "exact_items": 1,
+      "f1": 0.217391,
+      "fn": 19,
+      "fp": 17,
+      "gold": 24,
+      "items": 11,
+      "precision": 0.227273,
+      "predicted": 22,
+      "recall": 0.208333,
+      "tp": 5
+    },
+    "940ec56b0677": {
+      "empty_prediction_items": 0,
+      "exact_items": 2,
+      "f1": 0.165138,
+      "fn": 104,
+      "fp": 78,
+      "gold": 122,
+      "items": 48,
+      "precision": 0.1875,
+      "predicted": 96,
+      "recall": 0.147541,
+      "tp": 18
+    },
+    "a4028b3eb41c": {
+      "empty_prediction_items": 0,
+      "exact_items": 0,
+      "f1": 0.099448,
+      "fn": 82,
+      "fp": 81,
+      "gold": 91,
+      "items": 45,
+      "precision": 0.1,
+      "predicted": 90,
+      "recall": 0.098901,
+      "tp": 9
+    },
+    "aaf23c83f37d": {
+      "empty_prediction_items": 0,
+      "exact_items": 0,
+      "f1": 0.133333,
+      "fn": 20,
+      "fp": 19,
+      "gold": 23,
+      "items": 11,
+      "precision": 0.136364,
+      "predicted": 22,
+      "recall": 0.130435,
+      "tp": 3
+    },
+    "bc678e049abd": {
+      "empty_prediction_items": 1,
+      "exact_items": 4,
+      "f1": 0.287823,
+      "fn": 96,
+      "fp": 97,
+      "gold": 135,
+      "items": 69,
+      "precision": 0.286765,
+      "predicted": 136,
+      "recall": 0.288889,
+      "tp": 39
+    },
+    "c822fb0e1741": {
+      "empty_prediction_items": 0,
+      "exact_items": 0,
+      "f1": 0.173913,
+      "fn": 11,
+      "fp": 8,
+      "gold": 13,
+      "items": 5,
+      "precision": 0.2,
+      "predicted": 10,
+      "recall": 0.153846,
+      "tp": 2
+    },
+    "cc222504f82b": {
+      "empty_prediction_items": 0,
+      "exact_items": 1,
+      "f1": 0.168224,
+      "fn": 52,
+      "fp": 37,
+      "gold": 61,
+      "items": 23,
+      "precision": 0.195652,
+      "predicted": 46,
+      "recall": 0.147541,
+      "tp": 9
+    },
+    "d1875c5d4aa8": {
+      "empty_prediction_items": 0,
+      "exact_items": 1,
+      "f1": 0.333333,
+      "fn": 23,
+      "fp": 29,
+      "gold": 36,
+      "items": 21,
+      "precision": 0.309524,
+      "predicted": 42,
+      "recall": 0.361111,
+      "tp": 13
+    },
+    "d8f01560a045": {
+      "empty_prediction_items": 1,
+      "exact_items": 0,
+      "f1": 0.230769,
+      "fn": 29,
+      "fp": 31,
+      "gold": 38,
+      "items": 21,
+      "precision": 0.225,
+      "predicted": 40,
+      "recall": 0.236842,
+      "tp": 9
+    },
+    "daf817d6ea1f": {
+      "empty_prediction_items": 0,
+      "exact_items": 0,
+      "f1": 0.4,
+      "fn": 4,
+      "fp": 5,
+      "gold": 7,
+      "items": 4,
+      "precision": 0.375,
+      "predicted": 8,
+      "recall": 0.428571,
+      "tp": 3
+    },
+    "ddbbf336e91b": {
+      "empty_prediction_items": 0,
+      "exact_items": 1,
+      "f1": 0.242424,
+      "fn": 11,
+      "fp": 14,
+      "gold": 15,
+      "items": 9,
+      "precision": 0.222222,
+      "predicted": 18,
+      "recall": 0.266667,
+      "tp": 4
+    },
+    "e61e5e72130e": {
+      "empty_prediction_items": 0,
+      "exact_items": 0,
+      "f1": 0.258065,
+      "fn": 15,
+      "fp": 8,
+      "gold": 19,
+      "items": 6,
+      "precision": 0.333333,
+      "predicted": 12,
+      "recall": 0.210526,
+      "tp": 4
+    },
+    "e62a3679461b": {
+      "empty_prediction_items": 0,
+      "exact_items": 0,
+      "f1": 0.197183,
+      "fn": 28,
+      "fp": 29,
+      "gold": 35,
+      "items": 18,
+      "precision": 0.194444,
+      "predicted": 36,
+      "recall": 0.2,
+      "tp": 7
+    }
+  },
+  "extra": {
+    "determinism_selftest": {
+      "deterministic": true,
+      "first_seed": "0",
+      "first_sha256": "72e6ba8bc470e6c682c0a8da89d4af9aa22b6ba0375196b9db0dd9427ddaaf89",
+      "second_seed": "1",
+      "second_sha256": "72e6ba8bc470e6c682c0a8da89d4af9aa22b6ba0375196b9db0dd9427ddaaf89",
+      "target": "folio_eval.selftest:synthetic_scoring_payload"
+    },
+    "entity_ruler": true,
+    "label_search_limit": 10,
+    "multi_strategy_recall": false
+  },
+  "folio_python_version": "0.3.6",
+  "gold_content_sha256": "1e8e06748af26e71e94d1eab0dd8865ae7f8461e61dd3df0dc7c8ef4ccb9afde",
+  "gold_id": "v7-1e8e06748af2",
+  "gold_version": 7,
+  "harness_config": {
+    "calibrated": true,
+    "calibration_steps": [
+      [
+        85.80645161290323,
+        0.014011
+      ],
+      [
+        93.61702127659575,
+        0.073214
+      ],
+      [
+        95.0,
+        0.176056
+      ],
+      [
+        100.0,
+        0.373134
+      ]
+    ],
+    "config_version": 1,
+    "rationale": "U4 baseline fit: isotonic ScoreCalibration on the TUNE slice only (1217 items, 9469 (score, correct?) pairs, 484 positive, 4 compressed steps); threshold x k grid-searched over [0.0..0.9] x [1..10] maximizing micro-F1, ties to the smaller k then the higher threshold; chosen threshold=0.0 top_k=2 (tune micro-F1=0.084553, P=0.128926, R=0.062903); gold=v1-e1f3124bf68b; ontology=b6ed82e6d17b. Refitting is a named iteration change under R9.",
+    "threshold": 0.0,
+    "top_k": 2
+  },
+  "harness_config_sha256": "f5b743ec1cd4c83c525cddca02ca10ebe966341b9487ce89981e8506c64e075b",
+  "hits_at_k": {
+    "1": 211,
+    "10": 444,
+    "3": 336,
+    "5": 404
+  },
+  "label": "v7-post-pairing",
+  "near_miss": {
+    "ancestor_2hop": 0,
+    "child_1hop": 18,
+    "descendant_2hop": 8,
+    "parent_1hop": 9,
+    "sibling": 18,
+    "unrelated": 925
+  },
+  "ontology_cache_sha256": "b6ed82e6d17b7cb1d468453e4111ec08ca091d72a6849be2b58dd37692cb6ef9",
+  "overall": {
+    "empty_prediction_items": 2,
+    "exact_items": 13,
+    "f1": 0.22138,
+    "fn": 1076,
+    "fp": 978,
+    "gold": 1368,
+    "items": 637,
+    "precision": 0.229921,
+    "predicted": 1270,
+    "recall": 0.21345,
+    "tp": 292
+  },
+  "recall_at_k": {
+    "1": 0.15424,
+    "10": 0.324561,
+    "3": 0.245614,
+    "5": 0.295322
+  },
+  "sampled": false,
+  "slice": "tune",
+  "split_manifest_sha256": "d0a423650aa1de6664cab40359f4a97af6df9ae94f695f9fc9ce6b76c44778df",
+  "split_seed": 20260727,
+  "timing": {
+    "elapsed_s": 135.117,
+    "items": 637,
+    "ms_per_item": 212.11
+  }
+}
