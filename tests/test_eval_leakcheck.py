@@ -148,6 +148,11 @@ def test_scrypt_rejects_below_defaults_without_explicit_test_escape() -> None:
     ScryptParams(n=2, r=1, p=1, dklen=8, test_params=True).validate()
 
 
+def test_hmac_digest_length_cannot_exceed_sha256_output() -> None:
+    with pytest.raises(LeakcheckError, match="supported leakcheck limits"):
+        ScryptParams(n=2, r=1, p=1, dklen=33, test_params=True).validate()
+
+
 def test_manifest_digest_path_is_fast_and_does_not_call_scrypt(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -246,6 +251,18 @@ def test_public_surface_allowlist_uses_only_public_dictionary_labels(
     assert public_surface_allowlist(
         (public,), (FAKE_SURFACE, "ordinary public term")
     ) == frozenset({"ordinary public term"})
+
+
+def test_public_surface_allowlist_does_not_exclude_strict_subphrases(
+    tmp_path: Path,
+) -> None:
+    public = tmp_path / "public.jsonl"
+    public.write_text(
+        json.dumps({"label": "Alpha confidential phrase omega"}) + "\n",
+        encoding="utf-8",
+    )
+
+    assert public_surface_allowlist((public,), ("confidential phrase",)) == frozenset()
 
 
 def test_check_fails_closed_when_local_gold_version_is_newer(

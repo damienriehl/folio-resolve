@@ -9,8 +9,9 @@ import re
 import sys
 import tempfile
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
+from types import MappingProxyType
 
 from folio_resolve.blocklist import AliasBlocklist, load_seed_blocklist
 from folio_resolve.gates import PlaceNameGate, ShortLabelGate
@@ -77,7 +78,9 @@ class DocumentAdapter:
     recall_top_n: int = 200
     _matcher: AhoCorasickMatcher = field(init=False, repr=False)
     _recall: MultiStrategyRecall = field(init=False, repr=False)
-    _cache: dict[str, AdapterResult] = field(init=False, repr=False, default_factory=dict)
+    _cache: dict[tuple[str, tuple[str, ...] | None, int | None], AdapterResult] = field(
+        init=False, repr=False, default_factory=dict
+    )
 
     def __post_init__(self) -> None:
         if not isinstance(self.ontology, RecallOntology):
@@ -91,7 +94,9 @@ class DocumentAdapter:
         self._matcher.build()
         self._recall = MultiStrategyRecall(self.ontology, top_n=self.recall_top_n)
 
-    def _raw_candidates(self, passage: str) -> list[MatchCandidate]:
+    def _raw_candidates(
+        self, passage: str, *, segments: Sequence[str] | None = None
+    ) -> list[MatchCandidate]:
         raw: list[MatchCandidate] = []
         for match in self._matcher.search(passage):
             iri = str(match.value["iri"])
@@ -106,7 +111,8 @@ class DocumentAdapter:
                     surface_term=str(match.value["surface"]),
                 )
             )
-        for phrase in self.phrase_extractor(passage):
+        phrases = self.phrase_extractor(passage) if segments is None else segments
+        for phrase in phrases:
             for recalled in self._recall.recall(phrase):
                 raw.append(
                     MatchCandidate(
@@ -120,12 +126,25 @@ class DocumentAdapter:
                 )
         return raw
 
-    def adapt(self, passage: str) -> AdapterResult:
-        cached = self._cache.get(passage)
+    @staticmethod
+    def _copy_result(result: AdapterResult) -> AdapterResult:
+        return AdapterResult(
+            tuple(replace(candidate) for candidate in result.candidates),
+            result.raw_candidate_count,
+            MappingProxyType(dict(result.suppression_counters)),
+        )
+
+    def adapt(
+        self, passage: str, *, segments: Sequence[str] | None = None
+    ) -> AdapterResult:
+        segment_key = tuple(segments) if segments is not None else None
+        extractor_key = None if segments is not None else id(self.phrase_extractor)
+        cache_key = (passage, segment_key, extractor_key)
+        cached = self._cache.get(cache_key)
         if cached is not None:
-            return cached
+            return self._copy_result(cached)
         best: dict[str, MatchCandidate] = {}
-        for candidate in self._raw_candidates(passage):
+        for candidate in self._raw_candidates(passage, segments=segments):
             current = best.get(candidate.iri)
             candidate_key = (-candidate.score, candidate.extraction_path, candidate.surface_term)
             current_key = (
@@ -166,9 +185,11 @@ class DocumentAdapter:
             candidate.gate_reason = "; ".join((place.reason, short.reason))
             survivors.append(candidate)
         survivors.sort(key=lambda candidate: (-candidate.score, candidate.iri))
-        result = AdapterResult(tuple(survivors), len(best), counters)
-        self._cache[passage] = result
-        return result
+        result = AdapterResult(
+            tuple(survivors), len(best), MappingProxyType(dict(counters))
+        )
+        self._cache[cache_key] = self._copy_result(result)
+        return self._copy_result(result)
 
     def __call__(self, passage: str | GoldItemRecord) -> Sequence[CandidateLike]:
         text = passage if isinstance(passage, str) else passage.input_text

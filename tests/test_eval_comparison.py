@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import json
+import subprocess
+from contextlib import nullcontext
 from dataclasses import replace
 from pathlib import Path
 
+import folio_eval.comparison as comparison_module
 import pytest
 from folio_eval.answer_rule import AnswerRuleConfig
 from folio_eval.comparison import (
@@ -19,10 +22,12 @@ from folio_eval.comparison import (
     classify_verdict,
     emit_items_file,
     parse_stack_output,
+    run_consumer_stack,
     score_stack,
     write_comparison,
     write_stage_snapshots,
 )
+from folio_eval.downstream import ConsumerRunError, ConsumerSpec
 from folio_eval.leakcheck import build_manifest
 from folio_eval.synthesize import CorpusManifest, LoadedCorpus, SyntheticItem
 
@@ -228,3 +233,53 @@ def test_missing_item_is_stack_contract_error(tmp_path: Path) -> None:
     run = _run("folio-resolve", "candidate", {"one": {"iri:a"}, "none": set()})
     with pytest.raises(StackContractError, match="omitted scoreable item"):
         build_comparison(corpus, [run], AnswerRuleConfig())
+
+
+def test_consumer_runner_translates_deterministic_lane_to_incumbent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    commands: list[list[str]] = []
+
+    def fake_run(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        commands.append(command)
+        out_path = Path(command[command.index("--out") + 1])
+        out_path.write_text(
+            json.dumps(
+                {
+                    "kind": "synthetic-stack-run",
+                    "stack": "folio-mapper",
+                    "lane": "deterministic",
+                    "folio_resolve_version": "0.4.0",
+                    "folio_python_version": "1.2.3",
+                    "config": {},
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(comparison_module, "prepare_incumbent", lambda *_args: {})
+    monkeypatch.setattr(comparison_module, "clean_tree_guard", lambda _root: nullcontext())
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    spec = ConsumerSpec("folio-mapper", tmp_path, tmp_path / "python")
+
+    run = run_consumer_stack(spec, tmp_path / "items.jsonl")
+
+    assert run.lane == "incumbent"
+    assert commands[0][commands[0].index("--lane") + 1] == "deterministic"
+
+
+def test_consumer_runner_translates_timeout_to_domain_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def time_out(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        raise subprocess.TimeoutExpired(command, 1.5)
+
+    monkeypatch.setattr(comparison_module, "prepare_incumbent", lambda *_args: {})
+    monkeypatch.setattr(comparison_module, "clean_tree_guard", lambda _root: nullcontext())
+    monkeypatch.setattr(subprocess, "run", time_out)
+    spec = ConsumerSpec("folio-enrich", tmp_path, tmp_path / "python")
+
+    with pytest.raises(ConsumerRunError, match="timed out after 2s"):
+        run_consumer_stack(spec, tmp_path / "items.jsonl", timeout=1.5)

@@ -65,7 +65,7 @@ class ScryptParams:
             self.n < 2**14 or self.r < 8 or self.p < 1 or self.dklen < 32
         ):
             raise LeakcheckError("scrypt parameters are below the pinned leakcheck minimums")
-        if self.n > 2**20 or self.r > 16 or self.p > 16 or self.dklen > 64:
+        if self.n > 2**20 or self.r > 16 or self.p > 16 or self.dklen > 32:
             raise LeakcheckError("scrypt parameters exceed the supported leakcheck limits")
 
     def to_json(self) -> dict[str, int]:
@@ -344,21 +344,12 @@ def public_surface_allowlist(
         for surface in surfaces
         if (folded := " ".join(_leak_tokens(surface)))
     )
-    by_length: dict[int, set[str]] = {}
-    for surface in normalized:
-        by_length.setdefault(len(surface.split()), set()).add(surface)
     present: set[str] = set()
 
     def inspect(text: str) -> None:
-        tokens = _leak_tokens(text)
-        for length, candidates in by_length.items():
-            if length > len(tokens):
-                continue
-            ngrams = {
-                " ".join(tokens[start : start + length])
-                for start in range(len(tokens) - length + 1)
-            }
-            present.update(ngrams & candidates)
+        label = " ".join(_leak_tokens(text))
+        if label in normalized:
+            present.add(label)
 
     for path in paths:
         if path.suffix.casefold() == ".jsonl":

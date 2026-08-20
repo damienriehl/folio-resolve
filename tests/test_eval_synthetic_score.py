@@ -18,6 +18,7 @@ from folio_eval.synthetic_score import (
 )
 
 from folio_resolve import AliasBlocklist, BlockedAlias, Concept, InMemoryOntology
+from folio_resolve.pipeline import MatchCandidate
 
 
 def _ontology() -> InMemoryOntology:
@@ -123,16 +124,41 @@ def test_adapter_reuses_candidates_for_identical_passage(
     calls = 0
     original = adapter._raw_candidates
 
-    def counted(passage: str):
+    def counted(
+        passage: str, *, segments: tuple[str, ...] | None = None
+    ) -> list[MatchCandidate]:
         nonlocal calls
         calls += 1
-        return original(passage)
+        return original(passage, segments=segments)
 
     monkeypatch.setattr(adapter, "_raw_candidates", counted)
     passage = "Arbitration Rules govern the burden of proof."
 
     assert adapter.adapt(passage) == adapter.adapt(passage)
     assert calls == 1
+
+
+def test_adapter_cache_isolated_from_returned_candidate_mutation() -> None:
+    adapter = DocumentAdapter(_ontology())
+    passage = "Arbitration Rules govern this motion."
+
+    first = adapter.adapt(passage)
+    original_score = first.candidates[0].score
+    first.candidates[0].score = -1.0
+
+    second = adapter.adapt(passage)
+    assert second.candidates[0].score == original_score
+    assert second.candidates[0] is not first.candidates[0]
+
+
+def test_adapter_cache_keys_explicit_segments_separately() -> None:
+    adapter = DocumentAdapter(_ontology(), phrase_extractor=lambda _text: ())
+    passage = "Unrelated prose without an exact label."
+
+    assert adapter.adapt(passage).candidates == ()
+    segmented = adapter.adapt(passage, segments=("Arbitration Rules",))
+
+    assert [candidate.iri for candidate in segmented.candidates] == ["R-arb"]
 
 
 def test_nomatch_fp_rate_and_needs_review_exclusion() -> None:

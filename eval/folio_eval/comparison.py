@@ -316,14 +316,9 @@ def run_local_stack(
         segments = (
             materialized[item.item_id] if items_path is not None else tuple(extractor(item.text))
         )
-        original_extractor = adapter.phrase_extractor
-        try:
-            # Preserve U8's whole-document exact sweep while injecting the materialized
-            # extraction result, so the local lane cannot independently segment the text.
-            adapter.phrase_extractor = _fixed_extractor(segments)
-            candidates = list(adapter.adapt(item.text).candidates)
-        finally:
-            adapter.phrase_extractor = original_extractor
+        # Preserve U8's whole-document exact sweep while injecting the materialized
+        # extraction result, so the local lane cannot independently segment the text.
+        candidates = list(adapter.adapt(item.text, segments=segments).candidates)
         committed = commit_from_ranked(rank_candidates(candidates, config), config)
         rows[item.item_id] = frozenset(candidate.iri for candidate in committed)
         stages[item.item_id] = {"segments": len(segments), "candidates": len(candidates)}
@@ -342,13 +337,6 @@ def run_local_stack(
         rows=rows,
         stages=stages,
     )
-
-
-def _fixed_extractor(segments: Sequence[str]) -> PhraseExtractor:
-    def extract(_text: str) -> Sequence[str]:
-        return segments
-
-    return extract
 
 
 def _selected_scoreable(corpus: LoadedCorpus, limit: int | None) -> tuple[SyntheticItem, ...]:
