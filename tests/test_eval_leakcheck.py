@@ -7,6 +7,7 @@ for these tests.
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 from pathlib import Path
 
@@ -22,6 +23,7 @@ from folio_eval.leakcheck import (
     canonical_json,
     harvest_surfaces,
     main,
+    public_surface_allowlist,
     scan_file,
     scan_text,
 )
@@ -146,6 +148,19 @@ def test_scrypt_rejects_below_defaults_without_explicit_test_escape() -> None:
     ScryptParams(n=2, r=1, p=1, dklen=8, test_params=True).validate()
 
 
+def test_manifest_digest_path_is_fast_and_does_not_call_scrypt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def forbidden_scrypt(*_args: object, **_kwargs: object) -> bytes:
+        raise AssertionError("the runtime leak gate must not call scrypt")
+
+    monkeypatch.setattr(hashlib, "scrypt", forbidden_scrypt)
+    manifest = manifest_for(FAKE_SURFACE)
+
+    assert manifest.digest_algorithm == "hmac-sha256"
+    assert scan_text(f"prefix {FAKE_SURFACE} suffix", manifest, SALT) == 1
+
+
 def test_same_version_content_drift_is_stale(tmp_path: Path) -> None:
     local = tmp_path / "gold_v4.manifest.json"
     local.write_text(
@@ -199,6 +214,40 @@ def test_manifest_generation_is_byte_identical_for_identical_inputs() -> None:
     assert canonical_json(first.to_json()) == canonical_json(second.to_json())
 
 
+def test_manifest_generation_excludes_settled_allowlist_surfaces() -> None:
+    manifest = build_manifest(
+        (FAKE_SURFACE, "ordinary public term"),
+        SALT,
+        gold_version="gold_v4",
+        gold_content_sha256="a" * 64,
+        scrypt_params=FAST_SCRYPT,
+        allowlist=("ordinary public term",),
+    )
+
+    assert scan_text(FAKE_SURFACE, manifest, SALT) == 1
+    assert scan_text("ordinary public term", manifest, SALT) == 0
+
+
+def test_public_surface_allowlist_uses_only_public_dictionary_labels(
+    tmp_path: Path,
+) -> None:
+    public = tmp_path / "public.jsonl"
+    public.write_text(
+        json.dumps(
+            {
+                "label": "ordinary public term",
+                "definition": f"definition mentions {FAKE_SURFACE}",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    assert public_surface_allowlist(
+        (public,), (FAKE_SURFACE, "ordinary public term")
+    ) == frozenset({"ordinary public term"})
+
+
 def test_check_fails_closed_when_local_gold_version_is_newer(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -250,14 +299,9 @@ def test_harvest_excludes_gold_iris_and_other_iri_like_values() -> None:
         gold_content_sha256=gold.content_sha256,
         scrypt_params=FAST_SCRYPT,
     )
-    iri_digest = hashlib.scrypt(
-        normalize_label(iri).encode(),
-        salt=SALT,
-        n=FAST_SCRYPT.n,
-        r=FAST_SCRYPT.r,
-        p=FAST_SCRYPT.p,
-        dklen=FAST_SCRYPT.dklen,
-    ).hex()
+    iri_digest = hmac.digest(SALT, normalize_label(iri).encode(), "sha256")[
+        : FAST_SCRYPT.dklen
+    ].hex()
     assert iri not in surfaces
     assert other_iri not in surfaces
     assert iri_digest not in manifest.digests
@@ -283,6 +327,7 @@ def test_manifest_rejects_malformed_digest() -> None:
     malformed = Manifest(
         version=valid.version,
         scrypt_params=valid.scrypt_params,
+        digest_algorithm=valid.digest_algorithm,
         normalization=valid.normalization,
         min_tokens=valid.min_tokens,
         max_tokens=valid.max_tokens,

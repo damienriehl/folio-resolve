@@ -77,6 +77,7 @@ class DocumentAdapter:
     recall_top_n: int = 200
     _matcher: AhoCorasickMatcher = field(init=False, repr=False)
     _recall: MultiStrategyRecall = field(init=False, repr=False)
+    _cache: dict[str, AdapterResult] = field(init=False, repr=False, default_factory=dict)
 
     def __post_init__(self) -> None:
         if not isinstance(self.ontology, RecallOntology):
@@ -120,6 +121,9 @@ class DocumentAdapter:
         return raw
 
     def adapt(self, passage: str) -> AdapterResult:
+        cached = self._cache.get(passage)
+        if cached is not None:
+            return cached
         best: dict[str, MatchCandidate] = {}
         for candidate in self._raw_candidates(passage):
             current = best.get(candidate.iri)
@@ -162,7 +166,9 @@ class DocumentAdapter:
             candidate.gate_reason = "; ".join((place.reason, short.reason))
             survivors.append(candidate)
         survivors.sort(key=lambda candidate: (-candidate.score, candidate.iri))
-        return AdapterResult(tuple(survivors), len(best), counters)
+        result = AdapterResult(tuple(survivors), len(best), counters)
+        self._cache[passage] = result
+        return result
 
     def __call__(self, passage: str | GoldItemRecord) -> Sequence[CandidateLike]:
         text = passage if isinstance(passage, str) else passage.input_text
@@ -249,14 +255,20 @@ def depth_probe(
     ontology: RecallOntology,
     config: AnswerRuleConfig,
     depths: Sequence[int] = (10, 50, 200),
+    *,
+    adapter: DocumentAdapter | None = None,
 ) -> dict[str, dict[str, float | int]]:
     """Compare committed F1 and pre-answer-rule gold recall under candidate depth caps."""
     _assert_config(corpus, config)
     if any(depth < 1 for depth in depths):
         raise ValueError("depths must be positive")
-    adapter = DocumentAdapter(ontology, recall_top_n=max(depths, default=1))
+    document_adapter = adapter or DocumentAdapter(ontology, recall_top_n=max(depths, default=1))
+    if document_adapter.recall_top_n < max(depths, default=1):
+        raise ValueError("adapter recall_top_n must cover every requested depth")
     records = corpus.gold_item_records()
-    cached = {item.item_id: adapter.adapt(item.input_text).candidates for item in records}
+    cached = {
+        item.item_id: document_adapter.adapt(item.input_text).candidates for item in records
+    }
     output: dict[str, dict[str, float | int]] = {}
     for depth in depths:
 
@@ -371,8 +383,9 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - I/O or
     from folio import FOLIO
 
     ontology = FolioPythonProvider(_folio=FOLIO())
-    result = score_corpus(corpus, ontology, config)
-    probe = depth_probe(corpus, ontology, config)
+    adapter = DocumentAdapter(ontology)
+    result = score_corpus(corpus, ontology, config, adapter=adapter)
+    probe = depth_probe(corpus, ontology, config, adapter=adapter)
     report = build_synthetic_report(
         result,
         corpus=corpus,

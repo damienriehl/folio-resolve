@@ -116,6 +116,25 @@ def test_adapter_committed_sets_repeat_identically() -> None:
     assert commit_answers(adapter(passage), config) == commit_answers(adapter(passage), config)
 
 
+def test_adapter_reuses_candidates_for_identical_passage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = DocumentAdapter(_ontology())
+    calls = 0
+    original = adapter._raw_candidates
+
+    def counted(passage: str):
+        nonlocal calls
+        calls += 1
+        return original(passage)
+
+    monkeypatch.setattr(adapter, "_raw_candidates", counted)
+    passage = "Arbitration Rules govern the burden of proof."
+
+    assert adapter.adapt(passage) == adapter.adapt(passage)
+    assert calls == 1
+
+
 def test_nomatch_fp_rate_and_needs_review_exclusion() -> None:
     config = AnswerRuleConfig(threshold=0.5, top_k=5)
     corpus = _corpus(config)

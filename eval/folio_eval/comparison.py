@@ -13,12 +13,11 @@ import os
 import subprocess
 import tempfile
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from .answer_rule import AnswerRuleConfig, commit_from_ranked, rank_candidates
 from .downstream import (
-    DEFAULT_HARNESS_TIMEOUT_S,
     ConsumerRunError,
     ConsumerSpec,
     clean_tree_guard,
@@ -44,6 +43,9 @@ class IncumbentInstallMismatch(ComparisonError):
 
 class VersionSkewError(ComparisonError):
     """Stacks resolved different folio-python versions, invalidating comparison."""
+
+
+DEFAULT_COMPARISON_TIMEOUT_S = 2 * 60 * 60
 
 
 @dataclass(frozen=True, slots=True)
@@ -240,7 +242,7 @@ def run_consumer_stack(
     items_path: Path,
     *,
     version: str = "0.4.0",
-    timeout: float = DEFAULT_HARNESS_TIMEOUT_S,
+    timeout: float = DEFAULT_COMPARISON_TIMEOUT_S,
 ) -> StackRun:
     """Prepare and run one incumbent consumer through its own interpreter."""
     relative_runner = {
@@ -253,29 +255,34 @@ def run_consumer_stack(
         out_path = Path(temporary) / "stack.jsonl"
         with clean_tree_guard(spec.repo_root):
             prepare_incumbent(spec, version)
-            completed = subprocess.run(
-                [
-                    str(spec.venv_python),
-                    str(relative_runner),
-                    "--items",
-                    str(items_path),
-                    "--out",
-                    str(out_path),
-                    "--lane",
-                    "incumbent",
-                ],
-                cwd=str(spec.repo_root),
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-            )
+            try:
+                completed = subprocess.run(
+                    [
+                        str(spec.venv_python),
+                        str(relative_runner),
+                        "--items",
+                        str(items_path),
+                        "--out",
+                        str(out_path),
+                        "--lane",
+                        "deterministic",
+                    ],
+                    cwd=str(spec.repo_root),
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout,
+                )
+            except subprocess.TimeoutExpired as exc:
+                raise ConsumerRunError(
+                    f"{spec.name} synthetic runner timed out after {timeout:.0f}s"
+                ) from exc
             if completed.returncode != 0:
                 raise ConsumerRunError(
                     f"{spec.name} synthetic runner failed (rc={completed.returncode}):\n"
                     f"{(completed.stdout + completed.stderr).strip()[-4000:]}"
                 )
             run = parse_stack_output(out_path)
-    if run.stack != spec.name or run.lane != "incumbent":
+    if run.stack != spec.name or run.lane != "deterministic":
         raise StackContractError(
             f"{spec.name} runner identity mismatch: stack={run.stack!r} lane={run.lane!r}"
         )
@@ -283,7 +290,7 @@ def run_consumer_stack(
         raise IncumbentInstallMismatch(
             f"{spec.name} runner reported folio-resolve {run.folio_resolve_version}, expected {version}"
         )
-    return run
+    return replace(run, lane="incumbent")
 
 
 def run_local_stack(
@@ -562,9 +569,9 @@ def run_synthetic_comparison(
         corpus, items_path, limit=limit, extractor=adapter.phrase_extractor,
         leak_manifest=leak_manifest, salt=salt,
     )
-    runs = [run_local_stack(corpus, adapter, config, limit=limit, items_path=items_path)]
-    runs.extend(
+    runs = [
         run_consumer_stack(spec, items_path, version=incumbent_version) for spec in consumers
-    )
+    ]
+    runs.append(run_local_stack(corpus, adapter, config, limit=limit, items_path=items_path))
     write_stage_snapshots(runs, row_snapshot_dir, leak_manifest=leak_manifest, salt=salt)
     return build_comparison(corpus, runs, config, limit=limit)
