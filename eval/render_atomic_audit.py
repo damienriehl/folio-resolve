@@ -14,6 +14,7 @@ import html
 import json
 import sys
 from pathlib import Path
+from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from folio_eval.consolidate import _STYLE
@@ -36,11 +37,11 @@ wipes = {
 }
 
 
-def card(n: int, k: str, cls: str = "") -> str:
+def card(n: int | str, k: str, cls: str = "") -> str:
     return f'<div class="card {cls}"><div class="n">{n}</div><div class="k">{html.escape(k)}</div></div>'
 
 
-def table(items: list[dict]) -> str:
+def table(items: list[dict[str, Any]]) -> str:
     if not items:
         return '<p class="empty">Nothing in this group.</p>'
     body = []
