@@ -10,7 +10,8 @@ from __future__ import annotations
 
 import sys
 import types
-from typing import Any
+from functools import cache
+from typing import Any, NoReturn
 
 import pytest
 
@@ -256,6 +257,51 @@ class _FolioSpy:
         ]
 
 
+class _CachingFolio(_FakeFolio):
+    """Mimic the private unbounded caches used by folio-python's search paths."""
+
+    def __init__(self, classes: list[_Owl]) -> None:
+        super().__init__(classes)
+        self._prefix_cache: dict[str, list[_Owl]] = {}
+        self._ci_prefix_cache: dict[str, list[_Owl]] = {}
+        self.search_calls = {"label": 0, "definition": 0, "prefix": 0}
+
+    @cache  # noqa: B019 - deliberately reproduce folio-python's unbounded method cache
+    def _basic_search(self, query: str) -> tuple[tuple[_Owl, float], ...]:
+        return tuple((owl, 90.0) for owl in self.classes)
+
+    def search_by_label(self, query: str, **kwargs: Any) -> list[tuple[_Owl, float]]:
+        self.search_calls["label"] += 1
+        return list(self._basic_search(f"label:{query}"))
+
+    def search_by_definition(self, query: str, **kwargs: Any) -> list[tuple[_Owl, float]]:
+        self.search_calls["definition"] += 1
+        return list(self._basic_search(f"definition:{query}"))
+
+    def search_by_prefix(self, prefix: str) -> list[_Owl]:
+        self.search_calls["prefix"] += 1
+        self._prefix_cache[prefix] = list(self.classes)
+        self._ci_prefix_cache[prefix.casefold()] = list(self.classes)
+        return list(self.classes)
+
+
+class _FailingCachingFolio(_CachingFolio):
+    def _raise_after_caching(self, query: str) -> NoReturn:
+        self._basic_search(query)
+        self._prefix_cache[query] = list(self.classes)
+        self._ci_prefix_cache[query.casefold()] = list(self.classes)
+        raise RuntimeError(f"upstream failure: {query}")
+
+    def search_by_label(self, query: str, **kwargs: Any) -> list[tuple[_Owl, float]]:
+        self._raise_after_caching(f"label:{query}")
+
+    def search_by_definition(self, query: str, **kwargs: Any) -> list[tuple[_Owl, float]]:
+        self._raise_after_caching(f"definition:{query}")
+
+    def search_by_prefix(self, prefix: str) -> list[_Owl]:
+        self._raise_after_caching(f"prefix:{prefix}")
+
+
 def test_provider_all_labels_skips_foreign_iris(fake_folio: _FakeFolio) -> None:
     labels = FolioPythonProvider(fake_folio).all_labels()
     assert set(labels) == {"arbitration rules", "rules of arbitration"}
@@ -311,6 +357,61 @@ def test_provider_search_by_label_accepts_bare_rows() -> None:
 
     out = FolioPythonProvider(_BareSearch([_Owl(iri="R1", label="X")])).search_by_label("x")
     assert out[0][1] == 0.0
+
+
+def test_provider_releases_upstream_search_caches_after_copying_results() -> None:
+    owl = _Owl(iri="R1", label="Contract")
+    folio = _CachingFolio([owl])
+    provider = FolioPythonProvider(folio)
+
+    assert provider.search_by_label("contract") == [(_owl_to_concept(owl), 90.0)]
+    assert folio._basic_search.cache_info().currsize == 0
+
+    assert provider.search_by_definition("agreement") == [(_owl_to_concept(owl), 90.0)]
+    assert folio._basic_search.cache_info().currsize == 0
+
+    assert provider.search_by_prefix("Con") == [_owl_to_concept(owl)]
+    assert folio._prefix_cache == {}
+    assert folio._ci_prefix_cache == {}
+
+
+def test_provider_reuses_only_bounded_copied_search_results() -> None:
+    owl = _Owl(iri="R1", label="Contract")
+    folio = _CachingFolio([owl])
+    provider = FolioPythonProvider(folio)
+
+    first = provider.search_by_label("contract")
+    first.clear()
+    assert provider.search_by_label("contract") == [(_owl_to_concept(owl), 90.0)]
+    assert folio.search_calls["label"] == 1
+    assert folio._basic_search.cache_info().currsize == 0
+
+    for index in range(257):
+        provider.search_by_label(f"query-{index}")
+    provider.search_by_label("contract")
+    assert folio.search_calls["label"] == 259
+
+
+@pytest.mark.parametrize(
+    ("method_name", "query"),
+    [
+        ("search_by_label", "contract"),
+        ("search_by_definition", "agreement"),
+        ("search_by_prefix", "Con"),
+    ],
+)
+def test_provider_releases_upstream_caches_when_search_raises(
+    method_name: str, query: str
+) -> None:
+    folio = _FailingCachingFolio([_Owl(iri="R1", label="Contract")])
+    provider = FolioPythonProvider(folio)
+
+    with pytest.raises(RuntimeError, match=f"upstream failure: .*{query}"):
+        getattr(provider, method_name)(query)
+
+    assert folio._basic_search.cache_info().currsize == 0
+    assert folio._prefix_cache == {}
+    assert folio._ci_prefix_cache == {}
 
 
 def test_provider_get_concept_hit_and_miss(fake_folio: _FakeFolio) -> None:
