@@ -257,6 +257,7 @@ class ScoreRun:
 
     slice_name: str
     config: AnswerRuleConfig
+    ranked_limit: int = 0
     item_scores: list[ItemScore] = field(default_factory=list)
     overall: MicroCounts = field(default_factory=MicroCounts)
     by_firm: dict[str, MicroCounts] = field(default_factory=dict)
@@ -284,7 +285,7 @@ def score_items(
     keep_ranked: int = 20,
 ) -> ScoreRun:
     """Run the pipeline over ``items`` and count strict exact-IRI set TP/FP/FN."""
-    run = ScoreRun(slice_name=slice_name, config=config)
+    run = ScoreRun(slice_name=slice_name, config=config, ranked_limit=keep_ranked)
     run.hits_at_k = dict.fromkeys(RECALL_AT_K, 0)
     run.near_miss = dict.fromkeys(NEAR_MISS_BUCKETS, 0)
     started = time.perf_counter()
