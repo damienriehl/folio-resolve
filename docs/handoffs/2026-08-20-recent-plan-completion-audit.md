@@ -32,6 +32,24 @@ branch: "docs/recent-plan-audit-2026-08-20"
   cross-checked against files, tests, commit ancestry, merged PRs, release state, and generated
   artifacts. Plan bodies remain unchanged; this handoff owns the audit status.
 
+## Execution update — 2026-08-21
+
+- U8's public-metadata preflight and runtime recovery are committed through `bfbd4bf`. The local
+  bounded-cache containment is committed as `f9ee23d` and pushed on
+  `fix/synthetic-baseline-runtime`.
+- The real one-passage path now leaves folio-python's affected caches at zero and peaks at
+  715,524 KiB (about 699 MiB), versus roughly 1.29 GiB before containment. The complete
+  225-passage deterministic rerun is active; U8 remains partial until that run passes and its
+  report is committed.
+- The upstream cache policy is proposed in
+  [alea-institute/folio-python#20](https://github.com/alea-institute/folio-python/pull/20). The PR is
+  ready for review, mergeable, and green on all six CI architectures, but is not merged or
+  released. A separate pushed handoff branch records the post-release reassessment procedure.
+- U10's discovered folio-python version skew is repaired in
+  [alea-institute/folio-mapper#9](https://github.com/alea-institute/folio-mapper/pull/9): mapper now
+  proposes the same exact 0.3.6 pin already used by enrich. The lock check, focused runner tests,
+  and full mapper backend suite (`525 passed, 10 skipped`) pass. The live gate still waits for U8.
+
 ## Plan-level verdicts
 
 | Plan | Verdict | Evidence | Remaining authority |
@@ -109,7 +127,7 @@ These cannot be performed by a worker because they require protected data or own
 
 ## Decision Sheet — answer these five now
 
-All four were implemented provisionally with the recommended option, but the prior plan-review
+All five were implemented provisionally with the recommended option, but the prior plan-review
 artifact never received a durable answer receipt for q5–q8. Ratifying the recommendations avoids
 rework and preserves the implementation-ready plan as written.
 
