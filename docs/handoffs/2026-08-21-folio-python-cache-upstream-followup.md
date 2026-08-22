@@ -2,10 +2,10 @@
 artifact_contract: "ce-handoff/v1"
 created_at: "2026-08-21T14:59:10-05:00"
 title: "Reassess the local folio-python search-cache workaround after upstream PR #20"
-summary: "Records the local bounded-cache containment, its upstream replacement path, and the evidence required before simplifying or removing the workaround."
+summary: "Records the local bounded-cache containment, the merged-but-unreleased upstream replacement, and the evidence required before simplifying or removing the workaround."
 keywords: ["folio-python", "cache", "memory", "upstream", "follow-up", "U8"]
 cwd: "/home/damienriehl/Coding Projects/folio-resolve"
-resume_focus: "After upstream PR #20 is merged and released, update the dependency in an isolated branch, rerun the memory and deterministic-baseline gates, then decide which parts of the local workaround can safely be removed."
+resume_focus: "Wait for a folio-python release containing merged PR #20; then update the dependency in an isolated branch, rerun the memory and deterministic-baseline gates, and decide which parts of the local workaround can safely be removed."
 repository: "damienriehl/folio-resolve"
 branch: "docs/folio-python-cache-followup-2026-08-21"
 ---
@@ -19,12 +19,14 @@ branch: "docs/folio-python-cache-followup-2026-08-21"
 - The local adapter copies normalized results into per-provider 256-entry LRU caches and clears
   folio-python's private `_basic_search`, `_prefix_cache`, and `_ci_prefix_cache` stores after each
   upstream search, including exception paths.
-- The corresponding upstream change is commit `fe6d02e` on
-  `damienriehl/folio-python:fix/bound-search-caches` and is proposed in
-  [alea-institute/folio-python#20](https://github.com/alea-institute/folio-python/pull/20).
-- PR #20 bounds folio-python's basic-search and prefix-cache families at 128 entries. At handoff
-  creation, the PR is pushed, open, ready for review, mergeable, and green on all six CI jobs. It
-  is **not merged or released**.
+- The corresponding upstream change was reviewed at `fe6d02e` and merged through
+  [alea-institute/folio-python#20](https://github.com/alea-institute/folio-python/pull/20) on
+  2026-08-22 as squash commit `1b4fb3493815ca7aeb0ce7f454399c19723f9820` after all six CI
+  architecture jobs passed.
+- PR #20 bounds folio-python's basic-search and prefix-cache families at 128 entries. The source
+  change is now merged, but it is **not released**: the latest release remains `v0.4.0`, published
+  on 2026-08-18 before the merge. Consequently, the reassessment trigger is only partially met
+  and the local containment remains required.
 
 ## Why the local workaround exists
 
