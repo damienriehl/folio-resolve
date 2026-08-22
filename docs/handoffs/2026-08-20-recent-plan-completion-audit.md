@@ -48,7 +48,14 @@ branch: "docs/recent-plan-audit-2026-08-20"
 - U10's discovered folio-python version skew is repaired in
   [alea-institute/folio-mapper#9](https://github.com/alea-institute/folio-mapper/pull/9): mapper now
   proposes the same exact 0.3.6 pin already used by enrich. The lock check, focused runner tests,
-  and full mapper backend suite (`525 passed, 10 skipped`) pass. The live gate still waits for U8.
+  and full mapper backend suite (`525 passed, 10 skipped`) pass. The PR is open and mergeable but
+  has no configured checks. The live gate waits for both U8 and this PR's merge followed by an
+  exact lock/environment alignment check; the campaign's version-skew gate requires aborting on
+  drift.
+- U10 preflight also found that `--limit 1` currently selects one scoreable row plus all 30
+  no-match rows, and the committed summary omits required Git/cohort/invocation provenance and
+  integrity receipts for the gitignored stage snapshots. Those deterministic-receipt gaps are
+  now an autonomous hardening item before the pilot can count as the plan's reproducible artifact.
 
 ## Plan-level verdicts
 
@@ -79,9 +86,9 @@ branch: "docs/recent-plan-audit-2026-08-20"
 | U5 corpus schema/builder | **Complete** | Corpus v1: 225 scoreable, 15 needs-review, 30 no-match |
 | U6 label-blind generation | **Complete** | Generation artifacts and corpus v1 landed |
 | U7 grader/close-call lane | **Partial** | Code is complete. The first consensus-audit sitting, confidence-floor calibration, and human ratification into corpus v2 wait on D1/D2 and owner adjudication. |
-| U8 synthetic scoring | **Partial; runtime defect confirmed** | Recovery/review code is committed. A ~4h27m run reached ~30.5 GB RSS, completed scoring, then correctly failed closed on four public/static metadata collisions. Fix the publication provenance boundary and bounded-memory probe path, then produce `eval/reports/synthetic-baseline-v1.json`. |
+| U8 synthetic scoring | **Partial; bounded rerun active** | Recovery/review code and the local bounded-cache containment are committed and pushed. The one-passage real path leaves affected upstream caches empty and peaks near 699 MiB. The complete deterministic run is active and must finish, validate, and commit `eval/reports/synthetic-baseline-v1.json`. |
 | U9 guarded iteration loop | **Partial** | Code is complete; no real corpus-v1 improvement iteration is recorded yet. Pilot must run first. |
-| U10 deterministic comparison | **Partial** | Runners and orchestration are merged; run the live gate, 30-item pilot, then final full comparison. |
+| U10 deterministic comparison | **Partial** | Runners and orchestration are merged. Close the live-gate selection and reproducibility-receipt gaps, merge/verify the mapper alignment, then run the live gate, 30-item pilot, and final full comparison. |
 | U11 owner-run LLM lanes | **Partial / owner-run** | Flags and seams are merged. Run both shipped configurations with owner-held keys and record explicit skip markers where unavailable. |
 | U12 parity + attribution | **Partial** | Static parity map is complete. Add controlled replay/ablation only where U10 reveals an incumbent win, subject to D4. |
 | U13 campaign report/verdict | **Not started** | Assemble after U9/U10/U12; final firm exam and adoption decision are owner gates. |
@@ -91,26 +98,34 @@ branch: "docs/recent-plan-audit-2026-08-20"
 Execute in dependency order. A later item is queued even when an earlier owner gate prevents it
 from running in the same session.
 
-1. **Repair and rerun U8 baseline.** Derive the 10/50/200 probe from the ranked top-200
-   results already retained by the score run instead of caching every full adapter result; add a
-   static-metadata leak preflight; implement D5's public-metadata policy; then verify corpus/config
-   hashes, zero non-public leak collisions, deterministic report content, and the depth probe.
-2. **Run U10 live gate and 30-item pilot.** Use the pinned v0.4.0 incumbent lanes in the two
-   sibling repos, leave both trees clean, and commit the pilot artifact or a clearly named pilot
-   report if the final report path is reserved.
-3. **Interpret the pilot without changing settled policy.** Continue when the result is a clear
+1. **Finish and validate the active U8 baseline.** The bounded-memory probe path, public-metadata
+   preflight, and D5 policy are implemented and pushed. Let the active 225-item plus no-match run
+   finish; then verify corpus/config hashes, zero non-public leak collisions, deterministic report
+   content, depth-probe metrics, and resource evidence before committing the report.
+2. **Merge and verify the mapper alignment prerequisite.** Land
+   [alea-institute/folio-mapper#9](https://github.com/alea-institute/folio-mapper/pull/9), update the
+   mapper checkout, and confirm its lock and active environment resolve exact `folio-python==0.3.6`.
+   Abort U10 on any consumer-version drift.
+3. **Close U10's deterministic-receipt gaps.** Preserve the existing default no-match behavior,
+   but provide a true one-scoreable-item gate; record the invocation/config selection,
+   deterministic committed-set rule, candidate and consumer Git SHAs/initial dirty states, and
+   integrity receipts for gitignored full stage snapshots in the committed summary.
+4. **Run U10 live gate and 30-item pilot.** Use the pinned v0.4.0 incumbent lanes in the two
+   sibling repos, leave both trees byte-identical to their starting status, and commit the pilot
+   artifact or a clearly named pilot report if the final report path is reserved.
+5. **Interpret the pilot without changing settled policy.** Continue when the result is a clear
    go; route an in-band hold or material incumbent win to the Decision Sheet with exact metrics.
-4. **Run the first U9 shared-scope iteration.** Target synonym/definition-side matching and
+6. **Run the first U9 shared-scope iteration.** Target synonym/definition-side matching and
    ranking only; retrieval widening is ruled out by attempt-0004. Baseline to beat: tune F1
    0.243372, with the synthetic baseline as the agent-runnable development metric.
-5. **Complete U12 runtime attribution when needed.** For any incumbent-winning cohort, perform
+7. **Complete U12 runtime attribution when needed.** For any incumbent-winning cohort, perform
    the controlled replay/ablation required by D4 before naming a port candidate.
-6. **Continue U9 until its guarded stop/checkpoint.** Shared-scope, same-cohort iteration records
+8. **Continue U9 until its guarded stop/checkpoint.** Shared-scope, same-cohort iteration records
    only; then prepare the exact aggregate-only interim firm command for the owner.
-7. **Assemble U13 up to owner gates.** Join synthetic trajectory, comparison bands, parity
+9. **Assemble U13 up to owner gates.** Join synthetic trajectory, comparison bands, parity
    evidence, and prepared firm-exam command. After owner results, commit the final report and route
    the adoption verdict.
-8. **Run all repository gates and clean campaign-only temporary state.** Preserve unrelated
+10. **Run all repository gates and clean campaign-only temporary state.** Preserve unrelated
    `.codex-out/` and `.codex/` files. Delete protected originals only through the owner-side
    close-out procedure after the final exam.
 
@@ -193,7 +208,7 @@ Notes (optional):
 
 ## Verification state at audit time
 
-- `.venv/bin/python -m pytest -q`: **1000 passed, 1 skipped** after structured review fixes.
+- `.venv/bin/python -m pytest -q`: **1014 passed, 1 skipped** after the bounded-cache containment.
 - `uv run ruff check`: **passed**.
 - `uv run mypy src`: **passed (26 files)**.
 - `uv run mypy eval`: initially exposed 10 residual errors in four post-gold helper scripts;
@@ -205,6 +220,10 @@ Notes (optional):
   determinism `target`). No report was written; no private surfaces were printed or inspected.
 - Peak observed baseline RSS: **~30.5 GB**. The full-result per-passage adapter cache is the
   confirmed source; the existing ranked top-200 item results are sufficient for the depth probe.
+- Bounded one-passage evidence: affected folio-python caches return to zero; peak RSS is
+  715,524 KiB (about 699 MiB). The complete bounded rerun emits no per-item progress and is still
+  active; the measured one-item path implies a conservative roughly 27-hour total including the
+  no-match slice.
 - Synthetic baseline/comparison/final-report receipts: still pending.
 
 ## Shipping state
@@ -214,4 +233,5 @@ Notes (optional):
 - Strict-type gate commit: `ae16a08`.
 - Structured-review fix commit: `88a0732`.
 - This handoff is committed alone on its focused documentation branch.
-- Nothing from this audit session is pushed or merged unless the final handoff says otherwise.
+- Commit `4ad694f` and subsequent audit-only updates are pushed on the focused branch; the branch
+  is not merged.
