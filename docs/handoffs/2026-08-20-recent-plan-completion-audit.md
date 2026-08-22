@@ -151,22 +151,29 @@ from running in the same session.
    validated report and is ready for review, open the correctly scoped folio-resolve PR without
    dropping the true one-scoreable-item gate, exact process receipts, input fingerprints, full
    stage snapshots, gold/no-match sets, or candidate lifecycle attribution.
-4. **Run U10 live gate and 30-item pilot.** Use the pinned v0.4.0 incumbent lanes in the two
+4. **Add resumable/sharded scoring after U10 lands, before another full baseline.** Checkpoint each
+   surface-free post-adapter result atomically (IRI, post-gate score, counts, suppressions), then
+   replay checkpoints through the unchanged score/depth-probe/report/leak-check path. Require
+   byte-identical direct, resumed, and differently ordered sharded reports; fail closed on any
+   fingerprint or record corruption. Implement after U10 because that branch changes the same
+   `AdapterResult`/`DocumentAdapter.adapt` seam; starting earlier creates avoidable conflicts and
+   cannot recover the already-running process retroactively.
+5. **Run U10 live gate and 30-item pilot.** Use the pinned v0.4.0 incumbent lanes in the two
    sibling repos, leave both trees byte-identical to their starting status, and commit the pilot
    artifact or a clearly named pilot report if the final report path is reserved.
-5. **Interpret the pilot without changing settled policy.** Continue when the result is a clear
+6. **Interpret the pilot without changing settled policy.** Continue when the result is a clear
    go; route an in-band hold or material incumbent win to the Decision Sheet with exact metrics.
-6. **Run the first U9 shared-scope iteration.** Target synonym/definition-side matching and
+7. **Run the first U9 shared-scope iteration.** Target synonym/definition-side matching and
    ranking only; retrieval widening is ruled out by attempt-0004. Baseline to beat: tune F1
    0.243372, with the synthetic baseline as the agent-runnable development metric.
-7. **Complete U12 runtime attribution when needed.** For any incumbent-winning cohort, perform
+8. **Complete U12 runtime attribution when needed.** For any incumbent-winning cohort, perform
    the controlled replay/ablation required by D4 before naming a port candidate.
-8. **Continue U9 until its guarded stop/checkpoint.** Shared-scope, same-cohort iteration records
+9. **Continue U9 until its guarded stop/checkpoint.** Shared-scope, same-cohort iteration records
    only; then prepare the exact aggregate-only interim firm command for the owner.
-9. **Assemble U13 up to owner gates.** Join synthetic trajectory, comparison bands, parity
+10. **Assemble U13 up to owner gates.** Join synthetic trajectory, comparison bands, parity
    evidence, and prepared firm-exam command. After owner results, commit the final report and route
    the adoption verdict.
-10. **Run all repository gates and clean campaign-only temporary state.** Preserve unrelated
+11. **Run all repository gates and clean campaign-only temporary state.** Preserve unrelated
    `.codex-out/` and `.codex/` files. Delete protected originals only through the owner-side
    close-out procedure after the final exam.
 
