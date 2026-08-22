@@ -72,16 +72,23 @@ branch: "docs/recent-plan-audit-2026-08-20"
   because it depends on the active U8 branch, which is not ready for review until the baseline
   artifact finishes.
 - [alea-institute/folio-mapper#9](https://github.com/alea-institute/folio-mapper/pull/9) now also
-  contains commit `c413a417`: the deterministic runner synchronously builds the production
+  contains reviewed head `c413a417`: the deterministic runner synchronously builds the production
   embedding index and aborts on an unavailable index or local-score fallback instead of measuring
   a keyword-only strawman. Its focused runner suite passes (`7 passed`).
-- [alea-institute/folio-enrich#38](https://github.com/alea-institute/folio-enrich/pull/38) proposes
-  commit `b039a86`: the deterministic lane actively pins, emits, and restores every known
+- [alea-institute/folio-enrich#38](https://github.com/alea-institute/folio-enrich/pull/38) contains
+  reviewed head `b039a86`: the deterministic lane actively pins, emits, and restores every known
   environment-overridable behavioral setting, including proposition extraction and property POS
   mismatch penalty. Its focused runner suite passes (`6 passed`).
-- Both consumer PRs remain upstream prerequisites. After merge, refresh both checkouts and prove
-  the exact released/locked `folio-python` version and deterministic config contracts before the
-  one-item U10 gate. Abort on any drift; do not weaken the new fail-closed checks.
+- All three authorized upstream PRs merged on 2026-08-22: folio-python #20 as `1b4fb349`, mapper
+  #9 as `a5bd0512`, and enrich #38 as `bb576ac`. The fetched mapper/enrich default-branch trees
+  are byte-identical to the reviewed heads. Mapper's lock and active environment resolve
+  `folio-python 0.3.6`; enrich's lock and active environment also resolve `0.3.6`, satisfying the
+  fail-closed U10 version-equality prerequisite. The focused deterministic-runner contract tests
+  passed before merge against those identical trees.
+- The bounded-cache policy is now merged into folio-python source, but no release contains it yet:
+  the latest release remains `v0.4.0` from 2026-08-18, before merge commit `1b4fb349`. Keep the
+  local `f9ee23d` containment until a containing release can be installed and the durable
+  post-release memory/determinism checklist passes.
 
 ## Plan-level verdicts
 
@@ -114,7 +121,7 @@ branch: "docs/recent-plan-audit-2026-08-20"
 | U7 grader/close-call lane | **Partial** | Code is complete. The first consensus-audit sitting, confidence-floor calibration, and human ratification into corpus v2 wait on D1/D2 and owner adjudication. |
 | U8 synthetic scoring | **Partial; bounded rerun active** | Recovery/review code and the local bounded-cache containment are committed and pushed. The one-passage real path leaves affected upstream caches empty and peaks near 699 MiB. The complete deterministic run is active and must finish, validate, and commit `eval/reports/synthetic-baseline-v1.json`. |
 | U9 guarded iteration loop | **Partial** | Code is complete; no real corpus-v1 improvement iteration is recorded yet. Pilot must run first. |
-| U10 deterministic comparison | **Partial; local hardening complete** | Local live-gate selection, reproducibility receipts, stage attribution, and fail-closed consumer contracts are implemented and pushed. Merge/verify mapper PR #9 and enrich PR #38, then run the live gate, 30-item pilot, and final full comparison. |
+| U10 deterministic comparison | **Partial; prerequisites merged and verified** | Local live-gate selection, reproducibility receipts, stage attribution, and fail-closed consumer contracts are implemented and pushed. Mapper #9 and enrich #38 are merged; both landed trees and active environments resolve the required common `folio-python 0.3.6`. Run the live gate, 30-item pilot, and final full comparison after U8 releases the shared runtime. |
 | U11 owner-run LLM lanes | **Partial / owner-run** | Flags and seams are merged. Run both shipped configurations with owner-held keys and record explicit skip markers where unavailable. |
 | U12 parity + attribution | **Partial** | Static parity map is complete. Add controlled replay/ablation only where U10 reveals an incumbent win, subject to D4. |
 | U13 campaign report/verdict | **Not started** | Assemble after U9/U10/U12; final firm exam and adoption decision are owner gates. |
@@ -128,12 +135,11 @@ from running in the same session.
    preflight, and D5 policy are implemented and pushed. Let the active 225-item plus no-match run
    finish; then verify corpus/config hashes, zero non-public leak collisions, deterministic report
    content, depth-probe metrics, and resource evidence before committing the report.
-2. **Merge and verify both consumer prerequisites.** Land
-   [alea-institute/folio-mapper#9](https://github.com/alea-institute/folio-mapper/pull/9) and
-   [alea-institute/folio-enrich#38](https://github.com/alea-institute/folio-enrich/pull/38), update
-   both checkouts, and confirm their locks and active environments resolve the exact common
-   `folio-python` version. Exercise the exact deterministic config/stage contracts. Abort U10 on
-   any version drift, unavailable mapper embedding rerank, or enrich setting drift.
+2. **Complete — merge and verify both consumer prerequisites.** Mapper #9 and enrich #38 merged as
+   `a5bd0512` and `bb576ac`. Their fetched default-branch trees match the reviewed heads; both
+   locks and active environments resolve `folio-python 0.3.6`. Focused contract suites passed on
+   the identical pre-merge trees. Preserve the fail-closed aborts for version drift, unavailable
+   mapper embedding rerank, and enrich setting drift in every live run.
 3. **Publish the completed U10 deterministic-receipt hardening after U8.** The implementation is
    committed and pushed on `fix/u10-comparison-provenance`; once the parent U8 branch contains its
    validated report and is ready for review, open the correctly scoped folio-resolve PR without
