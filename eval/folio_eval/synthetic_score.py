@@ -127,10 +127,27 @@ def nounish_ngrams(text: str, *, max_tokens: int = 5) -> tuple[str, ...]:
 
 
 @dataclass(frozen=True, slots=True)
+class CandidateTrace:
+    """Deterministic lifecycle evidence for one deduplicated candidate IRI."""
+
+    iri: str
+    label: str
+    branch: str
+    extraction_path: str
+    surface_term: str
+    pre_gate_score: float
+    post_gate_score: float | None
+    gate_disposition: str
+    gated: bool
+    gate_reason: str
+
+
+@dataclass(frozen=True, slots=True)
 class AdapterResult:
     candidates: tuple[MatchCandidate, ...]
     raw_candidate_count: int
     suppression_counters: Mapping[str, int]
+    traces: tuple[CandidateTrace, ...] = ()
 
 
 @dataclass
@@ -208,10 +225,26 @@ class DocumentAdapter:
 
         counters = dict.fromkeys(SUPPRESSION_CATEGORIES, 0)
         survivors: list[MatchCandidate] = []
+        traces: list[CandidateTrace] = []
         for iri in sorted(best):
             candidate = best[iri]
+            pre_gate_score = candidate.score
             if self.blocklist.is_blocked(candidate.surface_term, candidate.iri):
                 counters["blocklist"] += 1
+                traces.append(
+                    CandidateTrace(
+                        iri=candidate.iri,
+                        label=candidate.label,
+                        branch=candidate.branch,
+                        extraction_path=candidate.extraction_path,
+                        surface_term=candidate.surface_term,
+                        pre_gate_score=pre_gate_score,
+                        post_gate_score=None,
+                        gate_disposition="blocklist",
+                        gated=False,
+                        gate_reason="alias_blocklist",
+                    )
+                )
                 continue
             place = self.place_gate.evaluate(
                 query=candidate.surface_term,
@@ -221,23 +254,82 @@ class DocumentAdapter:
             )
             if place.demoted and place.score < self.score_floor:
                 counters["place_gate"] += 1
+                traces.append(
+                    CandidateTrace(
+                        iri=candidate.iri,
+                        label=candidate.label,
+                        branch=candidate.branch,
+                        extraction_path=candidate.extraction_path,
+                        surface_term=candidate.surface_term,
+                        pre_gate_score=pre_gate_score,
+                        post_gate_score=place.score,
+                        gate_disposition="place_gate",
+                        gated=True,
+                        gate_reason=place.reason,
+                    )
+                )
                 continue
             short = self.short_gate.evaluate(
                 query=candidate.surface_term, label=candidate.label, score=place.score
             )
             if short.demoted and short.score < self.score_floor:
                 counters["short_label_gate"] += 1
+                traces.append(
+                    CandidateTrace(
+                        iri=candidate.iri,
+                        label=candidate.label,
+                        branch=candidate.branch,
+                        extraction_path=candidate.extraction_path,
+                        surface_term=candidate.surface_term,
+                        pre_gate_score=pre_gate_score,
+                        post_gate_score=short.score,
+                        gate_disposition="short_label_gate",
+                        gated=True,
+                        gate_reason=short.reason,
+                    )
+                )
                 continue
             if short.score < self.score_floor:
                 counters["score_floor"] += 1
+                traces.append(
+                    CandidateTrace(
+                        iri=candidate.iri,
+                        label=candidate.label,
+                        branch=candidate.branch,
+                        extraction_path=candidate.extraction_path,
+                        surface_term=candidate.surface_term,
+                        pre_gate_score=pre_gate_score,
+                        post_gate_score=short.score,
+                        gate_disposition="score_floor",
+                        gated=place.demoted or short.demoted,
+                        gate_reason="; ".join((place.reason, short.reason)),
+                    )
+                )
                 continue
             candidate.score = short.score
             candidate.gated = place.demoted or short.demoted
             candidate.gate_reason = "; ".join((place.reason, short.reason))
             survivors.append(candidate)
+            traces.append(
+                CandidateTrace(
+                    iri=candidate.iri,
+                    label=candidate.label,
+                    branch=candidate.branch,
+                    extraction_path=candidate.extraction_path,
+                    surface_term=candidate.surface_term,
+                    pre_gate_score=pre_gate_score,
+                    post_gate_score=candidate.score,
+                    gate_disposition="survived",
+                    gated=candidate.gated,
+                    gate_reason=candidate.gate_reason,
+                )
+            )
         survivors.sort(key=lambda candidate: (-candidate.score, candidate.iri))
         return AdapterResult(
-            tuple(survivors), len(best), MappingProxyType(dict(counters))
+            tuple(survivors),
+            len(best),
+            MappingProxyType(dict(counters)),
+            tuple(traces),
         )
 
     def __call__(self, passage: str | GoldItemRecord) -> Sequence[CandidateLike]:

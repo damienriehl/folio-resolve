@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections import Counter
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -142,6 +143,12 @@ def test_adapter_is_deterministic_and_accounts_for_every_raw_candidate() -> None
     )
     assert first.raw_candidate_count == len(first.candidates) + sum(first.suppression_counters.values())
     assert first.suppression_counters["blocklist"] >= 1
+    assert len(first.traces) == first.raw_candidate_count
+    assert [trace.iri for trace in first.traces] == sorted(trace.iri for trace in first.traces)
+    dispositions = Counter(trace.gate_disposition for trace in first.traces)
+    assert dispositions["survived"] == len(first.candidates)
+    for category, count in first.suppression_counters.items():
+        assert dispositions[category] == count
 
 
 def test_adapter_committed_sets_repeat_identically() -> None:

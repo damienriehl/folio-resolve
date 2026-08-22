@@ -997,6 +997,28 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _execution_receipt(
+    raw_argv: Sequence[str], *, supplied_argv: bool
+) -> dict[str, object]:
+    """Record the actual process argv, or a canonical replay for programmatic calls."""
+    if supplied_argv:
+        argv = [
+            str(Path(sys.executable).resolve()),
+            str((_EVAL_ROOT / "run_downstream.py").resolve()),
+            *raw_argv,
+        ]
+        kind = "canonical_replay"
+    else:
+        argv = [str(Path(sys.executable).resolve()), *sys.argv]
+        kind = "executed_process"
+    return {
+        "kind": kind,
+        "argv": argv,
+        "working_directory": str(Path.cwd().resolve()),
+        "environment": {"PYTHONHASHSEED": os.environ.get("PYTHONHASHSEED", "")},
+    }
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     raw_argv = tuple(sys.argv[1:] if argv is None else argv)
     parser = _parser()
@@ -1005,6 +1027,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "snapshot":
         return _cmd_snapshot(args)
     if args.command == "run_synthetic_comparison":
+        if args.scoreable_only and args.limit != 1:
+            parser.error("--scoreable-only requires --limit 1 for the U10 live gate")
+        if os.environ.get("PYTHONHASHSEED") != "0":
+            parser.error("run_synthetic_comparison requires PYTHONHASHSEED=0")
         from folio import FOLIO
 
         from folio_resolve.ontology import FolioPythonProvider
@@ -1037,10 +1063,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             limit=args.limit,
             include_nomatch=not args.scoreable_only,
             incumbent_version=args.incumbent_version,
-            comparison_invocation=(
-                "python",
-                "eval/run_downstream.py",
-                *raw_argv,
+            comparison_invocation=_execution_receipt(
+                raw_argv,
+                supplied_argv=argv is not None,
             ),
         )
         write_comparison(

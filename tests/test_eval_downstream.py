@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -23,6 +24,7 @@ from folio_eval.downstream import (
     ProbeAreaResult,
     ProbeItemResult,
     TestSuiteResult,
+    _execution_receipt,
     _parser,
     assert_within_root,
     build_aggregate,
@@ -33,6 +35,7 @@ from folio_eval.downstream import (
     clean_tree_guard,
     diff_snapshots,
     load_row_snapshot,
+    main,
     parse_junitxml,
     write_aggregate,
     write_row_snapshot,
@@ -69,6 +72,53 @@ def test_synthetic_comparison_cli_has_explicit_scoreable_only_live_gate() -> Non
 
     assert args.limit == 1
     assert args.scoreable_only is True
+
+
+def _comparison_argv(*extra: str) -> list[str]:
+    return [
+        "run_synthetic_comparison",
+        "--corpus-manifest",
+        "corpus.json",
+        "--config",
+        "config.json",
+        "--out",
+        "comparison.json",
+        "--items",
+        "items.jsonl",
+        "--row-snapshot-dir",
+        "snapshots",
+        "--leak-manifest",
+        "leaks.json",
+        "--salt-file",
+        "salt",
+        *extra,
+    ]
+
+
+@pytest.mark.parametrize("extra", [(), ("--limit", "30")])
+def test_scoreable_only_rejects_non_live_gate_limits(extra: tuple[str, ...]) -> None:
+    with pytest.raises(SystemExit) as error:
+        main([*_comparison_argv(*extra), "--scoreable-only"])
+
+    assert error.value.code == 2
+
+
+def test_execution_receipt_records_resolved_process_and_determinism(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(sys, "executable", "/tmp/venv/bin/python")
+    monkeypatch.setattr(sys, "argv", ["eval/run_downstream.py", "run_synthetic_comparison"])
+    monkeypatch.setenv("PYTHONHASHSEED", "0")
+
+    receipt = _execution_receipt(("run_synthetic_comparison",), supplied_argv=False)
+
+    assert receipt["kind"] == "executed_process"
+    assert receipt["argv"] == [
+        "/tmp/venv/bin/python",
+        "eval/run_downstream.py",
+        "run_synthetic_comparison",
+    ]
+    assert receipt["environment"] == {"PYTHONHASHSEED": "0"}
 
 
 def test_assert_within_root_passes_for_a_path_inside_the_checkout(tmp_path: Path) -> None:
