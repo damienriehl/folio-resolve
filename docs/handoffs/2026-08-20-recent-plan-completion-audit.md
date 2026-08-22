@@ -89,6 +89,12 @@ branch: "docs/recent-plan-audit-2026-08-20"
   the latest release remains `v0.4.0` from 2026-08-18, before merge commit `1b4fb349`. Keep the
   local `f9ee23d` containment until a containing release can be installed and the durable
   post-release memory/determinism checklist passes.
+- Runtime-ready clean worktrees now survive ordinary reboot/cleanup under
+  `.worktrees/external/folio-mapper-u10-merged` at `a5bd0512` and
+  `.worktrees/external/folio-enrich-u10-runner` at `bb576ac`. Their locked environments contain
+  `folio-python 0.3.6` and `folio-resolve 0.4.0`; mapper also contains the locked FAISS and
+  sentence-transformers dependencies. The clean U10 candidate worktree is provisioned at
+  `.worktrees/fix/u10-comparison-provenance`. Only the live execution remains gated on U8.
 
 ## Plan-level verdicts
 
