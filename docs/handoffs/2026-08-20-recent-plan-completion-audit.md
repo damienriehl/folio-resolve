@@ -57,6 +57,32 @@ branch: "docs/recent-plan-audit-2026-08-20"
   integrity receipts for the gitignored stage snapshots. Those deterministic-receipt gaps are
   now an autonomous hardening item before the pilot can count as the plan's reproducible artifact.
 
+## Execution update — 2026-08-22
+
+- U8's bounded full-corpus run remains healthy at roughly 23 hours elapsed: the scorer holds one
+  CPU at 99.9%, RSS is stable near 687 MiB, and the atomic report path is unchanged pending
+  completion. Do not start a competing scorer or consumer suite while it runs.
+- U10's local reproducibility prerequisite is implemented on pushed branch
+  `fix/u10-comparison-provenance` through commits `732325b` and `f64f08c`. It now fails closed on
+  dirty source repositories, unknown/version-skewed consumers, mapper embedding fallback,
+  consumer config/stage drift, non-canonical rows, shared-input mutation, and invalid
+  scoreable-only runs. The committed artifact records exact execution/config/Git/input/stage
+  evidence, gold and no-match IRI sets, and candidate lifecycle attribution. Focused evidence is
+  `77 passed`; Ruff, mypy, and diff checks are clean. The branch is pushed but has no PR yet
+  because it depends on the active U8 branch, which is not ready for review until the baseline
+  artifact finishes.
+- [alea-institute/folio-mapper#9](https://github.com/alea-institute/folio-mapper/pull/9) now also
+  contains commit `c413a417`: the deterministic runner synchronously builds the production
+  embedding index and aborts on an unavailable index or local-score fallback instead of measuring
+  a keyword-only strawman. Its focused runner suite passes (`7 passed`).
+- [alea-institute/folio-enrich#38](https://github.com/alea-institute/folio-enrich/pull/38) proposes
+  commit `b039a86`: the deterministic lane actively pins, emits, and restores every known
+  environment-overridable behavioral setting, including proposition extraction and property POS
+  mismatch penalty. Its focused runner suite passes (`6 passed`).
+- Both consumer PRs remain upstream prerequisites. After merge, refresh both checkouts and prove
+  the exact released/locked `folio-python` version and deterministic config contracts before the
+  one-item U10 gate. Abort on any drift; do not weaken the new fail-closed checks.
+
 ## Plan-level verdicts
 
 | Plan | Verdict | Evidence | Remaining authority |
@@ -88,7 +114,7 @@ branch: "docs/recent-plan-audit-2026-08-20"
 | U7 grader/close-call lane | **Partial** | Code is complete. The first consensus-audit sitting, confidence-floor calibration, and human ratification into corpus v2 wait on D1/D2 and owner adjudication. |
 | U8 synthetic scoring | **Partial; bounded rerun active** | Recovery/review code and the local bounded-cache containment are committed and pushed. The one-passage real path leaves affected upstream caches empty and peaks near 699 MiB. The complete deterministic run is active and must finish, validate, and commit `eval/reports/synthetic-baseline-v1.json`. |
 | U9 guarded iteration loop | **Partial** | Code is complete; no real corpus-v1 improvement iteration is recorded yet. Pilot must run first. |
-| U10 deterministic comparison | **Partial** | Runners and orchestration are merged. Close the live-gate selection and reproducibility-receipt gaps, merge/verify the mapper alignment, then run the live gate, 30-item pilot, and final full comparison. |
+| U10 deterministic comparison | **Partial; local hardening complete** | Local live-gate selection, reproducibility receipts, stage attribution, and fail-closed consumer contracts are implemented and pushed. Merge/verify mapper PR #9 and enrich PR #38, then run the live gate, 30-item pilot, and final full comparison. |
 | U11 owner-run LLM lanes | **Partial / owner-run** | Flags and seams are merged. Run both shipped configurations with owner-held keys and record explicit skip markers where unavailable. |
 | U12 parity + attribution | **Partial** | Static parity map is complete. Add controlled replay/ablation only where U10 reveals an incumbent win, subject to D4. |
 | U13 campaign report/verdict | **Not started** | Assemble after U9/U10/U12; final firm exam and adoption decision are owner gates. |
@@ -102,14 +128,17 @@ from running in the same session.
    preflight, and D5 policy are implemented and pushed. Let the active 225-item plus no-match run
    finish; then verify corpus/config hashes, zero non-public leak collisions, deterministic report
    content, depth-probe metrics, and resource evidence before committing the report.
-2. **Merge and verify the mapper alignment prerequisite.** Land
-   [alea-institute/folio-mapper#9](https://github.com/alea-institute/folio-mapper/pull/9), update the
-   mapper checkout, and confirm its lock and active environment resolve exact `folio-python==0.3.6`.
-   Abort U10 on any consumer-version drift.
-3. **Close U10's deterministic-receipt gaps.** Preserve the existing default no-match behavior,
-   but provide a true one-scoreable-item gate; record the invocation/config selection,
-   deterministic committed-set rule, candidate and consumer Git SHAs/initial dirty states, and
-   integrity receipts for gitignored full stage snapshots in the committed summary.
+2. **Merge and verify both consumer prerequisites.** Land
+   [alea-institute/folio-mapper#9](https://github.com/alea-institute/folio-mapper/pull/9) and
+   [alea-institute/folio-enrich#38](https://github.com/alea-institute/folio-enrich/pull/38), update
+   both checkouts, and confirm their locks and active environments resolve the exact common
+   `folio-python` version. Exercise the exact deterministic config/stage contracts. Abort U10 on
+   any version drift, unavailable mapper embedding rerank, or enrich setting drift.
+3. **Publish the completed U10 deterministic-receipt hardening after U8.** The implementation is
+   committed and pushed on `fix/u10-comparison-provenance`; once the parent U8 branch contains its
+   validated report and is ready for review, open the correctly scoped folio-resolve PR without
+   dropping the true one-scoreable-item gate, exact process receipts, input fingerprints, full
+   stage snapshots, gold/no-match sets, or candidate lifecycle attribution.
 4. **Run U10 live gate and 30-item pilot.** Use the pinned v0.4.0 incumbent lanes in the two
    sibling repos, leave both trees byte-identical to their starting status, and commit the pilot
    artifact or a clearly named pilot report if the final report path is reserved.
