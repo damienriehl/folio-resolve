@@ -151,16 +151,16 @@ from running in the same session.
    validated report and is ready for review, open the correctly scoped folio-resolve PR without
    dropping the true one-scoreable-item gate, exact process receipts, input fingerprints, full
    stage snapshots, gold/no-match sets, or candidate lifecycle attribution.
-4. **Add resumable/sharded scoring after U10 lands, before another full baseline.** Checkpoint each
-   surface-free post-adapter result atomically (IRI, post-gate score, counts, suppressions), then
-   replay checkpoints through the unchanged score/depth-probe/report/leak-check path. Require
+4. **Run U10 live gate and 30-item pilot.** Use the pinned v0.4.0 incumbent lanes in the two
+   sibling repos, leave both trees byte-identical to their starting status, and commit the pilot
+   artifact or a clearly named pilot report if the final report path is reserved.
+5. **Add resumable/sharded scoring after U10 validates, before another full baseline.** Checkpoint
+   each surface-free post-adapter result atomically (IRI, post-gate score, counts, suppressions),
+   then replay checkpoints through the unchanged score/depth-probe/report/leak-check path. Require
    byte-identical direct, resumed, and differently ordered sharded reports; fail closed on any
    fingerprint or record corruption. Implement after U10 because that branch changes the same
    `AdapterResult`/`DocumentAdapter.adapt` seam; starting earlier creates avoidable conflicts and
    cannot recover the already-running process retroactively.
-5. **Run U10 live gate and 30-item pilot.** Use the pinned v0.4.0 incumbent lanes in the two
-   sibling repos, leave both trees byte-identical to their starting status, and commit the pilot
-   artifact or a clearly named pilot report if the final report path is reserved.
 6. **Interpret the pilot without changing settled policy.** Continue when the result is a clear
    go; route an in-band hold or material incumbent win to the Decision Sheet with exact metrics.
 7. **Run the first U9 shared-scope iteration.** Target synonym/definition-side matching and
