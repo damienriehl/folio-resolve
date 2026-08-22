@@ -23,6 +23,7 @@ from folio_eval.downstream import (
     ProbeAreaResult,
     ProbeItemResult,
     TestSuiteResult,
+    _parser,
     assert_within_root,
     build_aggregate,
     canonical_json,
@@ -40,6 +41,34 @@ from folio_eval.downstream import (
 # --------------------------------------------------------------------------------------
 # __file__-containment assertion — the failure path
 # --------------------------------------------------------------------------------------
+
+
+def test_synthetic_comparison_cli_has_explicit_scoreable_only_live_gate() -> None:
+    args = _parser().parse_args(
+        [
+            "run_synthetic_comparison",
+            "--corpus-manifest",
+            "corpus.json",
+            "--config",
+            "config.json",
+            "--out",
+            "comparison.json",
+            "--items",
+            "items.jsonl",
+            "--row-snapshot-dir",
+            "snapshots",
+            "--leak-manifest",
+            "leaks.json",
+            "--salt-file",
+            "salt",
+            "--limit",
+            "1",
+            "--scoreable-only",
+        ]
+    )
+
+    assert args.limit == 1
+    assert args.scoreable_only is True
 
 
 def test_assert_within_root_passes_for_a_path_inside_the_checkout(tmp_path: Path) -> None:
