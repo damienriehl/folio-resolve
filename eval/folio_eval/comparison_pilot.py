@@ -657,6 +657,24 @@ def _assert_write_paths_are_safe(args: argparse.Namespace) -> None:
             raise PilotCheckpointError("checkpoint_dir and out must not overlap")
     else:
         raise PilotCheckpointError("checkpoint_dir and out must not overlap")
+    for input_name in (
+        "corpus_manifest",
+        "config",
+        "leak_manifest",
+        "salt_file",
+        "public_metadata",
+    ):
+        input_path = getattr(args, input_name, None)
+        if input_path is None:
+            continue
+        if (
+            args.out == input_path
+            or args.checkpoint_dir == input_path
+            or args.checkpoint_dir in input_path.parents
+        ):
+            raise PilotCheckpointError(
+                f"writable pilot path must not overlap {input_name}: {input_path}"
+            )
     repositories = {
         "candidate": FOLIO_RESOLVE_ROOT.resolve(),
         "enrich": args.enrich_root,

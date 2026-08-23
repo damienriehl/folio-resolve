@@ -275,6 +275,20 @@ def test_final_report_must_not_overlap_checkpoint_artifacts(tmp_path: Path) -> N
         pilot_module._assert_write_paths_are_safe(args)
 
 
+def test_final_report_must_not_overwrite_read_inputs(tmp_path: Path) -> None:
+    salt_file = tmp_path / "salt"
+    args = SimpleNamespace(
+        checkpoint_dir=tmp_path / "checkpoint",
+        out=salt_file,
+        salt_file=salt_file,
+        mapper_root=tmp_path / "mapper",
+        enrich_root=tmp_path / "enrich",
+    )
+
+    with pytest.raises(PilotCheckpointError, match="must not overlap salt_file"):
+        pilot_module._assert_write_paths_are_safe(args)
+
+
 def test_command_path_preserves_repository_relative_spelling() -> None:
     path = pilot_module.FOLIO_RESOLVE_ROOT / "eval" / "synthetic" / "corpus.json"
 
