@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import venv
 from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
@@ -49,6 +50,13 @@ def _corpus(tmp_path: Path) -> LoadedCorpus:
         ),
         (SyntheticItem("none", "brief", "US", "None", provenance={"no_match": True}),),
     )
+
+
+def _isolated_python_site(tmp_path: Path) -> tuple[Path, Path]:
+    runtime = tmp_path / "runtime"
+    venv.EnvBuilder(with_pip=False).create(runtime)
+    version = f"python{pilot_module.sys.version_info.major}.{pilot_module.sys.version_info.minor}"
+    return runtime / "bin" / "python", runtime / "lib" / version / "site-packages"
 
 
 def _stack(stack: str, lane: str, item_id: str) -> dict[str, object]:
@@ -144,6 +152,8 @@ def test_consumer_environment_fingerprint_uses_probe_digests(
         "editable_source_files": 7,
         "editable_source_bytes": 700,
         "editable_sources_sha256": "f" * 64,
+        "import_path_entries": 5,
+        "import_path_sha256": "1" * 64,
         "model_asset_files": 5,
         "model_asset_bytes": 100,
         "model_assets_present": True,
@@ -163,7 +173,7 @@ def test_consumer_environment_fingerprint_uses_probe_digests(
         **payload,
         "venv_path_sha256": venv_path_sha256,
     }
-    assert observed[0][:2] == [str(interpreter), "-c"]
+    assert observed[0][:3] == [str(interpreter), "-P", "-c"]
 
     payload["model_assets_present"] = False
     with pytest.raises(PilotCheckpointError, match="model cache must be warmed"):
@@ -171,7 +181,7 @@ def test_consumer_environment_fingerprint_uses_probe_digests(
 
 
 def test_environment_probe_hashes_editable_source_bytes(tmp_path: Path) -> None:
-    site = tmp_path / "site"
+    interpreter, site = _isolated_python_site(tmp_path)
     dist_info = site / "demo-1.0.dist-info"
     source_root = tmp_path / "project" / "src"
     package = source_root / "demo"
@@ -197,19 +207,16 @@ def test_environment_probe_hashes_editable_source_bytes(tmp_path: Path) -> None:
     )
 
     def probe() -> dict[str, object]:
-        environment = dict(pilot_module.os.environ)
-        environment["PYTHONPATH"] = str(site)
         completed = pilot_module.subprocess.run(
             [
-                pilot_module.sys.executable,
-                "-S",
+                interpreter,
+                "-P",
                 "-c",
                 pilot_module._CONSUMER_ENVIRONMENT_PROBE,
             ],
             check=True,
             capture_output=True,
             text=True,
-            env=environment,
         )
         return json.loads(completed.stdout)
 
@@ -222,7 +229,7 @@ def test_environment_probe_hashes_editable_source_bytes(tmp_path: Path) -> None:
 
 
 def test_environment_probe_rejects_unowned_pth_import_root(tmp_path: Path) -> None:
-    site = tmp_path / "site"
+    interpreter, site = _isolated_python_site(tmp_path)
     dist_info = site / "demo-1.0.dist-info"
     source_root = tmp_path / "unowned"
     dist_info.mkdir(parents=True)
@@ -239,19 +246,48 @@ def test_environment_probe_rejects_unowned_pth_import_root(tmp_path: Path) -> No
         "demo-1.0.dist-info/RECORD,,\n",
         encoding="utf-8",
     )
-    environment = dict(pilot_module.os.environ)
-    environment["PYTHONPATH"] = str(site)
-
     completed = pilot_module.subprocess.run(
-        [pilot_module.sys.executable, "-S", "-c", pilot_module._CONSUMER_ENVIRONMENT_PROBE],
+        [interpreter, "-P", "-c", pilot_module._CONSUMER_ENVIRONMENT_PROBE],
         check=False,
         capture_output=True,
         text=True,
-        env=environment,
     )
 
     assert completed.returncode != 0
     assert "unowned .pth import root" in completed.stderr
+
+
+def test_environment_probe_rejects_executable_pth_path_injection(tmp_path: Path) -> None:
+    interpreter, site = _isolated_python_site(tmp_path)
+    dist_info = site / "hook-1.0.dist-info"
+    source_root = tmp_path / "mutable-hook-source"
+    dist_info.mkdir(parents=True)
+    source_root.mkdir()
+    (source_root / "module.py").write_text("VALUE = 1\n", encoding="utf-8")
+    (site / "hook.pth").write_text(
+        f"import sys; sys.path.insert(0, {str(source_root)!r})\n",
+        encoding="utf-8",
+    )
+    (dist_info / "METADATA").write_text(
+        "Metadata-Version: 2.1\nName: hook\nVersion: 1.0\n",
+        encoding="utf-8",
+    )
+    (dist_info / "RECORD").write_text(
+        "hook.pth,,\n"
+        "hook-1.0.dist-info/METADATA,,\n"
+        "hook-1.0.dist-info/RECORD,,\n",
+        encoding="utf-8",
+    )
+
+    completed = pilot_module.subprocess.run(
+        [interpreter, "-P", "-c", pilot_module._CONSUMER_ENVIRONMENT_PROBE],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode != 0
+    assert "unowned effective import root" in completed.stderr
 
 
 def test_fingerprint_prepares_both_incumbents_before_probing(

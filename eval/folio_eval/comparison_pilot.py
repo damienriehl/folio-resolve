@@ -44,6 +44,7 @@ import importlib.metadata
 import json
 import re
 import sys
+import sysconfig
 import tomllib
 from pathlib import Path
 from urllib.parse import unquote, urlparse
@@ -61,6 +62,7 @@ def digest_file(path):
 distributions = []
 installed_entries = []
 editable_entries = []
+owned_import_roots = []
 resolved_digests = {}
 for distribution in importlib.metadata.distributions():
     name = distribution.metadata.get("Name", "")
@@ -114,6 +116,7 @@ for distribution in importlib.metadata.distributions():
                 except ValueError as exc:
                     raise RuntimeError("editable .pth import root is outside its project") from exc
                 source_roots.append(candidate)
+                owned_import_roots.append(candidate)
             if not source_roots:
                 pyproject = editable_root / "pyproject.toml"
                 if pyproject.is_file():
@@ -186,6 +189,39 @@ editable_payload = json.dumps(
     editable_entries, ensure_ascii=True, separators=(",", ":")
 ).encode()
 
+stdlib_roots = {
+    Path(path).resolve()
+    for key in ("stdlib", "platstdlib")
+    if (path := sysconfig.get_path(key))
+}
+site_roots = {
+    Path(path).resolve()
+    for key in ("purelib", "platlib")
+    if (path := sysconfig.get_path(key))
+}
+stdlib_zips = {
+    root.parent / f"python{sys.version_info.major}{sys.version_info.minor}.zip"
+    for root in stdlib_roots
+}
+effective_import_paths = []
+for entry in sys.path:
+    if not entry:
+        raise RuntimeError("unsafe empty import root is not allowed")
+    path = Path(entry).resolve()
+    allowed = (
+        path in site_roots
+        or path in stdlib_zips
+        or any(path == root or root in path.parents for root in stdlib_roots)
+        or any(path == root or root in path.parents for root in owned_import_roots)
+    )
+    if not allowed:
+        raise RuntimeError("unowned effective import root is not allowed")
+    effective_import_paths.append(str(path))
+effective_import_paths.sort()
+import_path_payload = json.dumps(
+    effective_import_paths, ensure_ascii=True, separators=(",", ":")
+).encode()
+
 try:
     from huggingface_hub.constants import HF_HUB_CACHE
     model_root = Path(HF_HUB_CACHE) / "models--sentence-transformers--all-MiniLM-L6-v2"
@@ -221,6 +257,8 @@ print(json.dumps({
     "editable_source_files": len(editable_entries),
     "editable_source_bytes": sum(entry[3] for entry in editable_entries),
     "editable_sources_sha256": digest_bytes(editable_payload),
+    "import_path_entries": len(effective_import_paths),
+    "import_path_sha256": digest_bytes(import_path_payload),
     "model_asset_files": len(model_entries),
     "model_asset_bytes": sum(entry[2] for entry in model_entries),
     "model_assets_present": bool(model_entries),
@@ -264,7 +302,7 @@ def _consumer_environment_fingerprint(
     """Hash the actual consumer interpreter, distributions, and cached embedding model."""
     try:
         completed = subprocess.run(
-            [str(venv_python), "-c", _CONSUMER_ENVIRONMENT_PROBE],
+            [str(venv_python), "-P", "-c", _CONSUMER_ENVIRONMENT_PROBE],
             capture_output=True,
             env=_runtime_environment(),
             text=True,
@@ -286,6 +324,7 @@ def _consumer_environment_fingerprint(
         "distributions_sha256",
         "installed_files_sha256",
         "editable_sources_sha256",
+        "import_path_sha256",
         "model_assets_sha256",
     }
     if (
@@ -305,6 +344,7 @@ def _consumer_environment_fingerprint(
         "installed_file_bytes",
         "editable_source_files",
         "editable_source_bytes",
+        "import_path_entries",
         "model_asset_files",
         "model_asset_bytes",
     ):
