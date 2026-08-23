@@ -979,7 +979,7 @@ def test_existing_checkpoint_skips_incumbent_preparation(
     assert prepared == []
 
 
-def test_verified_preparation_without_manifest_skips_reinstall(
+def test_verified_wheels_without_manifest_prepare_only_mapper_cache(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     args = SimpleNamespace(
@@ -989,8 +989,14 @@ def test_verified_preparation_without_manifest_skips_reinstall(
     )
     monkeypatch.setattr(
         pilot_module,
-        "_incumbents_are_prepared",
+        "_incumbent_wheels_are_prepared",
         lambda mapper, enrich: (mapper, enrich) == (args.mapper_root, args.enrich_root),
+    )
+    prepared_indexes: list[Path] = []
+    monkeypatch.setattr(
+        pilot_module,
+        "_prepare_mapper_index",
+        lambda mapper: prepared_indexes.append(mapper.repo_root),
     )
     monkeypatch.setattr(
         pilot_module,
@@ -999,6 +1005,8 @@ def test_verified_preparation_without_manifest_skips_reinstall(
     )
 
     pilot_module._prepare_incumbents_for_new_checkpoint(args)
+
+    assert prepared_indexes == [args.mapper_root]
 
 
 def test_environment_probe_ignores_inactive_base_package_trees(tmp_path: Path) -> None:
@@ -1332,7 +1340,7 @@ def test_main_revalidates_fingerprint_before_and_after_each_shard(
     monkeypatch.setattr(pilot_module, "_assert_write_paths_are_safe", lambda _args: None)
     monkeypatch.setattr(pilot_module, "load_corpus", lambda _path: _corpus(tmp_path))
     monkeypatch.setattr(pilot_module, "_prepare_incumbents", lambda *_args: None)
-    monkeypatch.setattr(pilot_module, "_incumbents_are_prepared", lambda *_args: False)
+    monkeypatch.setattr(pilot_module, "_incumbent_wheels_are_prepared", lambda *_args: False)
     monkeypatch.setattr(pilot_module, "_durably_create_directory", lambda _path: None)
     monkeypatch.setattr(
         pilot_module,
@@ -1390,7 +1398,7 @@ def test_main_only_marks_shard_complete_after_post_run_fingerprint_passes(
     monkeypatch.setattr(pilot_module, "_assert_write_paths_are_safe", lambda _args: None)
     monkeypatch.setattr(pilot_module, "load_corpus", lambda _path: _corpus(tmp_path))
     monkeypatch.setattr(pilot_module, "_prepare_incumbents", lambda *_args: None)
-    monkeypatch.setattr(pilot_module, "_incumbents_are_prepared", lambda *_args: False)
+    monkeypatch.setattr(pilot_module, "_incumbent_wheels_are_prepared", lambda *_args: False)
 
     def run_shard(args: SimpleNamespace, item_id: str, _fingerprint: object) -> None:
         nonlocal run_count
@@ -1449,7 +1457,7 @@ def test_main_can_initialize_checkpoint_without_starting_an_expensive_shard(
     monkeypatch.setattr(pilot_module, "_assert_write_paths_are_safe", lambda _args: None)
     monkeypatch.setattr(pilot_module, "load_corpus", lambda _path: _corpus(tmp_path))
     monkeypatch.setattr(pilot_module, "_prepare_incumbents", lambda *_args: None)
-    monkeypatch.setattr(pilot_module, "_incumbents_are_prepared", lambda *_args: False)
+    monkeypatch.setattr(pilot_module, "_incumbent_wheels_are_prepared", lambda *_args: False)
     monkeypatch.setattr(pilot_module, "_durably_create_directory", lambda _path: None)
     monkeypatch.setattr(pilot_module, "_fingerprint", lambda **_kwargs: {})
     monkeypatch.setattr(pilot_module, "_create_or_validate_manifest", lambda *_args: None)

@@ -1164,25 +1164,20 @@ def _prepare_incumbents_for_new_checkpoint(args: argparse.Namespace) -> None:
     """Mutate consumer environments only before a checkpoint manifest exists."""
     if (args.checkpoint_dir / "manifest.json").exists():
         return
-    if _incumbents_are_prepared(args.mapper_root, args.enrich_root):
+    if _incumbent_wheels_are_prepared(args.mapper_root, args.enrich_root):
+        _prepare_mapper_index(mapper_spec(args.mapper_root))
         return
     _prepare_incumbents(args.mapper_root, args.enrich_root)
 
 
-def _incumbents_are_prepared(mapper_root: Path, enrich_root: Path) -> bool:
-    """Verify a crash-completed preparation phase without mutating or using the registry."""
+def _incumbent_wheels_are_prepared(mapper_root: Path, enrich_root: Path) -> bool:
+    """Verify exact installed wheels before any registry-backed reinstall."""
     mapper = mapper_spec(mapper_root)
     enrich = enrich_spec(enrich_root)
     try:
         for consumer in (mapper, enrich):
             assert_incumbent_probe(_probe_environment(consumer), INCUMBENT_VERSION)
-        _consumer_environment_fingerprint(
-            mapper.venv_python,
-            require_mapper_cache=True,
-            require_model_assets=True,
-        )
-        _consumer_environment_fingerprint(enrich.venv_python)
-    except (IncumbentInstallMismatch, OSError, PilotCheckpointError):
+    except (IncumbentInstallMismatch, OSError):
         return False
     return True
 
