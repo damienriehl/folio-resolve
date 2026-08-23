@@ -762,6 +762,10 @@ def test_environment_probe_explicitly_forces_and_verifies_cpu() -> None:
     assert 'model_device != "cpu"' in pilot_module._CONSUMER_ENVIRONMENT_PROBE
 
 
+def test_environment_probe_requires_complete_loaded_image_enumeration() -> None:
+    assert "requires /proc/self/maps" in pilot_module._CONSUMER_ENVIRONMENT_PROBE
+
+
 def test_environment_probe_rejects_symlinked_editable_directory(tmp_path: Path) -> None:
     interpreter, site = _isolated_python_site(tmp_path)
     project = tmp_path / "project"
@@ -973,6 +977,28 @@ def test_existing_checkpoint_skips_incumbent_preparation(
     pilot_module._prepare_incumbents_for_new_checkpoint(args)
 
     assert prepared == []
+
+
+def test_verified_preparation_without_manifest_skips_reinstall(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    args = SimpleNamespace(
+        checkpoint_dir=tmp_path / "checkpoint",
+        mapper_root=tmp_path / "mapper",
+        enrich_root=tmp_path / "enrich",
+    )
+    monkeypatch.setattr(
+        pilot_module,
+        "_incumbents_are_prepared",
+        lambda mapper, enrich: (mapper, enrich) == (args.mapper_root, args.enrich_root),
+    )
+    monkeypatch.setattr(
+        pilot_module,
+        "_prepare_incumbents",
+        lambda *_args: pytest.fail("verified preparation must not reinstall"),
+    )
+
+    pilot_module._prepare_incumbents_for_new_checkpoint(args)
 
 
 def test_environment_probe_ignores_inactive_base_package_trees(tmp_path: Path) -> None:
@@ -1306,6 +1332,7 @@ def test_main_revalidates_fingerprint_before_and_after_each_shard(
     monkeypatch.setattr(pilot_module, "_assert_write_paths_are_safe", lambda _args: None)
     monkeypatch.setattr(pilot_module, "load_corpus", lambda _path: _corpus(tmp_path))
     monkeypatch.setattr(pilot_module, "_prepare_incumbents", lambda *_args: None)
+    monkeypatch.setattr(pilot_module, "_incumbents_are_prepared", lambda *_args: False)
     monkeypatch.setattr(pilot_module, "_durably_create_directory", lambda _path: None)
     monkeypatch.setattr(
         pilot_module,
@@ -1363,6 +1390,7 @@ def test_main_only_marks_shard_complete_after_post_run_fingerprint_passes(
     monkeypatch.setattr(pilot_module, "_assert_write_paths_are_safe", lambda _args: None)
     monkeypatch.setattr(pilot_module, "load_corpus", lambda _path: _corpus(tmp_path))
     monkeypatch.setattr(pilot_module, "_prepare_incumbents", lambda *_args: None)
+    monkeypatch.setattr(pilot_module, "_incumbents_are_prepared", lambda *_args: False)
 
     def run_shard(args: SimpleNamespace, item_id: str, _fingerprint: object) -> None:
         nonlocal run_count
@@ -1421,6 +1449,7 @@ def test_main_can_initialize_checkpoint_without_starting_an_expensive_shard(
     monkeypatch.setattr(pilot_module, "_assert_write_paths_are_safe", lambda _args: None)
     monkeypatch.setattr(pilot_module, "load_corpus", lambda _path: _corpus(tmp_path))
     monkeypatch.setattr(pilot_module, "_prepare_incumbents", lambda *_args: None)
+    monkeypatch.setattr(pilot_module, "_incumbents_are_prepared", lambda *_args: False)
     monkeypatch.setattr(pilot_module, "_durably_create_directory", lambda _path: None)
     monkeypatch.setattr(pilot_module, "_fingerprint", lambda **_kwargs: {})
     monkeypatch.setattr(pilot_module, "_create_or_validate_manifest", lambda *_args: None)

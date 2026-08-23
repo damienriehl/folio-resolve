@@ -16,10 +16,13 @@ from typing import Any
 
 from .answer_rule import load_config
 from .comparison import (
+    IncumbentInstallMismatch,
     PublicComparisonMetadata,
     StackRun,
     _file_fingerprint,
     _git_repository_state,
+    _probe_environment,
+    assert_incumbent_probe,
     build_comparison,
     emit_items_file,
     load_public_comparison_metadata,
@@ -654,15 +657,16 @@ if importlib.util.find_spec("threadpoolctl") is not None:
         key=lambda entry: json.dumps(entry, sort_keys=True, separators=(",", ":")),
     )
 maps_path = Path("/proc/self/maps")
-if maps_path.is_file():
-    for line in maps_path.read_text(encoding="utf-8").splitlines():
-        fields = line.split(maxsplit=5)
-        if len(fields) != 6 or not fields[5].startswith("/"):
-            continue
-        mapped_path = fields[5]
-        if mapped_path.endswith(" (deleted)"):
-            raise RuntimeError("deleted native runtime mapping is not allowed")
-        native_runtime_paths.add(Path(mapped_path))
+if not maps_path.is_file():
+    raise RuntimeError("complete loaded-image enumeration requires /proc/self/maps")
+for line in maps_path.read_text(encoding="utf-8").splitlines():
+    fields = line.split(maxsplit=5)
+    if len(fields) != 6 or not fields[5].startswith("/"):
+        continue
+    mapped_path = fields[5]
+    if mapped_path.endswith(" (deleted)"):
+        raise RuntimeError("deleted native runtime mapping is not allowed")
+    native_runtime_paths.add(Path(mapped_path))
 native_runtime_entries = []
 for path in sorted({path.resolve() for path in native_runtime_paths}):
     if not path.is_file():
@@ -1158,8 +1162,29 @@ def _mapper_cpu_cache_root() -> Path:
 
 def _prepare_incumbents_for_new_checkpoint(args: argparse.Namespace) -> None:
     """Mutate consumer environments only before a checkpoint manifest exists."""
-    if not (args.checkpoint_dir / "manifest.json").exists():
-        _prepare_incumbents(args.mapper_root, args.enrich_root)
+    if (args.checkpoint_dir / "manifest.json").exists():
+        return
+    if _incumbents_are_prepared(args.mapper_root, args.enrich_root):
+        return
+    _prepare_incumbents(args.mapper_root, args.enrich_root)
+
+
+def _incumbents_are_prepared(mapper_root: Path, enrich_root: Path) -> bool:
+    """Verify a crash-completed preparation phase without mutating or using the registry."""
+    mapper = mapper_spec(mapper_root)
+    enrich = enrich_spec(enrich_root)
+    try:
+        for consumer in (mapper, enrich):
+            assert_incumbent_probe(_probe_environment(consumer), INCUMBENT_VERSION)
+        _consumer_environment_fingerprint(
+            mapper.venv_python,
+            require_mapper_cache=True,
+            require_model_assets=True,
+        )
+        _consumer_environment_fingerprint(enrich.venv_python)
+    except (IncumbentInstallMismatch, OSError, PilotCheckpointError):
+        return False
+    return True
 
 
 def _fingerprint(
