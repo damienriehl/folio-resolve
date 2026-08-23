@@ -781,7 +781,9 @@ def _resolve_path_arguments(args: argparse.Namespace) -> None:
         setattr(args, name, getattr(args, name).resolve())
 
 
-def _assert_write_paths_are_safe(args: argparse.Namespace) -> None:
+def _assert_write_paths_are_safe(
+    args: argparse.Namespace, corpus: LoadedCorpus | None = None
+) -> None:
     """Keep mutable checkpoints ignored while allowing the planned final artifact."""
     try:
         args.out.relative_to(args.checkpoint_dir)
@@ -794,14 +796,24 @@ def _assert_write_paths_are_safe(args: argparse.Namespace) -> None:
             raise PilotCheckpointError("checkpoint_dir and out must not overlap")
     else:
         raise PilotCheckpointError("checkpoint_dir and out must not overlap")
-    for input_name in (
-        "corpus_manifest",
-        "config",
-        "leak_manifest",
-        "salt_file",
-        "public_metadata",
-    ):
-        input_path = getattr(args, input_name, None)
+    input_paths = [
+        (input_name, getattr(args, input_name, None))
+        for input_name in (
+            "corpus_manifest",
+            "config",
+            "leak_manifest",
+            "salt_file",
+            "public_metadata",
+        )
+    ]
+    if corpus is not None:
+        input_paths.extend(
+            (
+                ("corpus_scoreable_jsonl", corpus.manifest.corpus_path.resolve()),
+                ("corpus_nomatch_jsonl", corpus.manifest.nomatch_path.resolve()),
+            )
+        )
+    for input_name, input_path in input_paths:
         if input_path is None:
             continue
         if (
@@ -1744,8 +1756,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     _assert_unoptimized_runtime()
     _assert_clean_runtime_environment()
     _resolve_path_arguments(args)
-    _assert_write_paths_are_safe(args)
     corpus = load_corpus(args.corpus_manifest)
+    _assert_write_paths_are_safe(args, corpus)
     item_ids = _pilot_ids(corpus, args.limit)
     _prepare_incumbents_for_new_checkpoint(args)
     fingerprint = _fingerprint_for_args(args, corpus)

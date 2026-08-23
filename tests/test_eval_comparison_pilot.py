@@ -336,6 +336,20 @@ def test_final_report_must_not_overwrite_read_inputs(tmp_path: Path) -> None:
         pilot_module._assert_write_paths_are_safe(args)
 
 
+def test_final_report_must_not_overwrite_corpus_slice(tmp_path: Path) -> None:
+    corpus = _corpus(tmp_path)
+    scoreable_path = corpus.manifest.corpus_path.resolve()
+    args = SimpleNamespace(
+        checkpoint_dir=tmp_path / "checkpoint",
+        out=scoreable_path,
+        mapper_root=tmp_path / "mapper",
+        enrich_root=tmp_path / "enrich",
+    )
+
+    with pytest.raises(PilotCheckpointError, match="corpus_scoreable_jsonl"):
+        pilot_module._assert_write_paths_are_safe(args, corpus)
+
+
 def test_command_path_preserves_repository_relative_spelling() -> None:
     path = pilot_module.FOLIO_RESOLVE_ROOT / "eval" / "synthetic" / "corpus.json"
 
@@ -1355,7 +1369,7 @@ def test_main_revalidates_fingerprint_before_and_after_each_shard(
     fingerprint_calls: list[int] = []
     fingerprint = {"stable": True}
     monkeypatch.setenv("PYTHONHASHSEED", "0")
-    monkeypatch.setattr(pilot_module, "_assert_write_paths_are_safe", lambda _args: None)
+    monkeypatch.setattr(pilot_module, "_assert_write_paths_are_safe", lambda *_args: None)
     monkeypatch.setattr(pilot_module, "load_corpus", lambda _path: _corpus(tmp_path))
     monkeypatch.setattr(pilot_module, "_prepare_incumbents", lambda *_args: None)
     monkeypatch.setattr(pilot_module, "_incumbent_wheels_are_prepared", lambda *_args: False)
@@ -1413,7 +1427,7 @@ def test_main_only_marks_shard_complete_after_post_run_fingerprint_passes(
     fingerprint = {"stable": True}
     run_count = 0
     monkeypatch.setenv("PYTHONHASHSEED", "0")
-    monkeypatch.setattr(pilot_module, "_assert_write_paths_are_safe", lambda _args: None)
+    monkeypatch.setattr(pilot_module, "_assert_write_paths_are_safe", lambda *_args: None)
     monkeypatch.setattr(pilot_module, "load_corpus", lambda _path: _corpus(tmp_path))
     monkeypatch.setattr(pilot_module, "_prepare_incumbents", lambda *_args: None)
     monkeypatch.setattr(pilot_module, "_incumbent_wheels_are_prepared", lambda *_args: False)
@@ -1472,7 +1486,7 @@ def test_main_can_initialize_checkpoint_without_starting_an_expensive_shard(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("PYTHONHASHSEED", "0")
-    monkeypatch.setattr(pilot_module, "_assert_write_paths_are_safe", lambda _args: None)
+    monkeypatch.setattr(pilot_module, "_assert_write_paths_are_safe", lambda *_args: None)
     monkeypatch.setattr(pilot_module, "load_corpus", lambda _path: _corpus(tmp_path))
     monkeypatch.setattr(pilot_module, "_prepare_incumbents", lambda *_args: None)
     monkeypatch.setattr(pilot_module, "_incumbent_wheels_are_prepared", lambda *_args: False)
