@@ -259,9 +259,6 @@ if os.environ.get("FOLIO_PROBE_REQUIRE_MODEL_ASSETS") == "1":
         raise RuntimeError("embedding model cache snapshot is missing")
     if any(path.name.endswith(".incomplete") for path in model_root.rglob("*")):
         raise RuntimeError("embedding model cache contains an incomplete download")
-    locks_root = model_root.parent / ".locks" / model_root.name
-    if locks_root.is_dir() and any(path.is_file() for path in locks_root.rglob("*")):
-        raise RuntimeError("embedding model cache has an active download lock")
     if any(path.is_symlink() and not path.exists() for path in snapshot_root.rglob("*")):
         raise RuntimeError("embedding model cache snapshot contains a broken link")
     from sentence_transformers import SentenceTransformer
@@ -274,6 +271,21 @@ if os.environ.get("FOLIO_PROBE_REQUIRE_MODEL_ASSETS") == "1":
     dimension = model.get_sentence_embedding_dimension()
     if not isinstance(dimension, int) or dimension < 1:
         raise RuntimeError("embedding model cache did not load a valid dimension")
+    verified_entries = []
+    for path in sorted(model_root.rglob("*")):
+        if not path.is_file():
+            continue
+        resolved = path.resolve()
+        verified_entries.append([
+            path.relative_to(model_root).as_posix(),
+            digest_file(resolved),
+            resolved.stat().st_size,
+        ])
+    verified_payload = json.dumps(
+        verified_entries, ensure_ascii=True, separators=(",", ":")
+    ).encode()
+    if verified_payload != model_payload or ref_path.read_text(encoding="utf-8").strip() != model_snapshot_revision:
+        raise RuntimeError("embedding model cache mutated during offline verification")
     model_embedding_dimension = dimension
     model_assets_complete = True
 interpreter = Path(sys.executable).resolve()
@@ -322,6 +334,22 @@ def _assert_clean_import_environment() -> None:
             "comparison pilot refuses mutable Python import overrides: "
             + ", ".join(overrides)
         )
+
+
+def _resolve_path_arguments(args: argparse.Namespace) -> None:
+    """Freeze caller-relative CLI paths before child processes change working directory."""
+    for name in (
+        "corpus_manifest",
+        "config",
+        "out",
+        "checkpoint_dir",
+        "leak_manifest",
+        "salt_file",
+        "public_metadata",
+        "mapper_root",
+        "enrich_root",
+    ):
+        setattr(args, name, getattr(args, name).resolve())
 
 
 def _sha256_file(path: Path) -> str:
@@ -888,6 +916,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if os.environ.get("PYTHONHASHSEED") != "0":
         raise PilotCheckpointError("comparison pilot requires PYTHONHASHSEED=0")
     _assert_clean_import_environment()
+    _resolve_path_arguments(args)
     corpus = load_corpus(args.corpus_manifest)
     item_ids = _pilot_ids(corpus, args.limit)
     fingerprint = _fingerprint(

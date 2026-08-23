@@ -122,6 +122,42 @@ def test_mutable_python_import_overrides_are_rejected_and_sanitized(
     assert "PYTHONPATH" not in pilot_module._runtime_environment()
 
 
+def test_path_arguments_are_resolved_before_child_working_directory_changes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    args = SimpleNamespace(
+        corpus_manifest=Path("corpus.json"),
+        config=Path("config.json"),
+        out=Path("reports/pilot.json"),
+        checkpoint_dir=Path("checkpoints/pilot"),
+        leak_manifest=Path("leaks.json"),
+        salt_file=Path("salt"),
+        public_metadata=Path("public.json"),
+        mapper_root=Path("mapper"),
+        enrich_root=Path("enrich"),
+    )
+
+    pilot_module._resolve_path_arguments(args)
+
+    assert args.checkpoint_dir == tmp_path / "checkpoints" / "pilot"
+    assert args.mapper_root == tmp_path / "mapper"
+    assert all(
+        getattr(args, name).is_absolute()
+        for name in (
+            "corpus_manifest",
+            "config",
+            "out",
+            "checkpoint_dir",
+            "leak_manifest",
+            "salt_file",
+            "public_metadata",
+            "mapper_root",
+            "enrich_root",
+        )
+    )
+
+
 def test_checkpoint_manifest_is_create_once_and_fingerprint_bound(tmp_path: Path) -> None:
     path = tmp_path / "manifest.json"
     expected = _checkpoint_manifest(fingerprint={"git": "abc"}, item_ids=("one", "none"))
