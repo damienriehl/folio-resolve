@@ -197,6 +197,9 @@ def test_consumer_environment_fingerprint_uses_probe_digests(
         "site_file_count": 60,
         "site_file_bytes": 1_200,
         "site_files_sha256": "3" * 64,
+        "stdlib_file_count": 500,
+        "stdlib_file_bytes": 2_000_000,
+        "stdlib_files_sha256": "6" * 64,
         "editable_source_files": 7,
         "editable_source_bytes": 700,
         "editable_sources_sha256": "f" * 64,
@@ -476,6 +479,22 @@ def test_environment_probe_hashes_unowned_site_package_files(tmp_path: Path) -> 
 
     assert before["site_file_count"] == after["site_file_count"]
     assert before["site_files_sha256"] != after["site_files_sha256"]
+
+
+def test_environment_probe_hashes_standard_library(tmp_path: Path) -> None:
+    interpreter, _site = _isolated_python_site(tmp_path)
+
+    completed = pilot_module.subprocess.run(
+        [interpreter, "-B", "-P", "-c", pilot_module._CONSUMER_ENVIRONMENT_PROBE],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    payload = json.loads(completed.stdout)
+
+    assert payload["stdlib_file_count"] > 0
+    assert payload["stdlib_file_bytes"] > 0
+    assert len(payload["stdlib_files_sha256"]) == 64
 
 
 def test_fingerprint_prepares_both_incumbents_before_probing(

@@ -224,6 +224,49 @@ site_roots = {
     for key in ("purelib", "platlib")
     if (path := sysconfig.get_path(key))
 }
+stdlib_zips = {
+    root.parent / f"python{sys.version_info.major}{sys.version_info.minor}.zip"
+    for root in stdlib_roots
+}
+stdlib_entries = []
+for stdlib_root in sorted(stdlib_roots):
+    if not stdlib_root.is_dir():
+        continue
+    for path in sorted(stdlib_root.rglob("*")):
+        if any(path == site_root or site_root in path.parents for site_root in site_roots):
+            continue
+        if path.is_symlink():
+            raise RuntimeError("symlinked standard-library entry is not allowed")
+        if not path.is_file():
+            continue
+        resolved = path.resolve()
+        cache_key = str(resolved)
+        if cache_key not in resolved_digests:
+            resolved_digests[cache_key] = digest_file(resolved)
+        stdlib_entries.append([
+            str(stdlib_root),
+            path.relative_to(stdlib_root).as_posix(),
+            resolved_digests[cache_key],
+            resolved.stat().st_size,
+        ])
+for stdlib_zip in sorted(stdlib_zips):
+    if stdlib_zip.is_symlink():
+        raise RuntimeError("symlinked standard-library zip is not allowed")
+    if stdlib_zip.is_file():
+        resolved = stdlib_zip.resolve()
+        cache_key = str(resolved)
+        if cache_key not in resolved_digests:
+            resolved_digests[cache_key] = digest_file(resolved)
+        stdlib_entries.append([
+            str(stdlib_zip.parent),
+            stdlib_zip.name,
+            resolved_digests[cache_key],
+            resolved.stat().st_size,
+        ])
+stdlib_entries.sort()
+stdlib_payload = json.dumps(
+    stdlib_entries, ensure_ascii=True, separators=(",", ":")
+).encode()
 site_entries = []
 for site_root in sorted(site_roots):
     if not site_root.is_dir():
@@ -248,10 +291,6 @@ for site_root in sorted(site_roots):
         ])
 site_entries.sort()
 site_payload = json.dumps(site_entries, ensure_ascii=True, separators=(",", ":")).encode()
-stdlib_zips = {
-    root.parent / f"python{sys.version_info.major}{sys.version_info.minor}.zip"
-    for root in stdlib_roots
-}
 effective_import_paths = []
 for entry in sys.path:
     if not entry:
@@ -386,6 +425,9 @@ print(json.dumps({
     "site_file_count": len(site_entries),
     "site_file_bytes": sum(entry[3] for entry in site_entries),
     "site_files_sha256": digest_bytes(site_payload),
+    "stdlib_file_count": len(stdlib_entries),
+    "stdlib_file_bytes": sum(entry[3] for entry in stdlib_entries),
+    "stdlib_files_sha256": digest_bytes(stdlib_payload),
     "editable_source_files": len(editable_entries),
     "editable_source_bytes": sum(entry[3] for entry in editable_entries),
     "editable_sources_sha256": digest_bytes(editable_payload),
@@ -505,6 +547,7 @@ def _consumer_environment_fingerprint(
         "distributions_sha256",
         "installed_files_sha256",
         "site_files_sha256",
+        "stdlib_files_sha256",
         "editable_sources_sha256",
         "import_path_sha256",
         "meta_path_sha256",
@@ -529,6 +572,8 @@ def _consumer_environment_fingerprint(
         "installed_file_bytes",
         "site_file_count",
         "site_file_bytes",
+        "stdlib_file_count",
+        "stdlib_file_bytes",
         "editable_source_files",
         "editable_source_bytes",
         "import_path_entries",
