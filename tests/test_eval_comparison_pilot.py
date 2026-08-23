@@ -157,7 +157,10 @@ def test_consumer_environment_fingerprint_uses_probe_digests(
         "model_asset_files": 5,
         "model_asset_bytes": 100,
         "model_assets_present": True,
+        "model_assets_complete": True,
         "model_assets_sha256": "d" * 64,
+        "model_embedding_dimension": 384,
+        "model_snapshot_revision_sha256": "2" * 64,
     }
     observed: list[list[str]] = []
 
@@ -175,8 +178,8 @@ def test_consumer_environment_fingerprint_uses_probe_digests(
     }
     assert observed[0][:3] == [str(interpreter), "-P", "-c"]
 
-    payload["model_assets_present"] = False
-    with pytest.raises(PilotCheckpointError, match="model cache must be warmed"):
+    payload["model_assets_complete"] = False
+    with pytest.raises(PilotCheckpointError, match="load completely offline"):
         _consumer_environment_fingerprint(interpreter, require_model_assets=True)
 
 

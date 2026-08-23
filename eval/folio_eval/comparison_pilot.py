@@ -42,6 +42,7 @@ _CONSUMER_ENVIRONMENT_PROBE = r"""
 import hashlib
 import importlib.metadata
 import json
+import os
 import re
 import sys
 import sysconfig
@@ -243,6 +244,38 @@ if model_root.is_dir():
             resolved.stat().st_size,
         ])
 model_payload = json.dumps(model_entries, ensure_ascii=True, separators=(",", ":")).encode()
+model_assets_complete = False
+model_embedding_dimension = 0
+model_snapshot_revision = ""
+if os.environ.get("FOLIO_PROBE_REQUIRE_MODEL_ASSETS") == "1":
+    ref_path = model_root / "refs" / "main"
+    if not ref_path.is_file():
+        raise RuntimeError("embedding model cache has no pinned main revision")
+    model_snapshot_revision = ref_path.read_text(encoding="utf-8").strip()
+    if not re.fullmatch(r"[0-9a-f]{40,64}", model_snapshot_revision):
+        raise RuntimeError("embedding model cache revision is malformed")
+    snapshot_root = model_root / "snapshots" / model_snapshot_revision
+    if not snapshot_root.is_dir():
+        raise RuntimeError("embedding model cache snapshot is missing")
+    if any(path.name.endswith(".incomplete") for path in model_root.rglob("*")):
+        raise RuntimeError("embedding model cache contains an incomplete download")
+    locks_root = model_root.parent / ".locks" / model_root.name
+    if locks_root.is_dir() and any(path.is_file() for path in locks_root.rglob("*")):
+        raise RuntimeError("embedding model cache has an active download lock")
+    if any(path.is_symlink() and not path.exists() for path in snapshot_root.rglob("*")):
+        raise RuntimeError("embedding model cache snapshot contains a broken link")
+    from sentence_transformers import SentenceTransformer
+
+    model = SentenceTransformer(
+        "sentence-transformers/all-MiniLM-L6-v2",
+        revision=model_snapshot_revision,
+        local_files_only=True,
+    )
+    dimension = model.get_sentence_embedding_dimension()
+    if not isinstance(dimension, int) or dimension < 1:
+        raise RuntimeError("embedding model cache did not load a valid dimension")
+    model_embedding_dimension = dimension
+    model_assets_complete = True
 interpreter = Path(sys.executable).resolve()
 print(json.dumps({
     "schema_version": 1,
@@ -262,7 +295,10 @@ print(json.dumps({
     "model_asset_files": len(model_entries),
     "model_asset_bytes": sum(entry[2] for entry in model_entries),
     "model_assets_present": bool(model_entries),
+    "model_assets_complete": model_assets_complete,
     "model_assets_sha256": digest_bytes(model_payload),
+    "model_embedding_dimension": model_embedding_dimension,
+    "model_snapshot_revision_sha256": digest_bytes(model_snapshot_revision.encode()),
 }, sort_keys=True, separators=(",", ":")))
 """
 
@@ -300,11 +336,21 @@ def _consumer_environment_fingerprint(
     venv_python: Path, *, require_model_assets: bool = False
 ) -> dict[str, object]:
     """Hash the actual consumer interpreter, distributions, and cached embedding model."""
+    environment = _runtime_environment()
+    if require_model_assets:
+        environment.update(
+            {
+                "FOLIO_PROBE_REQUIRE_MODEL_ASSETS": "1",
+                "HF_HUB_DISABLE_TELEMETRY": "1",
+                "HF_HUB_OFFLINE": "1",
+                "TRANSFORMERS_OFFLINE": "1",
+            }
+        )
     try:
         completed = subprocess.run(
             [str(venv_python), "-P", "-c", _CONSUMER_ENVIRONMENT_PROBE],
             capture_output=True,
-            env=_runtime_environment(),
+            env=environment,
             text=True,
             timeout=180,
         )
@@ -326,6 +372,7 @@ def _consumer_environment_fingerprint(
         "editable_sources_sha256",
         "import_path_sha256",
         "model_assets_sha256",
+        "model_snapshot_revision_sha256",
     }
     if (
         not isinstance(payload, dict)
@@ -347,6 +394,7 @@ def _consumer_environment_fingerprint(
         "import_path_entries",
         "model_asset_files",
         "model_asset_bytes",
+        "model_embedding_dimension",
     ):
         if not isinstance(payload.get(key), int) or payload[key] < 0:
             raise PilotCheckpointError("consumer environment probe was malformed")
@@ -354,9 +402,14 @@ def _consumer_environment_fingerprint(
         raise PilotCheckpointError("consumer environment probe was malformed")
     if not isinstance(payload.get("model_assets_present"), bool):
         raise PilotCheckpointError("consumer environment probe was malformed")
-    if require_model_assets and payload.get("model_assets_present") is not True:
+    if not isinstance(payload.get("model_assets_complete"), bool):
+        raise PilotCheckpointError("consumer environment probe was malformed")
+    if require_model_assets and (
+        payload.get("model_assets_present") is not True
+        or payload.get("model_assets_complete") is not True
+    ):
         raise PilotCheckpointError(
-            "consumer embedding model cache must be warmed before pilot initialization"
+            "consumer embedding model cache must load completely offline before pilot initialization"
         )
     payload["venv_path_sha256"] = sha256_bytes(
         str(venv_python.absolute()).encode()
