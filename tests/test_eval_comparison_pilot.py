@@ -13,6 +13,7 @@ from folio_eval.answer_rule import AnswerRuleConfig
 from folio_eval.comparison_pilot import (
     PilotCheckpointError,
     _checkpoint_manifest,
+    _consumer_environment_fingerprint,
     _create_or_validate_manifest,
     _load_shard,
     _merge_stack_runs,
@@ -55,6 +56,7 @@ def _stack(stack: str, lane: str, item_id: str) -> dict[str, object]:
         "versions": {"folio-resolve": "0.4.0", "folio-python": "0.3.6"},
         "config": {"top_k": 3},
         "invocation": {
+            "kind": "executed_process" if lane == "incumbent" else "in_process",
             "argv": ["python", f"/repo/{stack}/runner.py"],
             "working_directory": f"/repo/{stack}",
         },
@@ -98,6 +100,42 @@ def test_checkpoint_manifest_is_create_once_and_fingerprint_bound(tmp_path: Path
             path,
             _checkpoint_manifest(fingerprint={"git": "changed"}, item_ids=("one", "none")),
         )
+
+
+def test_consumer_environment_fingerprint_uses_probe_digests(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    payload = {
+        "schema_version": 1,
+        "interpreter_path_sha256": "a" * 64,
+        "interpreter_sha256": "b" * 64,
+        "python_version": "3.11",
+        "distribution_count": 10,
+        "distributions_sha256": "c" * 64,
+        "model_asset_files": 5,
+        "model_asset_bytes": 100,
+        "model_assets_present": True,
+        "model_assets_sha256": "d" * 64,
+    }
+    observed: list[list[str]] = []
+
+    def fake_run(command: list[str], **_kwargs: object) -> SimpleNamespace:
+        observed.append(command)
+        return SimpleNamespace(returncode=0, stdout=json.dumps(payload))
+
+    monkeypatch.setattr(pilot_module.subprocess, "run", fake_run)
+    interpreter = tmp_path / "consumer" / "bin" / "python"
+    venv_path_sha256 = pilot_module.sha256_bytes(str(interpreter.absolute()).encode())
+
+    assert _consumer_environment_fingerprint(interpreter) == {
+        **payload,
+        "venv_path_sha256": venv_path_sha256,
+    }
+    assert observed[0][:2] == [str(interpreter), "-c"]
+
+    payload["model_assets_present"] = False
+    with pytest.raises(PilotCheckpointError, match="model cache must be warmed"):
+        _consumer_environment_fingerprint(interpreter, require_model_assets=True)
 
 
 def test_load_shard_rejects_item_or_stack_drift(tmp_path: Path) -> None:
@@ -146,6 +184,19 @@ def test_merge_stack_runs_preserves_every_item_and_rejects_static_drift() -> Non
     assert len(runs) == 3
     assert all(set(run.rows) == {"one", "none"} for run in runs)
     assert all(set(run.stages) == {"one", "none"} for run in runs)
+    assert all(run.invocation_kind == "equivalent_checkpoint_aggregate" for run in runs)
+    mapper = next(run for run in runs if run.stack == "folio-mapper")
+    assert mapper.invocation[0] == "folio_eval.comparison_pilot.aggregate_consumer_stack"
+    assert mapper.invocation[mapper.invocation.index("--source-shard-count") + 1] == "2"
+
+    changed_invocation = deepcopy(shards)
+    changed_invocation[1]["stacks"]["folio-mapper:incumbent"]["invocation"]["argv"].append(
+        "changed"
+    )
+    changed_mapper = next(
+        run for run in _merge_stack_runs(changed_invocation) if run.stack == "folio-mapper"
+    )
+    assert changed_mapper.invocation[-1] != mapper.invocation[-1]
 
     drifted = deepcopy(shards)
     drifted[1]["stacks"]["folio-mapper:incumbent"]["repository"] = {"git_sha": "b" * 40}
@@ -157,6 +208,7 @@ def test_run_shard_uses_one_explicit_item_and_suppresses_large_stdout(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     observed: dict[str, object] = {}
+    events: list[str] = []
 
     def fake_run(command: list[str], **kwargs: object) -> SimpleNamespace:
         observed["command"] = command
@@ -164,7 +216,16 @@ def test_run_shard_uses_one_explicit_item_and_suppresses_large_stdout(
         return SimpleNamespace(returncode=0)
 
     monkeypatch.setattr(pilot_module.subprocess, "run", fake_run)
-    monkeypatch.setattr(pilot_module, "_load_shard", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(
+        pilot_module,
+        "_durably_sync_file",
+        lambda _path: events.append("durable"),
+    )
+    monkeypatch.setattr(
+        pilot_module,
+        "_load_shard",
+        lambda *_args, **_kwargs: events.append("loaded") or {},
+    )
     args = SimpleNamespace(
         checkpoint_dir=tmp_path / "checkpoint",
         corpus_manifest=Path("eval/synthetic/corpus_v1.manifest.json"),
@@ -182,6 +243,7 @@ def test_run_shard_uses_one_explicit_item_and_suppresses_large_stdout(
     assert command[command.index("--item-id") + 1] == "one"
     assert observed["stdout"] is pilot_module.subprocess.DEVNULL
     assert observed["cwd"] == pilot_module.FOLIO_RESOLVE_ROOT
+    assert events == ["durable", "loaded"]
 
 
 def test_main_can_initialize_checkpoint_without_starting_an_expensive_shard(

@@ -205,6 +205,7 @@ class StackRun:
     stages: Mapping[str, Mapping[str, object]]
     invocation: tuple[str, ...] = ()
     invocation_working_directory: str = ""
+    invocation_kind: str = ""
     repository: Mapping[str, object] = dataclass_field(default_factory=dict)
 
     @property
@@ -901,7 +902,8 @@ def build_comparison(
             },
             "config": dict(run.config),
             "invocation": {
-                "kind": "executed_process" if run.lane == "incumbent" else "in_process",
+                "kind": run.invocation_kind
+                or ("executed_process" if run.lane == "incumbent" else "in_process"),
                 "argv": list(run.invocation),
                 "working_directory": run.invocation_working_directory,
             },

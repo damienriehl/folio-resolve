@@ -25,15 +25,87 @@ from .comparison import (
     write_comparison,
     write_stage_snapshots,
 )
-from .downstream import FOLIO_RESOLVE_ROOT
+from .downstream import FOLIO_RESOLVE_ROOT, enrich_spec, mapper_spec
 from .intake import sha256_bytes
 from .leakcheck import load_manifest
 from .synthesize import LoadedCorpus, load_corpus
-from .synthetic_checkpoint import _atomic_create
+from .synthetic_checkpoint import _atomic_create, fsync_directory
 
 PILOT_CHECKPOINT_KIND = "synthetic-comparison-pilot-checkpoint"
 PILOT_CHECKPOINT_VERSION = 1
 DEFAULT_LIMIT = 30
+
+_CONSUMER_ENVIRONMENT_PROBE = r"""
+import hashlib
+import importlib.metadata
+import json
+import re
+import sys
+from pathlib import Path
+
+
+def digest_bytes(value):
+    return hashlib.sha256(value).hexdigest()
+
+
+def digest_file(path):
+    with path.open("rb") as handle:
+        return hashlib.file_digest(handle, "sha256").hexdigest()
+
+
+distributions = []
+for distribution in importlib.metadata.distributions():
+    name = distribution.metadata.get("Name", "")
+    canonical_name = re.sub(r"[-_.]+", "-", name).lower()
+    record = (distribution.read_text("RECORD") or "").encode()
+    direct_url = (distribution.read_text("direct_url.json") or "").encode()
+    distributions.append([
+        canonical_name,
+        distribution.version,
+        digest_bytes(record),
+        digest_bytes(direct_url),
+    ])
+distributions.sort()
+distribution_payload = json.dumps(
+    distributions, ensure_ascii=True, separators=(",", ":")
+).encode()
+
+try:
+    from huggingface_hub.constants import HF_HUB_CACHE
+    model_root = Path(HF_HUB_CACHE) / "models--sentence-transformers--all-MiniLM-L6-v2"
+except Exception:
+    model_root = Path("/__missing_huggingface_cache__")
+
+model_entries = []
+resolved_digests = {}
+if model_root.is_dir():
+    for path in sorted(model_root.rglob("*")):
+        if not path.is_file():
+            continue
+        resolved = path.resolve()
+        cache_key = str(resolved)
+        if cache_key not in resolved_digests:
+            resolved_digests[cache_key] = digest_file(resolved)
+        model_entries.append([
+            path.relative_to(model_root).as_posix(),
+            resolved_digests[cache_key],
+            resolved.stat().st_size,
+        ])
+model_payload = json.dumps(model_entries, ensure_ascii=True, separators=(",", ":")).encode()
+interpreter = Path(sys.executable).resolve()
+print(json.dumps({
+    "schema_version": 1,
+    "interpreter_path_sha256": digest_bytes(str(interpreter).encode()),
+    "interpreter_sha256": digest_file(interpreter),
+    "python_version": sys.version,
+    "distribution_count": len(distributions),
+    "distributions_sha256": digest_bytes(distribution_payload),
+    "model_asset_files": len(model_entries),
+    "model_asset_bytes": sum(entry[2] for entry in model_entries),
+    "model_assets_present": bool(model_entries),
+    "model_assets_sha256": digest_bytes(model_payload),
+}, sort_keys=True, separators=(",", ":")))
+"""
 
 
 class PilotCheckpointError(RuntimeError):
@@ -46,6 +118,71 @@ def _sha256_file(path: Path) -> str:
 
 def _item_key(item_id: str) -> str:
     return hashlib.sha256(item_id.encode()).hexdigest()
+
+
+def _consumer_environment_fingerprint(
+    venv_python: Path, *, require_model_assets: bool = False
+) -> dict[str, object]:
+    """Hash the actual consumer interpreter, distributions, and cached embedding model."""
+    try:
+        completed = subprocess.run(
+            [str(venv_python), "-c", _CONSUMER_ENVIRONMENT_PROBE],
+            capture_output=True,
+            text=True,
+            timeout=180,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise PilotCheckpointError("consumer environment probe could not run") from exc
+    if completed.returncode:
+        raise PilotCheckpointError(
+            f"consumer environment probe failed (rc={completed.returncode})"
+        )
+    try:
+        payload = json.loads(completed.stdout.strip().splitlines()[-1])
+    except (IndexError, json.JSONDecodeError) as exc:
+        raise PilotCheckpointError("consumer environment probe was malformed") from exc
+    required_digests = {
+        "interpreter_path_sha256",
+        "interpreter_sha256",
+        "distributions_sha256",
+        "model_assets_sha256",
+    }
+    if (
+        not isinstance(payload, dict)
+        or payload.get("schema_version") != 1
+        or any(
+            not isinstance(payload.get(key), str)
+            or len(payload[key]) != 64
+            or any(char not in "0123456789abcdef" for char in payload[key])
+            for key in required_digests
+        )
+    ):
+        raise PilotCheckpointError("consumer environment probe was malformed")
+    for key in ("distribution_count", "model_asset_files", "model_asset_bytes"):
+        if not isinstance(payload.get(key), int) or payload[key] < 0:
+            raise PilotCheckpointError("consumer environment probe was malformed")
+    if not isinstance(payload.get("python_version"), str) or not payload["python_version"]:
+        raise PilotCheckpointError("consumer environment probe was malformed")
+    if not isinstance(payload.get("model_assets_present"), bool):
+        raise PilotCheckpointError("consumer environment probe was malformed")
+    if require_model_assets and payload.get("model_assets_present") is not True:
+        raise PilotCheckpointError(
+            "consumer embedding model cache must be warmed before pilot initialization"
+        )
+    payload["venv_path_sha256"] = sha256_bytes(
+        str(venv_python.absolute()).encode()
+    )
+    return payload
+
+
+def _durably_sync_file(path: Path) -> None:
+    """Make an already atomically replaced checkpoint file survive sudden power loss."""
+    try:
+        with path.open("rb") as handle:
+            os.fsync(handle.fileno())
+        fsync_directory(path.parent)
+    except OSError as exc:
+        raise PilotCheckpointError(f"could not durably publish pilot shard: {path}") from exc
 
 
 def _pilot_ids(corpus: LoadedCorpus, limit: int) -> tuple[str, ...]:
@@ -67,15 +204,23 @@ def _fingerprint(
     limit: int,
 ) -> dict[str, object]:
     config = load_config(config_path)
+    mapper = mapper_spec(mapper_root)
+    enrich = enrich_spec(enrich_root)
     return {
         "answer_rule_config_sha256": config.content_sha256(),
         "candidate_repository": _git_repository_state(FOLIO_RESOLVE_ROOT),
         "corpus_content_sha256": corpus.manifest.content_sha256,
+        "enrich_environment": _consumer_environment_fingerprint(enrich.venv_python),
+        "enrich_lock_sha256": _sha256_file(enrich.repo_root / "backend" / "uv.lock"),
         "enrich_repository": _git_repository_state(enrich_root),
         "folio_python_lock_sha256": _sha256_file(FOLIO_RESOLVE_ROOT / "uv.lock"),
         "folio_python_version": importlib.metadata.version("folio-python"),
         "folio_resolve_version": importlib.metadata.version("folio-resolve"),
         "leak_manifest_sha256": _sha256_file(leak_manifest_path),
+        "mapper_environment": _consumer_environment_fingerprint(
+            mapper.venv_python, require_model_assets=True
+        ),
+        "mapper_lock_sha256": _sha256_file(mapper.repo_root / "backend" / "uv.lock"),
         "mapper_repository": _git_repository_state(mapper_root),
         "nomatch_content_sha256": corpus.manifest.nomatch_content_sha256,
         "public_metadata_sha256": _sha256_file(public_metadata_path),
@@ -250,6 +395,7 @@ def _run_shard(
         raise PilotCheckpointError(
             f"comparison shard failed for {item_id!r} (rc={completed.returncode})"
         )
+    _durably_sync_file(report)
     _load_shard(report, item_id, fingerprint)
 
 
@@ -259,6 +405,7 @@ def _merge_stack_runs(shards: Sequence[Mapping[str, Any]]) -> list[StackRun]:
         first = shards[0]["stacks"][key]
         rows: dict[str, frozenset[str]] = {}
         stages: dict[str, Mapping[str, object]] = {}
+        invocation_receipts: list[dict[str, object]] = []
         for shard in shards:
             stack = shard["stacks"][key]
             for field in ("stack", "lane", "versions", "config", "repository"):
@@ -269,6 +416,54 @@ def _merge_stack_runs(shards: Sequence[Mapping[str, Any]]) -> list[StackRun]:
                     raise PilotCheckpointError(f"duplicate pilot item in {key}: {item_id}")
                 rows[item_id] = frozenset(iris)
                 stages[item_id] = stack["stage_snapshot"]["by_item"][item_id]
+            invocation = stack.get("invocation")
+            if (
+                not isinstance(invocation, dict)
+                or not isinstance(invocation.get("kind"), str)
+                or not isinstance(invocation.get("working_directory"), str)
+                or not isinstance(invocation.get("argv"), list)
+                or not all(isinstance(value, str) for value in invocation["argv"])
+            ):
+                raise PilotCheckpointError(f"pilot shard {key} invocation is malformed")
+            invocation_receipts.append(
+                {
+                    "argv": invocation["argv"],
+                    "kind": invocation["kind"],
+                    "working_directory": invocation["working_directory"],
+                }
+            )
+        invocation_sha256 = sha256_bytes(
+            json.dumps(
+                invocation_receipts,
+                ensure_ascii=True,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode()
+        )
+        first_invocation = invocation_receipts[0]
+        first_argv = first_invocation["argv"]
+        if not isinstance(first_argv, list) or not first_argv:
+            raise PilotCheckpointError(f"pilot shard {key} invocation argv is empty")
+        aggregate_invocation: tuple[str, ...]
+        if first["lane"] == "incumbent":
+            if len(first_argv) < 2 or not isinstance(first_argv[1], str):
+                raise PilotCheckpointError(f"pilot shard {key} runner path is missing")
+            aggregate_invocation = (
+                "folio_eval.comparison_pilot.aggregate_consumer_stack",
+                first_argv[1],
+                "--source-shard-count",
+                str(len(shards)),
+                "--source-invocations-sha256",
+                invocation_sha256,
+            )
+        else:
+            aggregate_invocation = (
+                "folio_eval.comparison_pilot.aggregate_local_stack",
+                "--source-shard-count",
+                str(len(shards)),
+                "--source-invocations-sha256",
+                invocation_sha256,
+            )
         runs.append(
             StackRun(
                 stack=first["stack"],
@@ -278,8 +473,9 @@ def _merge_stack_runs(shards: Sequence[Mapping[str, Any]]) -> list[StackRun]:
                 config=first["config"],
                 rows=rows,
                 stages=stages,
-                invocation=tuple(first["invocation"]["argv"]),
-                invocation_working_directory=first["invocation"]["working_directory"],
+                invocation=aggregate_invocation,
+                invocation_working_directory=str(first_invocation["working_directory"]),
+                invocation_kind="equivalent_checkpoint_aggregate",
                 repository=first["repository"],
             )
         )
