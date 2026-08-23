@@ -181,6 +181,35 @@ def test_items_file_emits_shared_segments_once(tmp_path: Path) -> None:
     assert calls == ["Alpha beta", "Gamma", "Nothing here"]
 
 
+def test_items_file_supports_explicit_resumable_shards(tmp_path: Path) -> None:
+    out = emit_items_file(
+        _corpus(tmp_path),
+        tmp_path / "items.jsonl",
+        item_ids=("two", "none"),
+    )
+    rows = [json.loads(line) for line in out.read_text().splitlines()]
+
+    assert [row["item_id"] for row in rows] == ["two", "none"]
+
+
+@pytest.mark.parametrize("item_ids", [("missing",), ("one", "one")])
+def test_explicit_shard_rejects_unknown_or_duplicate_ids(
+    tmp_path: Path, item_ids: tuple[str, ...]
+) -> None:
+    with pytest.raises(ValueError):
+        emit_items_file(_corpus(tmp_path), tmp_path / "items.jsonl", item_ids=item_ids)
+
+
+def test_explicit_shard_and_limit_are_mutually_exclusive(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        emit_items_file(
+            _corpus(tmp_path),
+            tmp_path / "items.jsonl",
+            limit=1,
+            item_ids=("one",),
+        )
+
+
 def test_live_gate_can_emit_one_scoreable_item_without_nomatch_rows(tmp_path: Path) -> None:
     out = emit_items_file(
         _corpus(tmp_path),
