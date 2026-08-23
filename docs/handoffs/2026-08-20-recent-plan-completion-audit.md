@@ -2,7 +2,7 @@
 artifact_contract: "ce-handoff/v1"
 created_at: "2026-08-20T00:00:00-05:00"
 title: "Recent-plan completion audit, residual queue, and Decision Sheet"
-summary: "Audits every plan created in the 2026-07-30 through 2026-08-20 window plus the active 2026-07-27 carryover plan; separates completed work, autonomous residuals, owner-run gates, and five decisions."
+summary: "Audits every plan created in the 2026-07-30 through 2026-08-20 window plus the active 2026-07-27 carryover plan; records completed work, the autonomous residual queue, owner-run gates, and evidence-bound decisions."
 keywords: ["plan-audit", "ce-plan", "ce-work", "f1-campaign", "decision-sheet", "residual-work"]
 cwd: "/home/damienriehl/Coding Projects/folio-resolve"
 resume_focus: "Continue the autonomous queue from the first unfinished item; do not reopen completed release work or settled q1-q4 decisions."
@@ -125,12 +125,65 @@ branch: "docs/recent-plan-audit-2026-08-20"
   are present. Their normal import path opens the owner's standard ALEA log, so the real gate must
   run with ordinary owner filesystem access rather than inside a read-only home sandbox.
 
+## Execution update — 2026-08-23
+
+- U8 is complete. All 255 fingerprint-bound checkpoint items finished (225 scoreable plus 30
+  no-match), and finalize-only replay from exact scorer commit `933c6ef` produced the same bytes
+  as automatic finalization. The accepted checkpoint fingerprint is
+  `7dfc071fb98babb879cde7cd51d2d92eeffc035a36f00a72aa6adc2117cc3fd1`; the original report
+  digest was `ab87ab5622bfd1a4ca17fad0a65007a6c02a729dbad394498da80f25b31823a6`.
+- The baseline records F1 `0.007005`, precision `0.004444`, recall `0.016529`, TP `6`, FP `1344`,
+  FN `357`, and no-match false-positive rate `1.0`. Candidate accounting reconciles exactly:
+  792,136 raw candidates, 382,393 suppressions, and 409,743 survivors. Determinism and
+  candidate/item-accounting receipts pass.
+- Structured review found that the original 10/50/200 depth cutoffs all exceeded `top_k = 6`
+  and therefore could not measure sensitivity. The corrected dynamic 1/3/6 probe produces F1
+  `0.0`, `0.0`, and `0.007005`. That result does not reproduce the prior firm-lane retrieval
+  dead-end, so the settled firm no-widening result must not be generalized to the synthetic lane
+  without further evidence. The corrected generated report digest is
+  `813f9d2efd21302f009c95a60a883c459e8e2a56cf0392c9472c70472fb8ffa7`.
+- PR [#9](https://github.com/damienriehl/folio-resolve/pull/9) merged as `4e17072b`; corrected
+  report PR [#10](https://github.com/damienriehl/folio-resolve/pull/10) merged as `4bd353d5`.
+  Report validation is `1055 passed, 2 skipped`; Ruff, mypy (`src` and `eval`), and diff checks
+  pass.
+- U10 live-gate recovery exposed and repaired three independent fail-closed defects. Commit
+  `96cb650` preserves the consumer virtualenv interpreter symlink instead of resolving it to the
+  base Python. Mapper commit `79c323f` installs `folio-python[search] == 0.3.6` and locks
+  `alea-llm-client == 0.3.3`; upstream PR
+  [alea-institute/folio-mapper#10](https://github.com/alea-institute/folio-mapper/pull/10) merged as
+  `433736c7`. Commit `ce3c918` removes redundant free-text labels from local stage snapshots so
+  the protected-surface leak gate can remain fail-closed while retaining IRIs, scores, ranks,
+  gate reasons, and full candidate accounting.
+- The clean one-scoreable-item three-stack gate completed at local commit `d814881`. All three
+  stage snapshots and the final comparison passed their leak gates; report SHA-256 is
+  `65dccf4d0d45b86b38d177a1eba8632190941414526363ed867cbcdbcaf2a621`. Exact corpus/config,
+  dependency-version, invocation, repository, items-file, and stage-file receipts are present.
+- Required manual IRI inspection found a real comparability defect before the pilot: mapper emits
+  bare `R...` hashes while gold, enrich, and folio-resolve use full
+  `https://folio.openlegalstandard.org/...` IRIs. Mapper's apparent zero score is therefore not a
+  valid pilot signal. Upstream mapper PR
+  [#11](https://github.com/alea-institute/folio-mapper/pull/11) emits canonical full IRIs and fails
+  closed on foreign namespaces; folio-resolve PR #11 rejects non-canonical consumer IRIs before
+  scoring. Both fixes merged as mapper `35c9d307` and folio-resolve `659ca93`.
+- The corrected one-item gate passed leak checks with report digest
+  `1548b6d41e16246c9909025e4a3fb852174de65938b350c216b3ad5d1cb0d469`. All scored outputs plus
+  mapper/enrich stage IRIs are canonical full FOLIO IRIs. The sole foreign local raw trace is
+  `owl:Thing`; it is explicitly gated, unranked, and uncommitted. The one-item metrics are all zero
+  and are plumbing evidence only, not a comparative verdict.
+- The required pilot is 30 scoreable plus all 30 no-match rows and still projects to roughly a day.
+  PR [#12](https://github.com/damienriehl/folio-resolve/pull/12) at `2435df2` shards it into 60
+  independently published, leak-gated reports; fsyncs each completed shard; binds exact consumer
+  interpreter/distribution/model and repository fingerprints; and emits explicit aggregate
+  invocation receipts. The real durable checkpoint is initialized at 0/60 with fingerprint
+  `1b7f98f0a75467866686d0f5b398039fe1c23e2dabea59f6a64dee9d9eac6539`; no shard started before
+  the corrected gate passed.
+
 ## Plan-level verdicts
 
 | Plan | Verdict | Evidence | Remaining authority |
 |---|---|---|---|
 | Post-Hardening Integration (2026-08-06) | **Complete** — U1–U5 | folio-resolve PRs #2/#4 merged; mootloop PRs #31 then #30 merged; v0.4.0 release published; all three v0.4.0 consumer-pin PRs merged; post-release handoff records full verification | None. Do not reopen this release from stale handoffs. |
-| Synthetic Benchmark F1 Campaign (2026-08-16) | **Partial** — implementation scaffolding mostly landed; runtime campaign tail open | folio-resolve PR #8 and consumer runner PRs merged; U1–U6 and U9 code complete; U3 gold v7/calibration complete; corpus v1 committed; U8 recovery commits `a6e87ef`, `ae16a08`, and review fix `88a0732`; the first recovered baseline failed closed on four public/static metadata collisions after scoring | Autonomous queue below, five decisions, and later owner-run metric gates |
+| Synthetic Benchmark F1 Campaign (2026-08-16) | **Partial** — U8 complete; deterministic comparison and guarded iteration tail open | folio-resolve PRs #8/#9/#10 and consumer runners merged; U1–U6 and U8 code/report complete; U3 gold v7/calibration complete; corpus v1 committed; U10 one-item plumbing/leak gate passed and manual inspection correctly blocked a non-canonical mapper result | Autonomous queue below, evidence-bound decisions, and later owner-run metric gates |
 | F1 Improvement Loop (2026-07-27 carryover) | **Implemented/superseded, with live gates carried forward** | U1–U10 implementation and measured v0.4.0 iteration/release evidence landed; Gate 1b folded through gold v7; its gated synthetic and close-out work was restructured into the 2026-08-16 campaign | Follow the newer campaign plan; do not implement old U11/U12 as a parallel design |
 
 ## Unit audit — 2026-08-06 plan
@@ -154,9 +207,9 @@ branch: "docs/recent-plan-audit-2026-08-20"
 | U5 corpus schema/builder | **Complete** | Corpus v1: 225 scoreable, 15 needs-review, 30 no-match |
 | U6 label-blind generation | **Complete** | Generation artifacts and corpus v1 landed |
 | U7 grader/close-call lane | **Partial** | Code is complete. The first consensus-audit sitting, confidence-floor calibration, and human ratification into corpus v2 wait on D1/D2 and owner adjudication. |
-| U8 synthetic scoring | **Partial; resumable eight-shard rerun active** | The bounded-cache path and power-loss-safe checkpointing are committed and pushed in PR #9. The generation is pinned to `933c6ef`; it must finish, finalize, validate, and commit `eval/reports/synthetic-baseline-v1.json`. |
+| U8 synthetic scoring | **Complete** | All 255 checkpoints completed at scorer `933c6ef`; automatic and finalize-only reports were byte-identical. Corrected depth-probe report PR #10 merged as `4bd353d5`; accounting, determinism, leak, test, type, and lint gates pass. |
 | U9 guarded iteration loop | **Partial** | Code is complete; no real corpus-v1 improvement iteration is recorded yet. Pilot must run first. |
-| U10 deterministic comparison | **Partial; code published in PR #9 and prerequisites verified** | Local live-gate selection, reproducibility receipts, stage attribution, and fail-closed consumer contracts are included in PR #9. Mapper #9 and enrich #38 are merged; both landed trees and active environments resolve the required common `folio-python 0.3.6`. Run the live gate, 30-item pilot, and final full comparison after U8 releases the shared runtime. |
+| U10 deterministic comparison | **Partial; corrected live gate passed, pilot queued** | Mapper #11 and folio-resolve #11 merged as `35c9d307` / `659ca93`. Corrected report `1548b6d4...` is leak-clean with zero non-canonical scored/stage IRIs. Outage-safe PR #12 is in review and its exact 60-item checkpoint is initialized at 0/60. Run the pilot before the final full comparison. |
 | U11 owner-run LLM lanes | **Partial / owner-run** | Flags and seams are merged. Run both shipped configurations with owner-held keys and record explicit skip markers where unavailable. |
 | U12 parity + attribution | **Partial** | Static parity map is complete. Add controlled replay/ablation only where U10 reveals an incumbent win, subject to D4. |
 | U13 campaign report/verdict | **Not started** | Assemble after U9/U10/U12; final firm exam and adoption decision are owner gates. |
@@ -166,11 +219,9 @@ branch: "docs/recent-plan-audit-2026-08-20"
 Execute in dependency order. A later item is queued even when an earlier owner gate prevents it
 from running in the same session.
 
-1. **Finish and validate the active U8 baseline.** The bounded-memory probe path, public-metadata
-   preflight, D5 policy, and power-loss-safe checkpointing are implemented and pushed. Let the
-   active 225-item plus 30 no-match, eight-shard run finish; then finalize from the exact `933c6ef`
-   fingerprint, verify corpus/config hashes, zero non-public leak collisions, deterministic report
-   content, depth-probe metrics, and resource evidence before committing the report.
+1. **Complete — finish and validate U8.** All 255 checkpoint items completed at exact scorer
+   `933c6ef`; automatic and finalize-only reports were byte-identical. The corrected 1/3/6 depth
+   probe, report artifact, and full validation landed through folio-resolve PR #10.
 2. **Complete — merge and verify both consumer prerequisites.** Mapper #9 and enrich #38 merged as
    `a5bd0512` and `bb576ac`. Their fetched default-branch trees match the reviewed heads; both
    locks and active environments resolve `folio-python 0.3.6`. Focused contract suites passed on
@@ -181,9 +232,10 @@ from running in the same session.
    duplicate U10 PR. Preserve the true one-scoreable-item gate, exact process receipts, input
    fingerprints, full stage snapshots, gold/no-match sets, and candidate lifecycle attribution
    when running the live gate and pilot.
-4. **Run U10 live gate and 30-item pilot.** Use the pinned v0.4.0 incumbent lanes in the two
-   sibling repos, leave both trees byte-identical to their starting status, and commit the pilot
-   artifact or a clearly named pilot report if the final report path is reserved.
+4. **In progress — run the outage-safe U10 pilot.** Mapper #11 and folio-resolve #11 are merged;
+   the corrected one-item gate confirms canonical mapper output and leak-clean receipts. PR #12 is
+   under fresh review at `2435df2`; its real fingerprint-bound checkpoint is initialized at 0/60.
+   Settle and merge the PR, then launch/resume the 60 independent shards and finalize their report.
 5. **Complete — resumable/sharded scoring.** PR #9 checkpoints each surface-free post-adapter
    result atomically, replays through the unchanged score/depth-probe/report/leak-check path, and
    fails closed on fingerprint or record corruption. Direct, resumed, and differently ordered
@@ -297,12 +349,14 @@ Notes (optional):
 - Peak observed baseline RSS: **~30.5 GB**. The full-result per-passage adapter cache is the
   confirmed source; the existing ranked top-200 item results are sufficient for the depth probe.
 - Bounded one-passage evidence: affected folio-python caches return to zero; peak RSS is
-  715,524 KiB (about 699 MiB). The complete bounded rerun emits no per-item progress and is still
-  active; the measured one-item path implies a conservative roughly 27-hour total including the
-  no-match slice.
-- Synthetic baseline/comparison/final-report receipts: still pending.
+  715,524 KiB (about 699 MiB). The complete bounded rerun subsequently finished all 255 items and
+  finalized byte-identically from its exact checkpoint fingerprint.
+- Synthetic baseline receipt: complete and merged. The original U10 live metric was invalidated by
+  the bare-hash/full-IRI unit mismatch; the corrected leak-clean live receipt is complete. Pilot and
+  final comparison receipts remain pending.
 
-Latest recovery-branch verification: `1054 passed, 2 skipped`; Ruff and both mypy targets pass.
+Latest pilot-PR verification: `1075 passed, 2 skipped`; Ruff, both mypy targets, and diff
+checks pass.
 
 ## Shipping state
 
@@ -313,5 +367,20 @@ Latest recovery-branch verification: `1054 passed, 2 skipped`; Ruff and both myp
 - This handoff is committed alone on its focused documentation branch.
 - Commit `4ad694f` and subsequent audit-only updates are pushed on the focused branch; the branch
   is not merged.
-- U8 resumable-scoring PR #9 is open at head `dad7f4c`; it is mergeable, feedback-free at the last
-  snapshot, and intentionally not auto-merged by the target-posture watcher.
+- U8 resumable-scoring PR #9 merged as `4e17072b`; corrected report PR #10 merged as `4bd353d5`.
+- U10 implementation PR [#11](https://github.com/damienriehl/folio-resolve/pull/11) merged as
+  `659ca93`; it includes review fixes for single-consumer reports, exact CLI/public-metadata grammar,
+  safe template parsing, and the non-canonical-IRI abort. Final validation was `1058 passed,
+  2 skipped` with Ruff and diff checks clean.
+- Mapper dependency PR [alea-institute/folio-mapper#10](https://github.com/alea-institute/folio-mapper/pull/10)
+  merged as `433736c7`. A separate batch-embedding prototype reproduced the scalar one-item stage
+  object exactly but took about nine minutes, not a material enough improvement to ship.
+- Mapper canonical-IRI PR [alea-institute/folio-mapper#11](https://github.com/alea-institute/folio-mapper/pull/11)
+  merged as `35c9d307`; focused runner tests are `9 passed`, full backend is `529 passed, 10
+  skipped`, lock and diff checks pass. A clean Python 3.11 runtime at that exact merge commit imports
+  `folio-python 0.3.6`.
+- Final outage-safe pilot branch `feat/u10-resumable-pilot-final` is pushed in PR #12 at `2435df2`;
+  full verification is `1075 passed, 2 skipped`, Ruff and both mypy targets clean. Review fixes add
+  durable fsync publication, exact consumer-environment/model binding, and aggregate invocation
+  provenance. Manifest SHA-256 is `ae5d61a4d35e11de07613eb15c4536afe657903d75542932d00523f2fb9bfeb8`;
+  it contains 60 expected items and zero completed shards.
