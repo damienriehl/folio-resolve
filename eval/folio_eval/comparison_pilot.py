@@ -51,6 +51,10 @@ from pathlib import Path
 from urllib.parse import unquote, urlparse
 
 
+if any(name in sys.modules for name in ("sitecustomize", "usercustomize")):
+    raise RuntimeError("startup customization module is not allowed")
+
+
 def digest_bytes(value):
     return hashlib.sha256(value).hexdigest()
 
@@ -58,6 +62,30 @@ def digest_bytes(value):
 def digest_file(path):
     with path.open("rb") as handle:
         return hashlib.file_digest(handle, "sha256").hexdigest()
+
+
+allowed_executable_pth_lines = {
+    "import _cuda_bindings_redirector",
+    "import _virtualenv",
+    "import os; var = 'SETUPTOOLS_USE_DISTUTILS'; enabled = os.environ.get(var, 'local') == 'local'; enabled and __import__('_distutils_hack').add_shim();",
+}
+
+
+def read_pth_paths(path):
+    paths = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if stripped.startswith(("import ", "import\t")):
+            if stripped not in allowed_executable_pth_lines:
+                raise RuntimeError("unsupported executable .pth line is not allowed")
+            continue
+        if stripped and not stripped.startswith("#"):
+            candidate = Path(stripped)
+            if not candidate.is_absolute():
+                candidate = path.parent / candidate
+            if candidate.is_dir():
+                paths.append(candidate.resolve())
+    return paths
 
 
 distributions = []
@@ -73,11 +101,6 @@ for distribution in importlib.metadata.distributions():
     direct_url = direct_url_text.encode()
     distribution_files = []
     pth_paths = []
-    allowed_executable_pth_lines = {
-        "import _cuda_bindings_redirector",
-        "import _virtualenv",
-        "import os; var = 'SETUPTOOLS_USE_DISTUTILS'; enabled = os.environ.get(var, 'local') == 'local'; enabled and __import__('_distutils_hack').add_shim();",
-    }
     for relative in distribution.files or ():
         path = Path(distribution.locate_file(relative))
         if not path.is_file():
@@ -91,18 +114,7 @@ for distribution in importlib.metadata.distributions():
         distribution_files.append(entry)
         installed_entries.append([canonical_name, *entry])
         if path.suffix == ".pth":
-            for line in path.read_text(encoding="utf-8").splitlines():
-                stripped = line.strip()
-                if stripped.startswith(("import ", "import\t")):
-                    if stripped not in allowed_executable_pth_lines:
-                        raise RuntimeError("unsupported executable .pth line is not allowed")
-                    continue
-                if stripped and not stripped.startswith("#"):
-                    candidate = Path(stripped)
-                    if not candidate.is_absolute():
-                        candidate = path.parent / candidate
-                    if candidate.is_dir():
-                        pth_paths.append(candidate.resolve())
+            pth_paths.extend(read_pth_paths(path))
 
     editable_sources = []
     excluded_source_parts = {
@@ -213,6 +225,9 @@ site_entries = []
 for site_root in sorted(site_roots):
     if not site_root.is_dir():
         continue
+    for pth_path in sorted(site_root.glob("*.pth")):
+        if pth_path.is_file():
+            read_pth_paths(pth_path)
     for path in sorted(site_root.rglob("*")):
         if not path.is_file():
             continue

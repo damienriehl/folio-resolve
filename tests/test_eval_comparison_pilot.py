@@ -348,7 +348,8 @@ def test_environment_probe_rejects_executable_pth_path_injection(tmp_path: Path)
 
 def test_environment_probe_rejects_executable_pth_meta_path_hook(tmp_path: Path) -> None:
     interpreter, site = _isolated_python_site(tmp_path)
-    (site / "sitecustomize.py").write_text(
+    (site / "_virtualenv.pth").write_text("import _virtualenv\n", encoding="utf-8")
+    (site / "_virtualenv.py").write_text(
         "import sys\n"
         "sys.meta_path.insert(0, type('InjectedFinder', (), "
         "{'find_spec': lambda self, *args: None})())\n",
@@ -364,6 +365,38 @@ def test_environment_probe_rejects_executable_pth_meta_path_hook(tmp_path: Path)
 
     assert completed.returncode != 0
     assert "unsupported meta-path finder" in completed.stderr
+
+
+def test_environment_probe_rejects_sitecustomize(tmp_path: Path) -> None:
+    interpreter, site = _isolated_python_site(tmp_path)
+    (site / "sitecustomize.py").write_text("MARKER = True\n", encoding="utf-8")
+
+    completed = pilot_module.subprocess.run(
+        [interpreter, "-B", "-P", "-c", pilot_module._CONSUMER_ENVIRONMENT_PROBE],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode != 0
+    assert "startup customization module" in completed.stderr
+
+
+def test_environment_probe_rejects_unowned_executable_pth(tmp_path: Path) -> None:
+    interpreter, site = _isolated_python_site(tmp_path)
+    (site / "unowned.pth").write_text(
+        "import sys; sys.audit('unowned-hook')\n", encoding="utf-8"
+    )
+
+    completed = pilot_module.subprocess.run(
+        [interpreter, "-B", "-P", "-c", pilot_module._CONSUMER_ENVIRONMENT_PROBE],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode != 0
+    assert "unsupported executable .pth line" in completed.stderr
 
 
 def test_environment_probe_hashes_unowned_site_package_files(tmp_path: Path) -> None:
