@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import subprocess
 from contextlib import nullcontext
+from copy import deepcopy
 from dataclasses import replace
 from hashlib import sha256
 from pathlib import Path
@@ -14,6 +15,7 @@ import folio_eval.comparison as comparison_module
 import pytest
 from folio_eval.answer_rule import AnswerRuleConfig
 from folio_eval.comparison import (
+    DEFAULT_COMPARISON_PUBLIC_METADATA_PATH,
     ComparisonError,
     IncumbentInstallMismatch,
     StackContractError,
@@ -23,7 +25,9 @@ from folio_eval.comparison import (
     build_comparison,
     classify_verdict,
     emit_items_file,
+    load_public_comparison_metadata,
     parse_stack_output,
+    preflight_comparison_publication,
     run_consumer_stack,
     run_local_stack,
     score_stack,
@@ -374,6 +378,162 @@ def test_write_comparison_leakchecks_every_string(tmp_path: Path) -> None:
         )
 
 
+def _comparison_public_metadata_payload() -> dict[str, object]:
+    argv = ["safe"] * 15
+    argv[2] = "run_synthetic_comparison"
+    argv[3] = "--corpus-manifest"
+    argv[4] = "eval/synthetic/corpus_v1.manifest.json"
+    argv[5] = "--config"
+    argv[6] = "eval/synthetic/answer_rule_config_synthetic_v1.json"
+    argv[13] = "--leak-manifest"
+    argv[14] = "eval/synthetic/firm-surface-manifest-v1.json"
+    rationale = "synthetic lane v1: top_k sized to corpus gold density (uncalibrated)"
+    return {
+        "kind": "synthetic_comparison",
+        "provenance": {
+            "comparison_invocation": {"argv": argv},
+            "config_selection": {
+                "answer_rule_config_sha256": (
+                    "ac413db665602cdde841a7e7590adc4eba02cded82266df5e763d7be7dd87c03"
+                ),
+                "answer_rule_config": {"rationale": rationale},
+            },
+        },
+        "stacks": {
+            "folio-enrich:incumbent": {
+                "invocation": {
+                    "argv": ["python", "/repos/enrich/backend/eval/synthetic_runner.py"],
+                    "working_directory": "/repos/enrich",
+                }
+            },
+            "folio-mapper:incumbent": {
+                "invocation": {
+                    "argv": ["python", "/repos/mapper/backend/scripts/synthetic_runner.py"],
+                    "working_directory": "/repos/mapper",
+                }
+            },
+            "folio-resolve:candidate": {"config": {"rationale": rationale}},
+        },
+    }
+
+
+def test_versioned_public_metadata_exempts_only_exact_comparison_paths() -> None:
+    salt = b"0123456789abcdef"
+    payload = _comparison_public_metadata_payload()
+    public_values = [
+        "synthetic_comparison",
+        "run_synthetic_comparison",
+        "eval/synthetic/corpus_v1.manifest.json",
+        "eval/synthetic/answer_rule_config_synthetic_v1.json",
+        "eval/synthetic/firm-surface-manifest-v1.json",
+        "synthetic lane v1: top_k sized to corpus gold density (uncalibrated)",
+        "/repos/enrich/backend/eval/synthetic_runner.py",
+        "/repos/mapper/backend/scripts/synthetic_runner.py",
+        "Secret Surface",
+    ]
+    manifest = build_manifest(public_values, salt=salt, gold_version="g", gold_content_sha256="h")
+    metadata = load_public_comparison_metadata(DEFAULT_COMPARISON_PUBLIC_METADATA_PATH)
+
+    preflight_comparison_publication(payload, manifest, salt, public_metadata=metadata)
+
+    reordered = deepcopy(payload)
+    reordered["provenance"]["comparison_invocation"]["argv"] = [
+        "python",
+        "eval/run_downstream.py",
+        "run_synthetic_comparison",
+        "--limit",
+        "1",
+        "--leak-manifest",
+        "eval/synthetic/firm-surface-manifest-v1.json",
+        "--config",
+        "eval/synthetic/answer_rule_config_synthetic_v1.json",
+        "--corpus-manifest",
+        "eval/synthetic/corpus_v1.manifest.json",
+    ]
+    preflight_comparison_publication(reordered, manifest, salt, public_metadata=metadata)
+
+    equals_form = deepcopy(payload)
+    equals_form["provenance"]["comparison_invocation"]["argv"] = [
+        "python",
+        "eval/run_downstream.py",
+        "run_synthetic_comparison",
+        "--corpus-manifest=eval/synthetic/corpus_v1.manifest.json",
+        "--config=eval/synthetic/answer_rule_config_synthetic_v1.json",
+        "--leak-manifest=eval/synthetic/firm-surface-manifest-v1.json",
+        "--limit",
+        "1",
+    ]
+    preflight_comparison_publication(equals_form, manifest, salt, public_metadata=metadata)
+
+    duplicate_option = deepcopy(reordered)
+    duplicate_option["provenance"]["comparison_invocation"]["argv"].extend(
+        ["--config", "eval/synthetic/answer_rule_config_synthetic_v1.json"]
+    )
+    with pytest.raises(ComparisonError, match="missing or duplicated"):
+        preflight_comparison_publication(
+            duplicate_option, manifest, salt, public_metadata=metadata
+        )
+
+    mixed_duplicate_option = deepcopy(equals_form)
+    mixed_duplicate_option["provenance"]["comparison_invocation"]["argv"].extend(
+        ["--config", "eval/synthetic/answer_rule_config_synthetic_v1.json"]
+    )
+    with pytest.raises(ComparisonError, match="missing or duplicated"):
+        preflight_comparison_publication(
+            mixed_duplicate_option, manifest, salt, public_metadata=metadata
+        )
+
+    mapper_only = deepcopy(payload)
+    del mapper_only["stacks"]["folio-enrich:incumbent"]
+    preflight_comparison_publication(mapper_only, manifest, salt, public_metadata=metadata)
+
+    enrich_only = deepcopy(payload)
+    del enrich_only["stacks"]["folio-mapper:incumbent"]
+    preflight_comparison_publication(enrich_only, manifest, salt, public_metadata=metadata)
+
+    with pytest.raises(ComparisonError, match="collisions=1"):
+        preflight_comparison_publication(
+            {**payload, "note": "Secret Surface"},
+            manifest,
+            salt,
+            public_metadata=metadata,
+        )
+    with pytest.raises(ComparisonError, match="collisions"):
+        preflight_comparison_publication(
+            {**payload, "note": {"escaped": "Secret\nSurface"}},
+            manifest,
+            salt,
+            public_metadata=metadata,
+        )
+
+
+def test_public_metadata_rejects_extra_template_replacement_fields(tmp_path: Path) -> None:
+    payload = json.loads(DEFAULT_COMPARISON_PUBLIC_METADATA_PATH.read_text(encoding="utf-8"))
+    template_field = next(field for field in payload["fields"] if "value_template" in field)
+    template_field["value_template"] += "{other}"
+    path = tmp_path / "public-metadata.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ComparisonError, match=r"unsupported.*template"):
+        load_public_comparison_metadata(path)
+
+
+def test_comparison_public_metadata_rejects_value_drift() -> None:
+    salt = b"0123456789abcdef"
+    payload = _comparison_public_metadata_payload()
+    payload["kind"] = "changed"
+    metadata = load_public_comparison_metadata(DEFAULT_COMPARISON_PUBLIC_METADATA_PATH)
+    manifest = build_manifest(
+        ["unrelated protected value"],
+        salt=salt,
+        gold_version="g",
+        gold_content_sha256="h",
+    )
+
+    with pytest.raises(ComparisonError, match="value mismatch"):
+        preflight_comparison_publication(payload, manifest, salt, public_metadata=metadata)
+
+
 def test_build_comparison_records_pilot_iri_sets_and_reproducibility_provenance(
     tmp_path: Path,
 ) -> None:
@@ -551,10 +711,8 @@ def test_local_stack_emits_attribution_ready_candidate_stages(tmp_path: Path) ->
         "candidates": [
             {
                 "iri": "iri:a",
-                "label": "A",
                 "branch": "",
                 "extraction_path": "multi_strategy_recall",
-                "surface_term": "Alpha beta",
                 "pre_gate_score": 90.0,
                 "post_gate_score": 88.0,
                 "gate_disposition": "survived",
@@ -566,10 +724,8 @@ def test_local_stack_emits_attribution_ready_candidate_stages(tmp_path: Path) ->
             },
             {
                 "iri": "iri:b",
-                "label": "B",
                 "branch": "",
                 "extraction_path": "aho_corasick",
-                "surface_term": "B",
                 "pre_gate_score": 100.0,
                 "post_gate_score": None,
                 "gate_disposition": "blocklist",
@@ -581,10 +737,8 @@ def test_local_stack_emits_attribution_ready_candidate_stages(tmp_path: Path) ->
             },
             {
                 "iri": "iri:c",
-                "label": "C",
                 "branch": "",
                 "extraction_path": "multi_strategy_recall",
-                "surface_term": "beta",
                 "pre_gate_score": 40.0,
                 "post_gate_score": 40.0,
                 "gate_disposition": "score_floor",
@@ -673,11 +827,11 @@ def test_consumer_runner_translates_deterministic_lane_to_incumbent(
             + json.dumps(
                 {
                     "item_id": "one",
-                    "iris": ["iri:a"],
+                    "iris": ["https://folio.openlegalstandard.org/Ra"],
                     "stages": {
-                        "stage1_filter": ["iri:a"],
-                        "embedding_rerank": ["iri:a"],
-                        "committed": ["iri:a"],
+                        "stage1_filter": ["https://folio.openlegalstandard.org/Ra"],
+                        "embedding_rerank": ["https://folio.openlegalstandard.org/Ra"],
+                        "committed": ["https://folio.openlegalstandard.org/Ra"],
                     },
                 }
             )
@@ -694,7 +848,12 @@ def test_consumer_runner_translates_deterministic_lane_to_incumbent(
         lambda _root: {"git_sha": "a" * 40, "initial_status_clean": True},
     )
     monkeypatch.setattr(subprocess, "run", fake_run)
-    spec = ConsumerSpec("folio-mapper", tmp_path, tmp_path / "python")
+    base_python = tmp_path / "base-python"
+    base_python.touch()
+    venv_python = tmp_path / ".venv" / "bin" / "python"
+    venv_python.parent.mkdir(parents=True)
+    venv_python.symlink_to(base_python)
+    spec = ConsumerSpec("folio-mapper", tmp_path, venv_python)
     items_path = tmp_path / "items.jsonl"
     items_path.write_text(json.dumps({"item_id": "one"}) + "\n", encoding="utf-8")
 
@@ -703,7 +862,29 @@ def test_consumer_runner_translates_deterministic_lane_to_incumbent(
     assert run.lane == "incumbent"
     assert run.invocation_working_directory == str(tmp_path.resolve())
     assert run.repository["git_sha"] == "a" * 40
+    assert commands[0][0] == str(venv_python)
     assert commands[0][commands[0].index("--lane") + 1] == "deterministic"
+
+
+def test_consumer_rows_reject_bare_hashes_before_scoring() -> None:
+    run = StackRun(
+        stack="folio-mapper",
+        lane="incumbent",
+        folio_resolve_version="0.4.0",
+        folio_python_version="0.3.6",
+        config=dict(comparison_module.MAPPER_DETERMINISTIC_CONFIG),
+        rows={"one": frozenset({"Rbare"})},
+        stages={
+            "one": {
+                "stage1_filter": ["Rbare"],
+                "embedding_rerank": ["Rbare"],
+                "committed": ["Rbare"],
+            }
+        },
+    )
+
+    with pytest.raises(StackContractError, match="non-canonical FOLIO IRI"):
+        comparison_module._assert_consumer_rows(run, ["one"])
 
 
 def test_consumer_runner_translates_timeout_to_domain_error(

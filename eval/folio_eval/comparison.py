@@ -10,12 +10,15 @@ from __future__ import annotations
 import importlib.metadata
 import json
 import os
+import re
 import subprocess
 import tempfile
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from dataclasses import field as dataclass_field
 from pathlib import Path
+from string import Formatter
+from types import MappingProxyType
 
 from .answer_rule import AnswerRuleConfig, commit_from_ranked, rank_candidates
 from .downstream import (
@@ -56,6 +59,7 @@ class VersionSkewError(ComparisonError):
 
 
 DEFAULT_COMPARISON_TIMEOUT_S = 2 * 60 * 60
+FOLIO_IRI_ROOT = "https://folio.openlegalstandard.org/"
 
 MAPPER_DETERMINISTIC_CONFIG: Mapping[str, object] = {
     "threshold": 0.3,
@@ -96,6 +100,96 @@ CONSUMER_DETERMINISTIC_CONFIGS: Mapping[str, Mapping[str, object]] = {
     "folio-mapper": MAPPER_DETERMINISTIC_CONFIG,
     "folio-enrich": ENRICH_DETERMINISTIC_CONFIG,
 }
+
+COMPARISON_PUBLIC_METADATA_KIND = "synthetic-comparison-public-metadata"
+COMPARISON_PUBLIC_METADATA_VERSION = 1
+DEFAULT_COMPARISON_PUBLIC_METADATA_PATH = (
+    Path(__file__).resolve().parents[1] / "synthetic" / "public_comparison_metadata_v1.json"
+)
+COMPARISON_PUBLIC_METADATA_PATHS = frozenset(
+    {
+        ("kind",),
+        ("provenance", "comparison_invocation", "argv", "2"),
+        ("provenance", "comparison_invocation", "argv", "--corpus-manifest"),
+        ("provenance", "comparison_invocation", "argv", "--config"),
+        ("provenance", "comparison_invocation", "argv", "--leak-manifest"),
+        ("provenance", "config_selection", "answer_rule_config", "rationale"),
+        ("stacks", "folio-enrich:incumbent", "invocation", "argv", "1"),
+        ("stacks", "folio-mapper:incumbent", "invocation", "argv", "1"),
+        ("stacks", "folio-resolve:candidate", "config", "rationale"),
+    }
+)
+
+
+@dataclass(frozen=True, slots=True)
+class PublicComparisonMetadata:
+    """Versioned, path-bound public strings that the comparison gate may exempt."""
+
+    source_path: Path
+    version: int
+    answer_rule_config_sha256: str
+    fields: Mapping[tuple[str, ...], tuple[str, str]]
+
+
+def load_public_comparison_metadata(path: Path) -> PublicComparisonMetadata:
+    """Load the independently reviewed comparison public-string contract."""
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict) or payload.get("kind") != COMPARISON_PUBLIC_METADATA_KIND:
+        raise ComparisonError(f"invalid comparison public metadata contract: {path}")
+    if payload.get("version") != COMPARISON_PUBLIC_METADATA_VERSION:
+        raise ComparisonError(
+            f"unsupported comparison public metadata version: {payload.get('version')!r}"
+        )
+    config_sha = payload.get("answer_rule_config_sha256")
+    if not isinstance(config_sha, str) or not re.fullmatch(r"[0-9a-f]{64}", config_sha):
+        raise ComparisonError("comparison public metadata config hash must be lowercase SHA-256")
+    raw_fields = payload.get("fields")
+    if not isinstance(raw_fields, list):
+        raise ComparisonError("comparison public metadata fields must be a list")
+    fields: dict[tuple[str, ...], tuple[str, str]] = {}
+    for entry in raw_fields:
+        if not isinstance(entry, dict):
+            raise ComparisonError("comparison public metadata field must be an object")
+        raw_path = entry.get("path")
+        if (
+            not isinstance(raw_path, list)
+            or not raw_path
+            or not all(isinstance(part, str) and part for part in raw_path)
+        ):
+            raise ComparisonError("malformed comparison public metadata path")
+        field_path = tuple(raw_path)
+        value = entry.get("value")
+        template = entry.get("value_template")
+        if (isinstance(value, str)) == (isinstance(template, str)):
+            raise ComparisonError(
+                "comparison public metadata field requires exactly one value or value_template"
+            )
+        if template is not None:
+            try:
+                replacement_fields = [
+                    (field_name, format_spec, conversion)
+                    for _, field_name, format_spec, conversion in Formatter().parse(str(template))
+                    if field_name is not None
+                ]
+            except ValueError as exc:
+                raise ComparisonError(
+                    "unsupported comparison public metadata template"
+                ) from exc
+            if replacement_fields != [("working_directory", "", None)]:
+                raise ComparisonError("unsupported comparison public metadata template")
+        if field_path in fields:
+            raise ComparisonError(f"duplicate comparison public metadata path: {field_path!r}")
+        fields[field_path] = (
+            ("value", value) if isinstance(value, str) else ("template", str(template))
+        )
+    if frozenset(fields) != COMPARISON_PUBLIC_METADATA_PATHS:
+        raise ComparisonError("comparison public metadata paths do not match the v1 contract")
+    return PublicComparisonMetadata(
+        source_path=path,
+        version=COMPARISON_PUBLIC_METADATA_VERSION,
+        answer_rule_config_sha256=config_sha,
+        fields=MappingProxyType(fields),
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -413,6 +507,14 @@ def _assert_consumer_rows(run: StackRun, expected_ids: Sequence[str]) -> None:
             key: _assert_string_list(value, context=f"{run.stack} {item_id!r} {key}")
             for key, value in stage.items()
         }
+        if any(
+            not iri.startswith(FOLIO_IRI_ROOT)
+            for values in lists.values()
+            for iri in values
+        ) or any(not iri.startswith(FOLIO_IRI_ROOT) for iri in run.rows[item_id]):
+            raise StackContractError(
+                f"{run.stack} emitted a non-canonical FOLIO IRI for {item_id!r}"
+            )
         if run.stack == "folio-mapper":
             stage1 = lists["stage1_filter"]
             reranked = lists["embedding_rerank"]
@@ -460,7 +562,7 @@ def run_consumer_stack(
     with tempfile.TemporaryDirectory(prefix=f"{spec.name}-comparison-") as temporary:
         out_path = Path(temporary) / "stack.jsonl"
         command = [
-            str(spec.venv_python.resolve()),
+            str(spec.venv_python),
             str((spec.repo_root / relative_runner).resolve()),
             "--items",
             str(items_path.resolve()),
@@ -578,10 +680,8 @@ def run_local_stack(
             candidate_rows.append(
                 {
                     "iri": trace.iri,
-                    "label": trace.label,
                     "branch": trace.branch,
                     "extraction_path": trace.extraction_path,
-                    "surface_term": trace.surface_term,
                     "pre_gate_score": trace.pre_gate_score,
                     "post_gate_score": trace.post_gate_score,
                     "gate_disposition": trace.gate_disposition,
@@ -845,25 +945,164 @@ def build_comparison(
     }
 
 
-def _strings(value: object) -> Iterable[str]:
-    if isinstance(value, str):
-        yield value
-    elif isinstance(value, Mapping):
-        for key, nested in value.items():
-            yield str(key)
-            yield from _strings(nested)
-    elif isinstance(value, (list, tuple, set, frozenset)):
-        for nested in value:
-            yield from _strings(nested)
+def _comparison_value_and_resolved_path(
+    payload: Mapping[str, object], path: tuple[str, ...]
+) -> tuple[object, tuple[str, ...]]:
+    value: object = payload
+    resolved: list[str] = []
+    for part in path:
+        if isinstance(value, Mapping) and part in value:
+            value = value[part]
+            resolved.append(part)
+        elif isinstance(value, (list, tuple)) and part.isdigit() and int(part) < len(value):
+            index = int(part)
+            value = value[index]
+            resolved.append(str(index))
+        elif isinstance(value, (list, tuple)) and part.startswith("--"):
+            separate_matches = [index for index, item in enumerate(value) if item == part]
+            equals_prefix = f"{part}="
+            equals_matches = [
+                index
+                for index, item in enumerate(value)
+                if isinstance(item, str) and item.startswith(equals_prefix)
+            ]
+            if len(separate_matches) + len(equals_matches) != 1:
+                raise ComparisonError(
+                    f"comparison public metadata option is missing or duplicated: {part}"
+                )
+            if separate_matches:
+                index = separate_matches[0] + 1
+                if index >= len(value):
+                    raise ComparisonError(
+                        f"comparison public metadata option is missing or duplicated: {part}"
+                    )
+                value = value[index]
+            else:
+                index = equals_matches[0]
+                option_token = value[index]
+                assert isinstance(option_token, str)
+                value = option_token.removeprefix(equals_prefix)
+            resolved.append(str(index))
+        else:
+            raise ComparisonError(f"comparison public metadata path missing: {path!r}")
+    return value, tuple(resolved)
+
+
+def _comparison_value_at_path(
+    payload: Mapping[str, object], path: tuple[str, ...]
+) -> object:
+    return _comparison_value_and_resolved_path(payload, path)[0]
+
+
+def preflight_comparison_publication(
+    payload: Mapping[str, object],
+    leak_manifest: Manifest,
+    salt: bytes,
+    *,
+    public_metadata: PublicComparisonMetadata | None = None,
+) -> None:
+    """Fail closed on comparison strings except independently approved public fields."""
+    public_fields: dict[tuple[str, ...], str] = {}
+    if public_metadata is not None:
+        config_sha = _comparison_value_at_path(
+            payload,
+            ("provenance", "config_selection", "answer_rule_config_sha256"),
+        )
+        if config_sha != public_metadata.answer_rule_config_sha256:
+            raise ComparisonError("comparison public metadata answer-rule config hash mismatch")
+        for path, (kind, expected) in public_metadata.fields.items():
+            if path[0] == "stacks":
+                stacks = payload.get("stacks")
+                if not isinstance(stacks, Mapping):
+                    raise ComparisonError("comparison stacks are malformed")
+                if path[1] not in stacks:
+                    continue
+            if kind == "template":
+                if len(path) < 2 or path[0] != "stacks":
+                    raise ComparisonError("comparison public metadata template is not stack-bound")
+                working_directory = _comparison_value_at_path(
+                    payload, ("stacks", path[1], "invocation", "working_directory")
+                )
+                if not isinstance(working_directory, str):
+                    raise ComparisonError("comparison invocation working directory is not a string")
+                expected = expected.format(working_directory=working_directory.rstrip("/"))
+            actual, resolved_path = _comparison_value_and_resolved_path(payload, path)
+            if actual != expected:
+                raise ComparisonError(f"comparison public metadata value mismatch at path: {path!r}")
+            resolved_value = _comparison_value_at_path(payload, resolved_path)
+            if not isinstance(resolved_value, str):
+                raise ComparisonError(
+                    f"comparison public metadata value is not a string at path: {path!r}"
+                )
+            public_fields[resolved_path] = resolved_value
+
+    def collisions(value: object, path: tuple[str, ...] = ()) -> int:
+        if isinstance(value, str):
+            if public_fields.get(path) == value:
+                return 0
+            return scan_text(value, leak_manifest, salt)
+        has_public_descendant = any(
+            field_path[: len(path)] == path for field_path in public_fields
+        )
+        if (
+            isinstance(value, (Mapping, list, tuple, set, frozenset))
+            and not has_public_descendant
+        ):
+            # Scan independently non-public subtrees in one pass. This preserves
+            # fail-closed coverage (and can conservatively catch cross-field token
+            # windows) without paying the HMAC setup cost for every repeated IRI.
+            serialized_collisions = scan_text(
+                json.dumps(value, ensure_ascii=False, sort_keys=True, default=str),
+                leak_manifest,
+                salt,
+            )
+            escaped_collisions = 0
+            pending: list[object] = [value]
+            while pending:
+                nested = pending.pop()
+                if isinstance(nested, str):
+                    if json.dumps(nested, ensure_ascii=False)[1:-1] != nested:
+                        escaped_collisions += scan_text(nested, leak_manifest, salt)
+                elif isinstance(nested, Mapping):
+                    pending.extend(str(key) for key in nested)
+                    pending.extend(nested.values())
+                elif isinstance(nested, (list, tuple, set, frozenset)):
+                    pending.extend(nested)
+            return serialized_collisions + escaped_collisions
+        if isinstance(value, Mapping):
+            total = 0
+            for key, nested in value.items():
+                key_text = str(key)
+                total += scan_text(key_text, leak_manifest, salt)
+                total += collisions(nested, (*path, key_text))
+            return total
+        if isinstance(value, (list, tuple, set, frozenset)):
+            return sum(
+                collisions(nested, (*path, str(index)))
+                for index, nested in enumerate(value)
+            )
+        return 0
+
+    collision_count = collisions(payload)
+    if collision_count:
+        raise ComparisonError(f"comparison leak check failed: collisions={collision_count}")
 
 
 def write_comparison(
-    path: Path, payload: Mapping[str, object], leak_manifest: Manifest, salt: bytes
+    path: Path,
+    payload: Mapping[str, object],
+    leak_manifest: Manifest,
+    salt: bytes,
+    *,
+    public_metadata: PublicComparisonMetadata | None = None,
 ) -> Path:
     """Leak-check every string in the artifact, then atomically write canonical JSON."""
-    collisions = sum(scan_text(value, leak_manifest, salt) for value in _strings(payload))
-    if collisions:
-        raise ComparisonError(f"comparison leak check failed: collisions={collisions}")
+    preflight_comparison_publication(
+        payload,
+        leak_manifest,
+        salt,
+        public_metadata=public_metadata,
+    )
     text = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
     return _atomic_write_text(path, text)
 

@@ -72,6 +72,7 @@ def test_synthetic_comparison_cli_has_explicit_scoreable_only_live_gate() -> Non
 
     assert args.limit == 1
     assert args.scoreable_only is True
+    assert args.public_metadata.name == "public_comparison_metadata_v1.json"
 
 
 def _comparison_argv(*extra: str) -> list[str]:
@@ -93,6 +94,16 @@ def _comparison_argv(*extra: str) -> list[str]:
         "salt",
         *extra,
     ]
+
+
+def test_synthetic_comparison_cli_rejects_abbreviated_metadata_options() -> None:
+    abbreviated = _comparison_argv()
+    abbreviated[abbreviated.index("--config")] = "--conf"
+
+    with pytest.raises(SystemExit) as error:
+        _parser().parse_args(abbreviated)
+
+    assert error.value.code == 2
 
 
 @pytest.mark.parametrize("extra", [(), ("--limit", "30")])
