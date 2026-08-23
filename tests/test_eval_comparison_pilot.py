@@ -169,6 +169,12 @@ def test_fingerprint_prepares_both_incumbents_before_probing(
     monkeypatch.setattr(pilot_module, "_git_repository_state", lambda _root: {})
     monkeypatch.setattr(pilot_module, "_sha256_file", lambda _path: "a" * 64)
     monkeypatch.setattr(pilot_module, "load_config", lambda _path: AnswerRuleConfig())
+    monkeypatch.setattr(
+        pilot_module,
+        "assert_ontology_pin",
+        lambda expected: events.append(f"pin:{expected}")
+        or SimpleNamespace(sha256=expected),
+    )
     monkeypatch.setattr(pilot_module.importlib.metadata, "version", lambda _name: "0.4.0")
 
     fingerprint = _fingerprint(
@@ -182,12 +188,14 @@ def test_fingerprint_prepares_both_incumbents_before_probing(
     )
 
     assert events == [
+        "pin:ontology",
         "prepare:folio-mapper",
         "prepare:folio-enrich",
         f"probe:{mapper.venv_python}",
         f"probe:{enrich.venv_python}",
     ]
     assert fingerprint["incumbent_version"] == "0.4.0"
+    assert fingerprint["ontology_cache_sha256"] == "ontology"
 
 
 def test_finalization_invocation_records_supplied_input_paths(tmp_path: Path) -> None:
@@ -198,6 +206,7 @@ def test_finalization_invocation_records_supplied_input_paths(tmp_path: Path) ->
         checkpoint_dir=tmp_path / "checkpoint",
         leak_manifest=Path("custom/leaks.json"),
         salt_file=Path("custom/salt"),
+        public_metadata=Path("custom/public.json"),
         limit=7,
     )
     receipt = _finalization_invocation(args, tmp_path / "combined.jsonl")
@@ -206,6 +215,7 @@ def test_finalization_invocation_records_supplied_input_paths(tmp_path: Path) ->
     assert argv[argv.index("--corpus-manifest") + 1] == "custom/corpus.json"
     assert argv[argv.index("--config") + 1] == "custom/config.json"
     assert argv[argv.index("--leak-manifest") + 1] == "custom/leaks.json"
+    assert argv[argv.index("--public-metadata") + 1] == "custom/public.json"
 
 
 def test_load_shard_rejects_item_or_stack_drift(tmp_path: Path) -> None:

@@ -29,6 +29,7 @@ from .comparison import (
 from .downstream import FOLIO_RESOLVE_ROOT, enrich_spec, mapper_spec
 from .intake import sha256_bytes
 from .leakcheck import load_manifest
+from .selftest import assert_ontology_pin
 from .synthesize import LoadedCorpus, load_corpus
 from .synthetic_checkpoint import _atomic_create, fsync_directory
 
@@ -206,6 +207,7 @@ def _fingerprint(
     limit: int,
 ) -> dict[str, object]:
     config = load_config(config_path)
+    ontology_pin = assert_ontology_pin(corpus.manifest.ontology_cache_sha256)
     mapper = mapper_spec(mapper_root)
     enrich = enrich_spec(enrich_root)
     for consumer in (mapper, enrich):
@@ -230,6 +232,7 @@ def _fingerprint(
         "mapper_lock_sha256": _sha256_file(mapper.repo_root / "backend" / "uv.lock"),
         "mapper_repository": _git_repository_state(mapper_root),
         "nomatch_content_sha256": corpus.manifest.nomatch_content_sha256,
+        "ontology_cache_sha256": ontology_pin.sha256,
         "public_metadata_sha256": _sha256_file(public_metadata_path),
         "python_hash_seed": os.environ.get("PYTHONHASHSEED", ""),
         "python_version": platform.python_version(),
@@ -515,6 +518,8 @@ def _finalization_invocation(
             str(args.leak_manifest),
             "--salt-file",
             str(args.salt_file),
+            "--public-metadata",
+            str(args.public_metadata),
             "--limit",
             str(args.limit),
         ],
