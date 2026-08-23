@@ -237,6 +237,36 @@ def test_ignored_or_external_write_paths_are_allowed(
     pilot_module._assert_write_paths_are_safe(args)
 
 
+def test_planned_committed_report_path_is_allowed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    candidate = tmp_path / "candidate"
+    mapper = tmp_path / "mapper"
+    enrich = tmp_path / "enrich"
+    for root in (candidate, mapper, enrich):
+        root.mkdir()
+    args = SimpleNamespace(
+        checkpoint_dir=candidate / "ignored" / "checkpoint",
+        out=candidate / pilot_module.PUBLISHED_COMPARISON_REPORT,
+        mapper_root=mapper,
+        enrich_root=enrich,
+    )
+    observed: list[list[str]] = []
+
+    def check_ignore(command: list[str], **_kwargs: object) -> SimpleNamespace:
+        observed.append(command)
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(pilot_module, "FOLIO_RESOLVE_ROOT", candidate)
+    monkeypatch.setattr(pilot_module.subprocess, "run", check_ignore)
+
+    pilot_module._assert_write_paths_are_safe(args)
+
+    assert observed == [
+        ["git", "check-ignore", "--quiet", "--", "ignored/checkpoint"]
+    ]
+
+
 def test_ignored_write_paths_inside_source_roots_are_rejected(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

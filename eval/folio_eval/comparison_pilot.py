@@ -40,6 +40,7 @@ SHARD_COMPLETION_KIND = "synthetic-comparison-pilot-shard-completion"
 SHARD_COMPLETION_VERSION = 1
 DEFAULT_LIMIT = 30
 INCUMBENT_VERSION = "0.4.0"
+PUBLISHED_COMPARISON_REPORT = Path("eval/reports/synthetic-comparison-v1.json")
 _OFFLINE_RUNTIME_OVERRIDES = {
     "ACCELERATE_USE_CPU": "true",
     "CUDA_VISIBLE_DEVICES": "",
@@ -730,7 +731,7 @@ def _resolve_path_arguments(args: argparse.Namespace) -> None:
 
 
 def _assert_write_paths_are_safe(args: argparse.Namespace) -> None:
-    """Require repository-local outputs to be ignored before creating them."""
+    """Keep mutable checkpoints ignored while allowing the planned final artifact."""
     try:
         args.out.relative_to(args.checkpoint_dir)
     except ValueError:
@@ -784,6 +785,12 @@ def _assert_write_paths_are_safe(args: argparse.Namespace) -> None:
                     f"{output_name} must be outside fingerprinted source roots in the "
                     f"{repository_name} repository: {output_path}"
                 )
+            if (
+                output_name == "out"
+                and repository_name == "candidate"
+                and relative == PUBLISHED_COMPARISON_REPORT
+            ):
+                continue
             completed = subprocess.run(
                 ["git", "check-ignore", "--quiet", "--", relative.as_posix()],
                 cwd=repository_root,
