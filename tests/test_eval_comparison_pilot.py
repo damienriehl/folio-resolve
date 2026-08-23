@@ -349,6 +349,7 @@ def test_consumer_environment_fingerprint_uses_probe_digests(
 ) -> None:
     payload = {
         "schema_version": 1,
+        "cpu_backend_sha256": "8" * 64,
         "interpreter_path_sha256": "a" * 64,
         "interpreter_sha256": "b" * 64,
         "python_version": "3.11",
@@ -402,6 +403,11 @@ def test_consumer_environment_fingerprint_uses_probe_digests(
     }
     assert observed[0][:5] == [str(interpreter), "-I", "-S", "-B", "-c"]
     assert observed[1][:4] == [str(interpreter), "-B", "-P", "-c"]
+
+    payload["cpu_backend_sha256"] = "unbound"
+    with pytest.raises(PilotCheckpointError, match="malformed"):
+        _consumer_environment_fingerprint(interpreter)
+    payload["cpu_backend_sha256"] = "8" * 64
 
     payload["model_assets_complete"] = False
     with pytest.raises(PilotCheckpointError, match="load completely offline"):

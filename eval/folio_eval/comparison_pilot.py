@@ -156,8 +156,10 @@ print(json.dumps({"found": found}, ensure_ascii=True, separators=(",", ":")))
 _CONSUMER_ENVIRONMENT_PROBE = r"""
 import hashlib
 import importlib.metadata
+import importlib.util
 import json
 import os
+import platform
 import re
 import sys
 import sysconfig
@@ -559,12 +561,95 @@ if os.environ.get("FOLIO_PROBE_REQUIRE_MODEL_ASSETS") == "1":
         raise RuntimeError("embedding model cache mutated during offline verification")
     model_embedding_dimension = dimension
     model_assets_complete = True
+
+cpuinfo_keys = {
+    "cpu architecture",
+    "cpu implementer",
+    "cpu part",
+    "cpu revision",
+    "cpu variant",
+    "features",
+    "flags",
+    "model",
+    "model name",
+    "vendor_id",
+}
+cpuinfo_records = set()
+cpuinfo_path = Path("/proc/cpuinfo")
+if cpuinfo_path.is_file():
+    record = {}
+    for line in (*cpuinfo_path.read_text(encoding="utf-8").splitlines(), ""):
+        if not line.strip():
+            if record:
+                cpuinfo_records.add(tuple(sorted(record.items())))
+                record = {}
+            continue
+        key, separator, value = line.partition(":")
+        normalized_key = key.strip().lower()
+        if separator and normalized_key in cpuinfo_keys:
+            record[normalized_key] = " ".join(value.split())
+
+cpu_backend = {
+    "cpuinfo_records": [list(record) for record in sorted(cpuinfo_records)],
+    "logical_cpu_count": os.cpu_count() or 0,
+    "machine": platform.machine(),
+    "processor": platform.processor(),
+    "system": platform.system(),
+}
+if importlib.util.find_spec("numpy") is not None:
+    import numpy
+
+    numpy_core = getattr(numpy, "_core", getattr(numpy, "core", None))
+    numpy_multiarray = getattr(numpy_core, "_multiarray_umath", None)
+    numpy_features = getattr(numpy_multiarray, "__cpu_features__", {})
+    cpu_backend["numpy_cpu_features"] = sorted(
+        str(name) for name, enabled in numpy_features.items() if enabled
+    )
+if importlib.util.find_spec("torch") is not None:
+    import torch
+
+    get_cpu_capability = getattr(torch.backends.cpu, "get_cpu_capability", None)
+    cpu_backend["torch_cpu_capability"] = (
+        str(get_cpu_capability()) if callable(get_cpu_capability) else ""
+    )
+    cpu_backend["torch_backends"] = {
+        "mkl": bool(torch.backends.mkl.is_available()),
+        "mkldnn": bool(torch.backends.mkldnn.is_available()),
+        "openmp": bool(torch.backends.openmp.is_available()),
+    }
+if importlib.util.find_spec("threadpoolctl") is not None:
+    import threadpoolctl
+
+    cpu_backend["threadpools"] = sorted(
+        (
+            {
+                key: value
+                for key, value in entry.items()
+                if key
+                in {
+                    "architecture",
+                    "internal_api",
+                    "num_threads",
+                    "prefix",
+                    "threading_layer",
+                    "user_api",
+                    "version",
+                }
+            }
+            for entry in threadpoolctl.threadpool_info()
+        ),
+        key=lambda entry: json.dumps(entry, sort_keys=True, separators=(",", ":")),
+    )
+cpu_backend_payload = json.dumps(
+    cpu_backend, ensure_ascii=True, sort_keys=True, separators=(",", ":")
+).encode()
 interpreter = Path(sys.executable).resolve()
 print(json.dumps({
     "schema_version": 1,
     "interpreter_path_sha256": digest_bytes(str(interpreter).encode()),
     "interpreter_sha256": digest_file(interpreter),
     "python_version": sys.version,
+    "cpu_backend_sha256": digest_bytes(cpu_backend_payload),
     "distribution_count": len(distributions),
     "distributions_sha256": digest_bytes(distribution_payload),
     "installed_file_count": len(installed_entries),
@@ -842,6 +927,7 @@ def _consumer_environment_fingerprint(
     except (IndexError, json.JSONDecodeError) as exc:
         raise PilotCheckpointError("consumer environment probe was malformed") from exc
     required_digests = {
+        "cpu_backend_sha256",
         "interpreter_path_sha256",
         "interpreter_sha256",
         "distributions_sha256",
