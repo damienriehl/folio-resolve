@@ -233,6 +233,9 @@ for stdlib_root in sorted(stdlib_roots):
     if not stdlib_root.is_dir():
         continue
     for path in sorted(stdlib_root.rglob("*")):
+        relative_parts = path.relative_to(stdlib_root).parts
+        if any(part in {"site-packages", "dist-packages"} for part in relative_parts):
+            continue
         if any(path == site_root or site_root in path.parents for site_root in site_roots):
             continue
         if path.is_symlink():
@@ -643,6 +646,12 @@ def _pilot_ids(corpus: LoadedCorpus, limit: int) -> tuple[str, ...]:
     )
 
 
+def _prepare_incumbents(mapper_root: Path, enrich_root: Path) -> None:
+    """Perform the one permitted consumer-environment mutation before fingerprinting."""
+    for consumer in (mapper_spec(mapper_root), enrich_spec(enrich_root)):
+        prepare_incumbent(consumer, INCUMBENT_VERSION)
+
+
 def _fingerprint(
     *,
     corpus: LoadedCorpus,
@@ -658,8 +667,6 @@ def _fingerprint(
     ontology_pin = assert_ontology_pin(corpus.manifest.ontology_cache_sha256)
     mapper = mapper_spec(mapper_root)
     enrich = enrich_spec(enrich_root)
-    for consumer in (mapper, enrich):
-        prepare_incumbent(consumer, INCUMBENT_VERSION)
     candidate_environment = _consumer_environment_fingerprint(Path(sys.executable))
     mapper_environment = _consumer_environment_fingerprint(
         mapper.venv_python, require_model_assets=True
@@ -1118,6 +1125,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     _resolve_path_arguments(args)
     corpus = load_corpus(args.corpus_manifest)
     item_ids = _pilot_ids(corpus, args.limit)
+    _prepare_incumbents(args.mapper_root, args.enrich_root)
     fingerprint = _fingerprint_for_args(args, corpus)
     manifest = _checkpoint_manifest(fingerprint=fingerprint, item_ids=item_ids)
     _durably_create_directory(args.checkpoint_dir)

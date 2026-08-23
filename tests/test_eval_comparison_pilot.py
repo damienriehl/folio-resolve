@@ -497,7 +497,7 @@ def test_environment_probe_hashes_standard_library(tmp_path: Path) -> None:
     assert len(payload["stdlib_files_sha256"]) == 64
 
 
-def test_fingerprint_prepares_both_incumbents_before_probing(
+def test_incumbents_are_prepared_once_before_read_only_fingerprinting(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     events: list[str] = []
@@ -534,6 +534,7 @@ def test_fingerprint_prepares_both_incumbents_before_probing(
     )
     monkeypatch.setattr(pilot_module.importlib.metadata, "version", lambda _name: "0.4.0")
 
+    pilot_module._prepare_incumbents(mapper.repo_root, enrich.repo_root)
     fingerprint = _fingerprint(
         corpus=_corpus(tmp_path),
         config_path=Path("config.json"),
@@ -546,9 +547,9 @@ def test_fingerprint_prepares_both_incumbents_before_probing(
     )
 
     assert events == [
-        "pin:ontology",
         "prepare:folio-mapper",
         "prepare:folio-enrich",
+        "pin:ontology",
         f"probe:{Path(pilot_module.sys.executable)}",
         f"probe:{mapper.venv_python}",
         f"probe:{enrich.venv_python}",
@@ -556,6 +557,25 @@ def test_fingerprint_prepares_both_incumbents_before_probing(
     assert fingerprint["incumbent_version"] == "0.4.0"
     assert fingerprint["ontology_cache_sha256"] == "ontology"
     assert fingerprint["salt_file_sha256"] == "a" * 64
+
+
+def test_environment_probe_ignores_inactive_base_package_trees(tmp_path: Path) -> None:
+    interpreter, site = _isolated_python_site(tmp_path)
+    inactive = site.parent / "dist-packages"
+    external = tmp_path / "external-package"
+    inactive.mkdir()
+    external.mkdir()
+    (external / "module.py").write_text("VALUE = 1\n", encoding="utf-8")
+    (inactive / "linked").symlink_to(external, target_is_directory=True)
+
+    completed = pilot_module.subprocess.run(
+        [interpreter, "-B", "-P", "-c", pilot_module._CONSUMER_ENVIRONMENT_PROBE],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert json.loads(completed.stdout)["stdlib_file_count"] > 0
 
 
 def test_finalization_invocation_records_supplied_input_paths(tmp_path: Path) -> None:
@@ -787,6 +807,7 @@ def test_main_revalidates_fingerprint_before_and_after_each_shard(
     fingerprint = {"stable": True}
     monkeypatch.setenv("PYTHONHASHSEED", "0")
     monkeypatch.setattr(pilot_module, "load_corpus", lambda _path: _corpus(tmp_path))
+    monkeypatch.setattr(pilot_module, "_prepare_incumbents", lambda *_args: None)
     monkeypatch.setattr(pilot_module, "_durably_create_directory", lambda _path: None)
     monkeypatch.setattr(
         pilot_module,
@@ -823,6 +844,7 @@ def test_main_can_initialize_checkpoint_without_starting_an_expensive_shard(
 ) -> None:
     monkeypatch.setenv("PYTHONHASHSEED", "0")
     monkeypatch.setattr(pilot_module, "load_corpus", lambda _path: _corpus(tmp_path))
+    monkeypatch.setattr(pilot_module, "_prepare_incumbents", lambda *_args: None)
     monkeypatch.setattr(pilot_module, "_durably_create_directory", lambda _path: None)
     monkeypatch.setattr(pilot_module, "_fingerprint", lambda **_kwargs: {})
     monkeypatch.setattr(pilot_module, "_create_or_validate_manifest", lambda *_args: None)
