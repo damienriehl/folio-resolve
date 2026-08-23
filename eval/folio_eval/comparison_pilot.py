@@ -1090,6 +1090,9 @@ def _finalize(
             for item_id in item_ids
         },
     }
+    _require_current_fingerprint(
+        args, corpus, fingerprint, boundary="before final report publication"
+    )
     _durably_create_directory(args.out.parent)
     write_comparison(
         args.out,
@@ -1169,7 +1172,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0
     _require_current_fingerprint(args, corpus, fingerprint, boundary="before finalization")
     _finalize(args, corpus, item_ids, manifest)
-    _require_current_fingerprint(args, corpus, fingerprint, boundary="after finalization")
     print(f"pilot report: {args.out}")
     return 0
 

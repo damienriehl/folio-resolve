@@ -753,7 +753,7 @@ def test_finalize_durably_creates_output_parent_before_publish(
         out=output,
         public_metadata=tmp_path / "public.json",
     )
-    events: list[tuple[str, Path]] = []
+    events: list[tuple[str, object]] = []
 
     monkeypatch.setattr(pilot_module, "_load_shard", lambda *_args: _shard("one"))
     monkeypatch.setattr(
@@ -778,6 +778,13 @@ def test_finalize_durably_creates_output_parent_before_publish(
     monkeypatch.setattr(
         pilot_module, "load_public_comparison_metadata", lambda _path: object()
     )
+    monkeypatch.setattr(
+        pilot_module,
+        "_require_current_fingerprint",
+        lambda _args, _corpus, _expected, *, boundary: events.append(
+            ("fingerprint", boundary)
+        ),
+    )
 
     def durable_create(path: Path) -> None:
         events.append(("directory", path))
@@ -794,6 +801,7 @@ def test_finalize_durably_creates_output_parent_before_publish(
 
     assert events == [
         ("directory", checkpoint / "final-stages" / "folio-mapper" / "incumbent"),
+        ("fingerprint", "before final report publication"),
         ("directory", output.parent),
         ("publish", output),
     ]
