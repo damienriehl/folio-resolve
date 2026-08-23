@@ -359,6 +359,35 @@ def test_final_report_must_not_overwrite_corpus_slice(tmp_path: Path) -> None:
         pilot_module._assert_write_paths_are_safe(args, corpus)
 
 
+def test_untracked_canonical_report_requires_a_fully_completed_checkpoint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(pilot_module, "FOLIO_RESOLVE_ROOT", tmp_path)
+    report = tmp_path / pilot_module.PUBLISHED_COMPARISON_REPORT
+    report.parent.mkdir(parents=True)
+    report.write_text("{}\n", encoding="utf-8")
+    checkpoint = tmp_path / "eval" / "data" / "checkpoint"
+    args = SimpleNamespace(out=report, checkpoint_dir=checkpoint)
+    monkeypatch.setattr(
+        pilot_module.subprocess,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            returncode=0,
+            stdout=f"?? {pilot_module.PUBLISHED_COMPARISON_REPORT.as_posix()}\n",
+        ),
+    )
+
+    with pytest.raises(PilotCheckpointError, match="not recoverable"):
+        pilot_module._assert_existing_canonical_report_is_recoverable(args, ("one",))
+
+    checkpoint.mkdir(parents=True)
+    (checkpoint / "manifest.json").write_text("{}\n", encoding="utf-8")
+    completion = pilot_module._shard_completion_path(checkpoint, "one")
+    completion.parent.mkdir(parents=True)
+    completion.write_text("{}\n", encoding="utf-8")
+    pilot_module._assert_existing_canonical_report_is_recoverable(args, ("one",))
+
+
 def test_command_path_preserves_repository_relative_spelling() -> None:
     path = pilot_module.FOLIO_RESOLVE_ROOT / "eval" / "synthetic" / "corpus.json"
 

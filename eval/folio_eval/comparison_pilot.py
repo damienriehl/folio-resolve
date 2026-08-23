@@ -876,6 +876,41 @@ def _assert_write_paths_are_safe(
                 )
 
 
+def _assert_existing_canonical_report_is_recoverable(
+    args: argparse.Namespace, item_ids: Sequence[str]
+) -> None:
+    """Allow an untracked final report only for a fully completed checkpoint recovery."""
+    canonical = FOLIO_RESOLVE_ROOT / PUBLISHED_COMPARISON_REPORT
+    if args.out != canonical or not args.out.is_file():
+        return
+    completed = subprocess.run(
+        [
+            "git",
+            "status",
+            "--porcelain",
+            "--",
+            PUBLISHED_COMPARISON_REPORT.as_posix(),
+        ],
+        cwd=FOLIO_RESOLVE_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if completed.returncode:
+        raise PilotCheckpointError("could not inspect the existing canonical pilot report")
+    if completed.stdout.strip() != f"?? {PUBLISHED_COMPARISON_REPORT.as_posix()}":
+        return
+    manifest_exists = (args.checkpoint_dir / "manifest.json").is_file()
+    all_shards_complete = manifest_exists and all(
+        _shard_completion_path(args.checkpoint_dir, item_id).is_file()
+        for item_id in item_ids
+    )
+    if not all_shards_complete:
+        raise PilotCheckpointError(
+            "untracked canonical pilot report is not recoverable from this checkpoint"
+        )
+
+
 def _command_path(path: Path) -> str:
     """Render repository inputs stably while retaining absolute external targets."""
     resolved = path.resolve()
@@ -1824,6 +1859,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     corpus = load_corpus(args.corpus_manifest)
     _assert_write_paths_are_safe(args, corpus)
     item_ids = _pilot_ids(corpus, args.limit)
+    _assert_existing_canonical_report_is_recoverable(args, item_ids)
     _prepare_incumbents_for_new_checkpoint(args)
     fingerprint = _fingerprint_for_args(args, corpus)
     manifest = _checkpoint_manifest(fingerprint=fingerprint, item_ids=item_ids)
