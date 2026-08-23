@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
+from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from folio_eval.audit import Packet, PacketRow, VariantStats
@@ -28,7 +29,7 @@ audit = json.loads(Path(sys.argv[1]).read_text())
 packet = json.loads(Path(sys.argv[2]).read_text())
 out = Path(sys.argv[3])
 
-flags: dict[str, dict[str, dict]] = {}
+flags: dict[str, dict[str, dict[str, Any]]] = {}
 for f in audit["flagged"]:
     flags.setdefault(f["id"], {})[f["iri"]] = f
 

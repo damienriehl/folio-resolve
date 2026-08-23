@@ -2,15 +2,17 @@
 
 The governing plan is
 ``docs/plans/2026-08-16-001-feat-synthetic-benchmark-f1-campaign-plan.md`` U4 / KTD4,
-enabling R6/R7. Owners generate a salted scrypt manifest from private firm gold; workers scan
-public candidate artifacts without loading firm rows. The manifest contains normalized free-text
-digests only: neither raw surfaces, the salt, nor FOLIO IRIs are publishable.
+enabling R6/R7. Owners generate a salted HMAC-SHA256 manifest from firm gold; workers scan
+candidate artifacts without loading source rows. The manifest contains normalized free-text
+digests only: neither raw surfaces, the salt, nor FOLIO IRIs are published. HMAC preserves the
+salt-bound lookup contract without making every n-gram scan deliberately CPU-hard.
 """
 
 from __future__ import annotations
 
 import argparse
 import hashlib
+import hmac
 import json
 import os
 import re
@@ -27,7 +29,8 @@ from .normalize import label_key, normalize_label
 from .splits import GoldItemRecord, GoldSet, load_gold
 
 MANIFEST_KIND = "firm-surface-manifest"
-MANIFEST_VERSION = 2
+MANIFEST_VERSION = 3
+DIGEST_ALGORITHM = "hmac-sha256"
 NORMALIZATION_NAME = "label_key+punctuation_fold"
 MAX_SURFACE_TOKENS = 64
 MAX_DIGESTS = 100_000
@@ -62,7 +65,7 @@ class ScryptParams:
             self.n < 2**14 or self.r < 8 or self.p < 1 or self.dklen < 32
         ):
             raise LeakcheckError("scrypt parameters are below the pinned leakcheck minimums")
-        if self.n > 2**20 or self.r > 16 or self.p > 16 or self.dklen > 64:
+        if self.n > 2**20 or self.r > 16 or self.p > 16 or self.dklen > 32:
             raise LeakcheckError("scrypt parameters exceed the supported leakcheck limits")
 
     def to_json(self) -> dict[str, int]:
@@ -81,6 +84,7 @@ class Manifest:
 
     version: int
     scrypt_params: ScryptParams
+    digest_algorithm: str
     normalization: str
     min_tokens: int
     max_tokens: int
@@ -99,6 +103,8 @@ class Manifest:
             raise LeakcheckError("unsupported leakcheck manifest kind or version")
         if self.normalization != NORMALIZATION_NAME:
             raise LeakcheckError(f"unsupported normalization: {self.normalization!r}")
+        if self.digest_algorithm != DIGEST_ALGORITHM:
+            raise LeakcheckError(f"unsupported digest algorithm: {self.digest_algorithm!r}")
         self.scrypt_params.validate()
         if not self.digest_count:
             raise LeakcheckError("surface manifest must contain at least one digest")
@@ -125,6 +131,7 @@ class Manifest:
         return {
             "kind": self.kind,
             "version": self.version,
+            "digest_algorithm": self.digest_algorithm,
             "scrypt_params": self.scrypt_params.to_json(),
             "normalization": self.normalization,
             "min_tokens": self.min_tokens,
@@ -237,17 +244,7 @@ def harvest_surfaces(gold: GoldSet | Iterable[GoldItemRecord]) -> frozenset[str]
 
 
 def _digest(surface: str, salt: bytes, params: ScryptParams) -> str:
-    try:
-        return hashlib.scrypt(
-            surface.encode("utf-8"),
-            salt=salt,
-            n=params.n,
-            r=params.r,
-            p=params.p,
-            dklen=params.dklen,
-        ).hex()
-    except (MemoryError, OverflowError, ValueError) as exc:
-        raise LeakcheckError("scrypt parameters cannot be executed safely") from exc
+    return hmac.digest(salt, surface.encode("utf-8"), "sha256")[: params.dklen].hex()
 
 
 def build_manifest(
@@ -257,6 +254,7 @@ def build_manifest(
     gold_version: str,
     gold_content_sha256: str,
     scrypt_params: ScryptParams = DEFAULT_SCRYPT_PARAMS,
+    allowlist: Iterable[str] = (),
 ) -> Manifest:
     """Build a deterministic manifest from normalized, deduplicated free-text surfaces."""
     if not salt:
@@ -265,15 +263,22 @@ def build_manifest(
     raw_surfaces = tuple(normalize_label(surface) for surface in surfaces if surface.strip())
     if any(_is_iri_surface(surface) for surface in raw_surfaces):
         raise LeakcheckError("IRI-like values are forbidden in a surface manifest")
+    allowed = frozenset(
+        folded
+        for surface in allowlist
+        if (folded := " ".join(_leak_tokens(surface)))
+    )
     normalized = frozenset(
         folded
         for surface in raw_surfaces
         if (folded := " ".join(_leak_tokens(surface)))
+        and folded not in allowed
     )
     token_lengths = [len(surface.split()) for surface in normalized]
     manifest = Manifest(
         version=MANIFEST_VERSION,
         scrypt_params=scrypt_params,
+        digest_algorithm=DIGEST_ALGORITHM,
         normalization=NORMALIZATION_NAME,
         min_tokens=min(token_lengths, default=0),
         max_tokens=max(token_lengths, default=0),
@@ -322,6 +327,52 @@ def _string_values(value: object) -> Iterable[str]:
     elif isinstance(value, list):
         for nested in value:
             yield from _string_values(nested)
+
+
+def public_surface_allowlist(
+    paths: Iterable[Path], surfaces: Iterable[str]
+) -> frozenset[str]:
+    """Return candidate surfaces that exactly match public dictionary labels.
+
+    JSONL dictionaries must expose a string ``label`` field. Other fields such as
+    definitions are deliberately ignored: the settled exclusion class is public FOLIO
+    labels, not every phrase that happens to occur in public descriptive prose.
+    Plain-text inputs are interpreted as one label per non-comment line.
+    """
+    normalized = frozenset(
+        folded
+        for surface in surfaces
+        if (folded := " ".join(_leak_tokens(surface)))
+    )
+    present: set[str] = set()
+
+    def inspect(text: str) -> None:
+        label = " ".join(_leak_tokens(text))
+        if label in normalized:
+            present.add(label)
+
+    for path in paths:
+        if path.suffix.casefold() == ".jsonl":
+            with path.open(encoding="utf-8") as handle:
+                for line_number, line in enumerate(handle, start=1):
+                    if not line.strip():
+                        continue
+                    payload = json.loads(line)
+                    if not isinstance(payload, dict):
+                        raise LeakcheckError(
+                            f"JSONL line {line_number} is not an object: {path}"
+                        )
+                    label = payload.get("label")
+                    if not isinstance(label, str) or not label.strip():
+                        raise LeakcheckError(
+                            f"JSONL line {line_number} has no non-empty string label: {path}"
+                        )
+                    inspect(label)
+        else:
+            for line in path.read_text(encoding="utf-8").splitlines():
+                if line.strip() and not line.lstrip().startswith("#"):
+                    inspect(line)
+    return frozenset(present)
 
 
 def scan_file(path: Path, manifest: Manifest, salt: bytes) -> FileReport:
@@ -382,6 +433,7 @@ def _manifest_from_json(payload: object) -> Manifest:
             kind=str(payload["kind"]),
             version=int(payload["version"]),
             scrypt_params=params,
+            digest_algorithm=str(payload["digest_algorithm"]),
             normalization=str(payload["normalization"]),
             min_tokens=int(payload["min_tokens"]),
             max_tokens=int(payload["max_tokens"]),
@@ -473,6 +525,18 @@ def _parser() -> argparse.ArgumentParser:
     generate.add_argument("--gold", type=Path, required=True)
     generate.add_argument("--salt-file", type=Path, required=True)
     generate.add_argument("--out", type=Path, required=True)
+    generate.add_argument(
+        "--allowlist",
+        type=Path,
+        help="optional newline-delimited settled public/generic surfaces to exclude",
+    )
+    generate.add_argument(
+        "--allow-public-file",
+        type=Path,
+        action="append",
+        default=[],
+        help="public artifact whose overlaps with gold surfaces are safe to exclude; repeatable",
+    )
     init_salt = subparsers.add_parser("init-salt", help="owner-only: create a new salt file")
     init_salt.add_argument("--salt-file", type=Path, required=True)
     check = subparsers.add_parser("check", help="scan candidate artifacts without firm rows")
@@ -496,11 +560,23 @@ def main(
         if args.command == "generate":
             gold = load_gold(args.gold)
             salt = _read_salt(args.salt_file)
+            surfaces = harvest_surfaces(gold)
+            allowlist: tuple[str, ...] = ()
+            if args.allowlist is not None:
+                allowlist = tuple(
+                    line.strip()
+                    for line in args.allowlist.read_text(encoding="utf-8").splitlines()
+                    if line.strip() and not line.lstrip().startswith("#")
+                )
+            allowlist = tuple(allowlist) + tuple(
+                public_surface_allowlist(args.allow_public_file, surfaces)
+            )
             manifest = build_manifest(
-                harvest_surfaces(gold),
+                surfaces,
                 salt,
                 gold_version=_gold_version_name(gold.gold_version),
                 gold_content_sha256=gold.content_sha256,
+                allowlist=allowlist,
             )
             _atomic_write_text(args.out, canonical_json(manifest.to_json()))
             print(f"wrote {manifest.digest_count} digests to {args.out}")

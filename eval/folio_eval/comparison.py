@@ -13,21 +13,30 @@ import os
 import subprocess
 import tempfile
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from dataclasses import field as dataclass_field
 from pathlib import Path
 
 from .answer_rule import AnswerRuleConfig, commit_from_ranked, rank_candidates
 from .downstream import (
-    DEFAULT_HARNESS_TIMEOUT_S,
+    FOLIO_RESOLVE_ROOT,
     ConsumerRunError,
     ConsumerSpec,
     clean_tree_guard,
+    git_status_porcelain,
 )
+from .intake import sha256_bytes, sha256_text
 from .leakcheck import Manifest, scan_text
 from .report import DEFAULT_BOOTSTRAP_RESAMPLES, DEFAULT_BOOTSTRAP_SEED, bootstrap_ci
 from .score import MicroCounts
 from .synthesize import LoadedCorpus, SyntheticItem
-from .synthetic_score import DocumentAdapter, PhraseExtractor, _assert_config, nounish_ngrams
+from .synthetic_score import (
+    CandidateTrace,
+    DocumentAdapter,
+    PhraseExtractor,
+    _assert_config,
+    nounish_ngrams,
+)
 
 
 class ComparisonError(RuntimeError):
@@ -46,6 +55,49 @@ class VersionSkewError(ComparisonError):
     """Stacks resolved different folio-python versions, invalidating comparison."""
 
 
+DEFAULT_COMPARISON_TIMEOUT_S = 2 * 60 * 60
+
+MAPPER_DETERMINISTIC_CONFIG: Mapping[str, object] = {
+    "threshold": 0.3,
+    "max_per_branch": 10,
+    "rerank_top_k": 20,
+    "commit_top_n": 10,
+    "keyword_weight": 0.6,
+    "embedding_weight": 0.4,
+    "embedding_rerank": "available",
+    "llm_on": False,
+}
+
+ENRICH_DETERMINISTIC_CONFIG: Mapping[str, object] = {
+    "embedding_disabled": True,
+    "contextual_rerank_enabled": False,
+    "individual_extraction_enabled": True,
+    "individual_regex_only": True,
+    "property_extraction_enabled": True,
+    "property_regex_only": True,
+    "triple_extraction_enabled": True,
+    "pos_tagging_enabled": True,
+    "pos_confidence_enabled": True,
+    "ner_cross_validation_enabled": False,
+    "translation_matching_enabled": False,
+    "folio_auto_update": False,
+    "backup_semantic_filter_enabled": False,
+    "proposition_extraction_enabled": False,
+    "max_candidates": 5,
+    "skip_backups_for_exact_matches": True,
+    "semantic_similarity_threshold": 0.8,
+    "pos_concept_mismatch_penalty": 0.15,
+    "pos_property_mismatch_penalty": 0.12,
+    "llm_provider": None,
+    "registry_embeddings": False,
+}
+
+CONSUMER_DETERMINISTIC_CONFIGS: Mapping[str, Mapping[str, object]] = {
+    "folio-mapper": MAPPER_DETERMINISTIC_CONFIG,
+    "folio-enrich": ENRICH_DETERMINISTIC_CONFIG,
+}
+
+
 @dataclass(frozen=True, slots=True)
 class StackRun:
     """Parsed shared stack-run contract."""
@@ -57,6 +109,9 @@ class StackRun:
     config: Mapping[str, object]
     rows: Mapping[str, frozenset[str]]
     stages: Mapping[str, Mapping[str, object]]
+    invocation: tuple[str, ...] = ()
+    invocation_working_directory: str = ""
+    repository: Mapping[str, object] = dataclass_field(default_factory=dict)
 
     @property
     def key(self) -> str:
@@ -76,11 +131,27 @@ def _atomic_write_text(path: Path, text: str) -> Path:
     return path
 
 
-def _comparison_items(corpus: LoadedCorpus, limit: int | None) -> tuple[SyntheticItem, ...]:
+def _selected_cohort(
+    corpus: LoadedCorpus, limit: int | None, *, include_nomatch: bool = True
+) -> tuple[tuple[SyntheticItem, ...], tuple[SyntheticItem, ...]]:
     if limit is not None and limit < 1:
         raise ValueError("limit must be positive")
-    scoreable = corpus.scoreable_items[:limit] if limit is not None else corpus.scoreable_items
-    return tuple(scoreable) + tuple(corpus.nomatch_items)
+    if not include_nomatch and limit != 1:
+        raise ValueError("scoreable-only comparison is reserved for the one-item live gate")
+    scoreable = tuple(
+        corpus.scoreable_items[:limit] if limit is not None else corpus.scoreable_items
+    )
+    nomatch = tuple(corpus.nomatch_items if include_nomatch else ())
+    return scoreable, nomatch
+
+
+def _comparison_items(
+    corpus: LoadedCorpus, limit: int | None, *, include_nomatch: bool = True
+) -> tuple[SyntheticItem, ...]:
+    scoreable, nomatch = _selected_cohort(
+        corpus, limit, include_nomatch=include_nomatch
+    )
+    return scoreable + nomatch
 
 
 def emit_items_file(
@@ -88,6 +159,7 @@ def emit_items_file(
     out_path: Path,
     *,
     limit: int | None = None,
+    include_nomatch: bool = True,
     extractor: PhraseExtractor = nounish_ngrams,
     leak_manifest: Manifest | None = None,
     salt: bytes | None = None,
@@ -95,10 +167,11 @@ def emit_items_file(
     """Emit the common JSONL once, including the U8 extraction seam's segments.
 
     Every runner receives these materialized segments and must not independently segment text.
-    No-match rows are retained in pilot mode so its false-positive rate remains meaningful.
+    No-match rows are retained by default so pilot/final false-positive rates remain meaningful.
+    A live gate may explicitly omit them to exercise exactly one scoreable item end-to-end.
     """
     lines: list[str] = []
-    for item in _comparison_items(corpus, limit):
+    for item in _comparison_items(corpus, limit, include_nomatch=include_nomatch):
         payload = {
             "item_id": item.item_id,
             "text": item.text,
@@ -113,6 +186,50 @@ def emit_items_file(
         if collisions:
             raise ComparisonError(f"items leak check failed: collisions={collisions}")
     return _atomic_write_text(out_path, text)
+
+
+def _git_repository_state(repo_root: Path) -> dict[str, object]:
+    """Capture a reproducible Git identity, failing closed on uncommitted source state."""
+    completed = subprocess.run(
+        ["git", "-C", str(repo_root), "rev-parse", "HEAD"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if completed.returncode != 0 or not completed.stdout.strip():
+        raise ComparisonError(
+            f"could not resolve Git SHA for {repo_root}: {completed.stderr.strip()[-2000:]}"
+        )
+    status = git_status_porcelain(repo_root)
+    if status:
+        raise ComparisonError(
+            f"comparison repository must be clean before execution: {repo_root} "
+            f"({len(status.splitlines())} status entries)"
+        )
+    return {
+        "git_sha": completed.stdout.strip(),
+        "initial_status_clean": not status,
+        "initial_status_entries": len(status.splitlines()),
+        "initial_status_sha256": sha256_text(status),
+        "initial_status_format": "git status --porcelain",
+    }
+
+
+def _relative_or_absolute(path: Path, root: Path) -> str:
+    try:
+        return str(path.resolve().relative_to(root.resolve()))
+    except ValueError:
+        return str(path.resolve())
+
+
+def _file_fingerprint(path: Path, *, root: Path) -> dict[str, object]:
+    """Return the portable path, exact byte hash, and size of an execution input."""
+    content = path.read_bytes()
+    return {
+        "path": _relative_or_absolute(path, root),
+        "sha256": sha256_bytes(content),
+        "bytes": len(content),
+    }
 
 
 def _probe_environment(spec: ConsumerSpec) -> dict[str, str]:
@@ -206,6 +323,9 @@ def parse_stack_output(path: Path) -> StackRun:
     for field in ("stack", "lane", "folio_resolve_version", "folio_python_version"):
         if not isinstance(header[field], str) or not header[field].strip():
             raise StackContractError(f"stack output {path} has an empty {field}")
+    for field in ("folio_resolve_version", "folio_python_version"):
+        if header[field].strip().casefold() == "unknown":
+            raise StackContractError(f"stack output {path} has unknown {field}")
     rows: dict[str, frozenset[str]] = {}
     stages: dict[str, Mapping[str, object]] = {}
     for payload in payloads[1:]:
@@ -220,6 +340,10 @@ def parse_stack_output(path: Path) -> StackRun:
             or not all(isinstance(v, str) for v in iris)
         ):
             raise StackContractError(f"stack output {path} has invalid/duplicate item {item_id!r}")
+        if iris != sorted(set(iris)):
+            raise StackContractError(
+                f"stack output {path} has duplicate or non-canonical IRIs for {item_id!r}"
+            )
         if not isinstance(raw_stages, dict):
             raise StackContractError(f"stack output {path} stages are malformed for {item_id!r}")
         rows[item_id] = frozenset(iris)
@@ -235,12 +359,88 @@ def parse_stack_output(path: Path) -> StackRun:
     )
 
 
+def _assert_consumer_config(run: StackRun) -> None:
+    """Require the exact, typed deterministic behavioral config for a consumer runner."""
+    expected = CONSUMER_DETERMINISTIC_CONFIGS.get(run.stack)
+    if expected is None:
+        return
+    actual = dict(run.config)
+    if set(actual) != set(expected):
+        missing = sorted(set(expected) - set(actual))
+        extra = sorted(set(actual) - set(expected))
+        raise StackContractError(
+            f"{run.stack} deterministic config keys differ: missing={missing} extra={extra}"
+        )
+    for key, expected_value in expected.items():
+        actual_value = actual[key]
+        if type(actual_value) is not type(expected_value) or actual_value != expected_value:
+            raise StackContractError(
+                f"{run.stack} deterministic config {key} mismatch: "
+                f"expected={expected_value!r} actual={actual_value!r}"
+            )
+
+
+def _assert_string_list(value: object, *, context: str) -> list[str]:
+    if not isinstance(value, list) or not all(isinstance(item, str) and item for item in value):
+        raise StackContractError(f"{context} must be a list of nonempty strings")
+    if len(value) != len(set(value)):
+        raise StackContractError(f"{context} contains duplicates")
+    return value
+
+
+def _assert_consumer_rows(run: StackRun, expected_ids: Sequence[str]) -> None:
+    """Validate exact shared-item coverage and deterministic per-stage invariants."""
+    if set(run.rows) != set(expected_ids):
+        missing = sorted(set(expected_ids) - set(run.rows))
+        extra = sorted(set(run.rows) - set(expected_ids))
+        raise StackContractError(
+            f"{run.stack} item IDs differ from shared input: missing={missing} extra={extra}"
+        )
+    expected_stage_keys = {
+        "folio-mapper": {"stage1_filter", "embedding_rerank", "committed"},
+        "folio-enrich": {"EntityRuler", "Reconciliation", "Resolution", "StringMatch"},
+    }.get(run.stack)
+    if expected_stage_keys is None:
+        return
+    for item_id in expected_ids:
+        stage = run.stages[item_id]
+        if set(stage) != expected_stage_keys:
+            raise StackContractError(
+                f"{run.stack} stage keys differ for {item_id!r}: "
+                f"expected={sorted(expected_stage_keys)} actual={sorted(stage)}"
+            )
+        lists = {
+            key: _assert_string_list(value, context=f"{run.stack} {item_id!r} {key}")
+            for key, value in stage.items()
+        }
+        if run.stack == "folio-mapper":
+            stage1 = lists["stage1_filter"]
+            reranked = lists["embedding_rerank"]
+            committed = lists["committed"]
+            if set(committed) != set(run.rows[item_id]):
+                raise StackContractError(
+                    f"{run.stack} committed stage differs from emitted IRIs for {item_id!r}"
+                )
+            if not set(reranked).issubset(stage1):
+                raise StackContractError(
+                    f"folio-mapper rerank is not a stage1 subset for {item_id!r}"
+                )
+            if stage1 and not reranked:
+                raise StackContractError(
+                    f"folio-mapper embedding rerank is empty for nonempty stage1 on {item_id!r}"
+                )
+            if committed != reranked[:10]:
+                raise StackContractError(
+                    f"folio-mapper committed stage is not rerank[:10] for {item_id!r}"
+                )
+
+
 def run_consumer_stack(
     spec: ConsumerSpec,
     items_path: Path,
     *,
     version: str = "0.4.0",
-    timeout: float = DEFAULT_HARNESS_TIMEOUT_S,
+    timeout: float = DEFAULT_COMPARISON_TIMEOUT_S,
 ) -> StackRun:
     """Prepare and run one incumbent consumer through its own interpreter."""
     relative_runner = {
@@ -249,33 +449,47 @@ def run_consumer_stack(
     }.get(spec.name)
     if relative_runner is None:
         raise ComparisonError(f"unknown comparison consumer: {spec.name}")
+    repository = _git_repository_state(spec.repo_root)
+    expected_ids: list[str] = []
+    for line in items_path.read_text(encoding="utf-8").splitlines():
+        payload = json.loads(line)
+        item_id = payload.get("item_id") if isinstance(payload, dict) else None
+        if not isinstance(item_id, str) or not item_id or item_id in expected_ids:
+            raise StackContractError("comparison items contain a malformed/duplicate item_id")
+        expected_ids.append(item_id)
     with tempfile.TemporaryDirectory(prefix=f"{spec.name}-comparison-") as temporary:
         out_path = Path(temporary) / "stack.jsonl"
+        command = [
+            str(spec.venv_python.resolve()),
+            str((spec.repo_root / relative_runner).resolve()),
+            "--items",
+            str(items_path.resolve()),
+            "--out",
+            str(out_path.resolve()),
+            "--lane",
+            "deterministic",
+        ]
         with clean_tree_guard(spec.repo_root):
             prepare_incumbent(spec, version)
-            completed = subprocess.run(
-                [
-                    str(spec.venv_python),
-                    str(relative_runner),
-                    "--items",
-                    str(items_path),
-                    "--out",
-                    str(out_path),
-                    "--lane",
-                    "incumbent",
-                ],
-                cwd=str(spec.repo_root),
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-            )
+            try:
+                completed = subprocess.run(
+                    command,
+                    cwd=str(spec.repo_root),
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout,
+                )
+            except subprocess.TimeoutExpired as exc:
+                raise ConsumerRunError(
+                    f"{spec.name} synthetic runner timed out after {timeout:.0f}s"
+                ) from exc
             if completed.returncode != 0:
                 raise ConsumerRunError(
                     f"{spec.name} synthetic runner failed (rc={completed.returncode}):\n"
                     f"{(completed.stdout + completed.stderr).strip()[-4000:]}"
                 )
             run = parse_stack_output(out_path)
-    if run.stack != spec.name or run.lane != "incumbent":
+    if run.stack != spec.name or run.lane != "deterministic":
         raise StackContractError(
             f"{spec.name} runner identity mismatch: stack={run.stack!r} lane={run.lane!r}"
         )
@@ -283,7 +497,15 @@ def run_consumer_stack(
         raise IncumbentInstallMismatch(
             f"{spec.name} runner reported folio-resolve {run.folio_resolve_version}, expected {version}"
         )
-    return run
+    _assert_consumer_config(run)
+    _assert_consumer_rows(run, expected_ids)
+    return replace(
+        run,
+        lane="incumbent",
+        invocation=tuple(command),
+        invocation_working_directory=str(spec.repo_root.resolve()),
+        repository=repository,
+    )
 
 
 def run_local_stack(
@@ -292,6 +514,7 @@ def run_local_stack(
     config: AnswerRuleConfig,
     *,
     limit: int | None = None,
+    include_nomatch: bool = True,
     extractor: PhraseExtractor = nounish_ngrams,
     items_path: Path | None = None,
 ) -> StackRun:
@@ -305,21 +528,84 @@ def run_local_stack(
             )
     rows: dict[str, frozenset[str]] = {}
     stages: dict[str, Mapping[str, object]] = {}
-    for item in _comparison_items(corpus, limit):
+    for item in _comparison_items(corpus, limit, include_nomatch=include_nomatch):
         segments = (
             materialized[item.item_id] if items_path is not None else tuple(extractor(item.text))
         )
-        original_extractor = adapter.phrase_extractor
-        try:
-            # Preserve U8's whole-document exact sweep while injecting the materialized
-            # extraction result, so the local lane cannot independently segment the text.
-            adapter.phrase_extractor = _fixed_extractor(segments)
-            candidates = list(adapter.adapt(item.text).candidates)
-        finally:
-            adapter.phrase_extractor = original_extractor
-        committed = commit_from_ranked(rank_candidates(candidates, config), config)
+        # Preserve U8's whole-document exact sweep while injecting the materialized
+        # extraction result, so the local lane cannot independently segment the text.
+        adapted = adapter.adapt(item.text, segments=segments)
+        candidates = list(adapted.candidates)
+        ranked = rank_candidates(candidates, config)
+        committed = commit_from_ranked(ranked, config)
         rows[item.item_id] = frozenset(candidate.iri for candidate in committed)
-        stages[item.item_id] = {"segments": len(segments), "candidates": len(candidates)}
+        ranked_by_iri = {candidate.iri: candidate for candidate in ranked}
+        committed_iris = [candidate.iri for candidate in committed]
+        traces = adapted.traces or tuple(
+            CandidateTrace(
+                iri=candidate.iri,
+                label=candidate.label,
+                branch=getattr(candidate, "branch", ""),
+                extraction_path=candidate.extraction_path,
+                surface_term=getattr(candidate, "surface_term", ""),
+                pre_gate_score=candidate.score,
+                post_gate_score=candidate.score,
+                gate_disposition="survived",
+                gated=candidate.gated,
+                gate_reason=getattr(candidate, "gate_reason", ""),
+            )
+            for candidate in candidates
+        )
+        suppressed_count = sum(adapted.suppression_counters.values())
+        if (
+            len(traces) != adapted.raw_candidate_count
+            or adapted.raw_candidate_count != len(candidates) + suppressed_count
+        ):
+            raise StackContractError(
+                f"candidate lifecycle accounting failed for {item.item_id!r}"
+            )
+        candidate_rows: list[dict[str, object]] = []
+        for trace in sorted(traces, key=lambda value: value.iri):
+            ranked_candidate = ranked_by_iri.get(trace.iri)
+            if trace.gate_disposition != "survived":
+                commit_disposition = "suppressed"
+            elif trace.iri in committed_iris:
+                commit_disposition = "committed"
+            elif ranked_candidate is not None and ranked_candidate.probability < config.threshold:
+                commit_disposition = "below_threshold"
+            else:
+                commit_disposition = "top_k_cap"
+            candidate_rows.append(
+                {
+                    "iri": trace.iri,
+                    "label": trace.label,
+                    "branch": trace.branch,
+                    "extraction_path": trace.extraction_path,
+                    "surface_term": trace.surface_term,
+                    "pre_gate_score": trace.pre_gate_score,
+                    "post_gate_score": trace.post_gate_score,
+                    "gate_disposition": trace.gate_disposition,
+                    "gated": trace.gated,
+                    "gate_reason": trace.gate_reason,
+                    "rank": ranked_candidate.rank if ranked_candidate is not None else None,
+                    "probability": (
+                        ranked_candidate.probability if ranked_candidate is not None else None
+                    ),
+                    "commit_disposition": commit_disposition,
+                }
+            )
+        stages[item.item_id] = {
+            "segments": list(segments),
+            "counts": {
+                "pre_gate_unique": adapted.raw_candidate_count,
+                "survived": len(candidates),
+                "suppressed": dict(sorted(adapted.suppression_counters.items())),
+                "committed": len(committed),
+            },
+            "candidates": candidate_rows,
+            "ranked_iris": [candidate.iri for candidate in ranked],
+            "committed_iris": committed_iris,
+        }
     try:
         folio_python_version = importlib.metadata.version("folio-python")
     except importlib.metadata.PackageNotFoundError:
@@ -334,27 +620,31 @@ def run_local_stack(
         config=config.to_json(),
         rows=rows,
         stages=stages,
+        invocation=(
+            "folio_eval.comparison.run_local_stack",
+            "--items",
+            "$COMPARISON_ITEMS",
+            "--answer-rule-config-sha256",
+            config.content_sha256(),
+        ),
+        invocation_working_directory="$FOLIO_RESOLVE_REPOSITORY_ROOT",
     )
 
 
-def _fixed_extractor(segments: Sequence[str]) -> PhraseExtractor:
-    def extract(_text: str) -> Sequence[str]:
-        return segments
-
-    return extract
-
-
-def _selected_scoreable(corpus: LoadedCorpus, limit: int | None) -> tuple[SyntheticItem, ...]:
-    return corpus.scoreable_items[:limit] if limit is not None else corpus.scoreable_items
-
-
 def score_stack(
-    corpus: LoadedCorpus, run: StackRun, *, limit: int | None = None
+    corpus: LoadedCorpus,
+    run: StackRun,
+    *,
+    limit: int | None = None,
+    include_nomatch: bool = True,
 ) -> tuple[dict[str, object], dict[str, float]]:
     """Join predictions to gold by item_id and compute strict set micro metrics."""
     counts = MicroCounts()
     item_f1: dict[str, float] = {}
-    for item in _selected_scoreable(corpus, limit):
+    selected_scoreable, selected_nomatch = _selected_cohort(
+        corpus, limit, include_nomatch=include_nomatch
+    )
+    for item in selected_scoreable:
         if item.item_id not in run.rows:
             raise StackContractError(f"{run.key} omitted scoreable item {item.item_id!r}")
         predicted, gold = set(run.rows[item.item_id]), set(item.gold_iris)
@@ -370,15 +660,15 @@ def score_stack(
         denominator = 2 * tp + fp + fn
         item_f1[item.item_id] = 2 * tp / denominator if denominator else 0.0
     false_positives = 0
-    for item in corpus.nomatch_items:
+    for item in selected_nomatch:
         if item.item_id not in run.rows:
             raise StackContractError(f"{run.key} omitted no-match item {item.item_id!r}")
         false_positives += bool(run.rows[item.item_id])
     metrics = counts.to_json()
-    metrics["nomatch_items"] = len(corpus.nomatch_items)
+    metrics["nomatch_items"] = len(selected_nomatch)
     metrics["nomatch_false_positives"] = false_positives
     metrics["nomatch_fp_rate"] = round(
-        false_positives / len(corpus.nomatch_items) if corpus.nomatch_items else 0.0, 6
+        false_positives / len(selected_nomatch) if selected_nomatch else 0.0, 6
     )
     return metrics, item_f1
 
@@ -425,8 +715,12 @@ def build_comparison(
     config: AnswerRuleConfig,
     *,
     limit: int | None = None,
+    include_nomatch: bool = True,
     n_resamples: int = DEFAULT_BOOTSTRAP_RESAMPLES,
     seed: int = DEFAULT_BOOTSTRAP_SEED,
+    comparison_invocation: Mapping[str, object] | Sequence[str] = (),
+    stage_snapshot_files: Mapping[str, Mapping[str, object]] | None = None,
+    items_file: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     """Build the committed-eligible comparison dictionary from parsed stack runs."""
     _assert_config(corpus, config)
@@ -437,13 +731,27 @@ def build_comparison(
         raise ComparisonError("duplicate stack/lane run")
     stack_payloads: dict[str, object] = {}
     item_scores: dict[str, dict[str, float]] = {}
+    scoreable, nomatch = _selected_cohort(
+        corpus, limit, include_nomatch=include_nomatch
+    )
+    selected_ids = tuple(item.item_id for item in (*scoreable, *nomatch))
     for run in sorted(runs, key=lambda value: value.key):
-        metrics, per_item = score_stack(corpus, run, limit=limit)
-        selected_ids = {item.item_id for item in _selected_scoreable(corpus, limit)}
+        if run.lane == "incumbent" and run.invocation:
+            _assert_consumer_config(run)
+        metrics, per_item = score_stack(
+            corpus, run, limit=limit, include_nomatch=include_nomatch
+        )
+        missing_stages = sorted(set(selected_ids) - set(run.stages))
+        if missing_stages:
+            raise StackContractError(
+                f"{run.key} omitted stage snapshots for items: {', '.join(missing_stages)}"
+            )
+        stage_by_item = {item_id: run.stages[item_id] for item_id in sorted(selected_ids)}
         stage_fields: dict[str, int] = {}
-        for stage in run.stages.values():
+        for stage in stage_by_item.values():
             for field in stage:
                 stage_fields[field] = stage_fields.get(field, 0) + 1
+        snapshot_file = dict((stage_snapshot_files or {}).get(run.key, {}))
         stack_payloads[run.key] = {
             "stack": run.stack,
             "lane": run.lane,
@@ -452,11 +760,22 @@ def build_comparison(
                 "folio-python": run.folio_python_version,
             },
             "config": dict(run.config),
+            "invocation": {
+                "kind": "executed_process" if run.lane == "incumbent" else "in_process",
+                "argv": list(run.invocation),
+                "working_directory": run.invocation_working_directory,
+            },
+            "repository": dict(run.repository),
             "metrics": metrics,
-            "items": {item_id: sorted(run.rows[item_id]) for item_id in sorted(selected_ids)},
+            "items": {
+                item_id: sorted(run.rows[item_id])
+                for item_id in sorted(selected_ids)
+            },
             "stage_snapshot": {
-                "items": len(run.stages),
+                "items": len(stage_by_item),
                 "field_counts": dict(sorted(stage_fields.items())),
+                "by_item": stage_by_item,
+                "file": snapshot_file,
             },
         }
         item_scores[run.key] = per_item
@@ -465,7 +784,7 @@ def build_comparison(
     )
     if candidate is None:
         raise ComparisonError("comparison is missing folio-resolve:candidate")
-    ids = [item.item_id for item in _selected_scoreable(corpus, limit)]
+    ids = [item.item_id for item in scoreable]
     verdicts: dict[str, object] = {}
     for incumbent in sorted(
         (run for run in runs if run.lane == "incumbent"), key=lambda value: value.stack
@@ -476,6 +795,14 @@ def build_comparison(
             n_resamples=n_resamples,
             seed=seed,
         )
+    if isinstance(comparison_invocation, Mapping):
+        comparison_receipt = dict(comparison_invocation)
+    else:
+        comparison_receipt = {
+            "kind": "equivalent",
+            "argv": list(comparison_invocation),
+            "working_directory": "$FOLIO_RESOLVE_REPOSITORY_ROOT",
+        }
     return {
         "kind": "synthetic_comparison",
         "corpus": {
@@ -484,9 +811,35 @@ def build_comparison(
             "nomatch_content_sha256": corpus.manifest.nomatch_content_sha256,
         },
         "pilot": limit is not None,
+        "run_kind": "live_gate" if not include_nomatch else "pilot" if limit else "final",
         "limit": limit,
         "scoreable_items": len(ids),
+        "nomatch_items": len(nomatch),
         "folio_python_version": common_folio_python,
+        "provenance": {
+            "comparison_invocation": comparison_receipt,
+            "cohort_selection": {
+                "rule": "corpus_manifest_order_prefix",
+                "scoreable_limit": limit,
+                "include_nomatch": include_nomatch,
+                "scoreable_item_ids": ids,
+                "nomatch_item_ids": [item.item_id for item in nomatch],
+            },
+            "config_selection": {
+                "answer_rule_config_sha256": config.content_sha256(),
+                "answer_rule_config": config.to_json(),
+            },
+            "committed_set_rule": {
+                "metric": "strict_item_level_iri_set",
+                "candidate": "rank_candidates_then_commit_from_ranked_with_recorded_config",
+                "incumbents": "runner_emitted_deterministic_iri_set",
+                "gold_join_key": "item_id",
+            },
+            "gold_by_item": {
+                item.item_id: sorted(item.gold_iris) for item in (*scoreable, *nomatch)
+            },
+            "items_file": dict(items_file or {}),
+        },
         "stacks": stack_payloads,
         "verdicts": verdicts,
     }
@@ -521,15 +874,15 @@ def write_stage_snapshots(
     *,
     leak_manifest: Manifest | None = None,
     salt: bytes | None = None,
-) -> tuple[Path, ...]:
-    """Write row-level stage data to a caller-selected gitignored directory."""
+) -> dict[str, dict[str, object]]:
+    """Write full row-level stages and return committed-summary file fingerprints."""
     keys = [run.key for run in runs]
     if len(set(keys)) != len(keys):
         raise StackContractError("duplicate stack/lane run")
     if leak_manifest is not None and salt is None:
         raise ComparisonError("salt is required with a leak manifest")
     checked_salt = salt
-    paths: list[Path] = []
+    fingerprints: dict[str, dict[str, object]] = {}
     for run in runs:
         path = out_dir / run.stack / run.lane / "stages.json"
         payload = {item_id: run.stages[item_id] for item_id in sorted(run.stages)}
@@ -539,8 +892,14 @@ def write_stage_snapshots(
             collisions = scan_text(text, leak_manifest, checked_salt)
             if collisions:
                 raise ComparisonError(f"stage snapshot leak check failed: collisions={collisions}")
-        paths.append(_atomic_write_text(path, text))
-    return tuple(paths)
+        content = text.encode("utf-8")
+        _atomic_write_text(path, text)
+        fingerprints[run.key] = {
+            "path": _relative_or_absolute(path, out_dir),
+            "sha256": sha256_bytes(content),
+            "bytes": len(content),
+        }
+    return fingerprints
 
 
 def run_synthetic_comparison(
@@ -554,17 +913,52 @@ def run_synthetic_comparison(
     leak_manifest: Manifest,
     salt: bytes,
     limit: int | None = None,
+    include_nomatch: bool = True,
     incumbent_version: str = "0.4.0",
+    comparison_invocation: Mapping[str, object] | Sequence[str] = (),
 ) -> dict[str, object]:
     """Execute the local candidate and every pinned consumer incumbent, then aggregate."""
     _assert_config(corpus, config)
-    emit_items_file(
-        corpus, items_path, limit=limit, extractor=adapter.phrase_extractor,
-        leak_manifest=leak_manifest, salt=salt,
-    )
-    runs = [run_local_stack(corpus, adapter, config, limit=limit, items_path=items_path)]
-    runs.extend(
-        run_consumer_stack(spec, items_path, version=incumbent_version) for spec in consumers
-    )
-    write_stage_snapshots(runs, row_snapshot_dir, leak_manifest=leak_manifest, salt=salt)
-    return build_comparison(corpus, runs, config, limit=limit)
+    candidate_repository = _git_repository_state(FOLIO_RESOLVE_ROOT)
+    with clean_tree_guard(FOLIO_RESOLVE_ROOT):
+        emit_items_file(
+            corpus, items_path, limit=limit, include_nomatch=include_nomatch,
+            extractor=adapter.phrase_extractor,
+            leak_manifest=leak_manifest, salt=salt,
+        )
+        items_fingerprint = _file_fingerprint(items_path, root=FOLIO_RESOLVE_ROOT)
+        runs: list[StackRun] = []
+        for spec in consumers:
+            if _file_fingerprint(items_path, root=FOLIO_RESOLVE_ROOT) != items_fingerprint:
+                raise ComparisonError(
+                    f"shared comparison items changed before {spec.name} execution"
+                )
+            runs.append(run_consumer_stack(spec, items_path, version=incumbent_version))
+            if _file_fingerprint(items_path, root=FOLIO_RESOLVE_ROOT) != items_fingerprint:
+                raise ComparisonError(
+                    f"shared comparison items changed during {spec.name} execution"
+                )
+        local_run = run_local_stack(
+            corpus,
+            adapter,
+            config,
+            limit=limit,
+            include_nomatch=include_nomatch,
+            items_path=items_path,
+        )
+        runs.append(replace(local_run, repository=candidate_repository))
+        snapshot_files = write_stage_snapshots(
+            runs, row_snapshot_dir, leak_manifest=leak_manifest, salt=salt
+        )
+        if _file_fingerprint(items_path, root=FOLIO_RESOLVE_ROOT) != items_fingerprint:
+            raise ComparisonError("shared comparison items changed during candidate execution")
+        return build_comparison(
+            corpus,
+            runs,
+            config,
+            limit=limit,
+            include_nomatch=include_nomatch,
+            comparison_invocation=comparison_invocation,
+            stage_snapshot_files=snapshot_files,
+            items_file=items_fingerprint,
+        )

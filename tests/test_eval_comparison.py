@@ -3,9 +3,14 @@
 from __future__ import annotations
 
 import json
+import subprocess
+from contextlib import nullcontext
 from dataclasses import replace
+from hashlib import sha256
 from pathlib import Path
+from types import SimpleNamespace
 
+import folio_eval.comparison as comparison_module
 import pytest
 from folio_eval.answer_rule import AnswerRuleConfig
 from folio_eval.comparison import (
@@ -19,12 +24,18 @@ from folio_eval.comparison import (
     classify_verdict,
     emit_items_file,
     parse_stack_output,
+    run_consumer_stack,
+    run_local_stack,
     score_stack,
     write_comparison,
     write_stage_snapshots,
 )
+from folio_eval.downstream import ConsumerRunError, ConsumerSpec
 from folio_eval.leakcheck import build_manifest
 from folio_eval.synthesize import CorpusManifest, LoadedCorpus, SyntheticItem
+from folio_eval.synthetic_score import AdapterResult, CandidateTrace
+
+from folio_resolve.pipeline import MatchCandidate
 
 
 def _corpus(tmp_path: Path) -> LoadedCorpus:
@@ -167,6 +178,18 @@ def test_items_file_emits_shared_segments_once(tmp_path: Path) -> None:
     assert calls == ["Alpha beta", "Gamma", "Nothing here"]
 
 
+def test_live_gate_can_emit_one_scoreable_item_without_nomatch_rows(tmp_path: Path) -> None:
+    out = emit_items_file(
+        _corpus(tmp_path),
+        tmp_path / "live-gate-items.jsonl",
+        limit=1,
+        include_nomatch=False,
+    )
+
+    rows = [json.loads(line) for line in out.read_text().splitlines()]
+    assert [row["item_id"] for row in rows] == ["one"]
+
+
 def test_items_and_stage_snapshots_are_leak_gated(tmp_path: Path) -> None:
     salt = b"0123456789abcdef"
     manifest = build_manifest(["Alpha beta"], salt=salt, gold_version="g", gold_content_sha256="h")
@@ -183,6 +206,154 @@ def test_duplicate_snapshots_rejected_before_write(tmp_path: Path) -> None:
     with pytest.raises(StackContractError, match="duplicate"):
         write_stage_snapshots([run, run], tmp_path / "stages")
     assert not (tmp_path / "stages").exists()
+
+
+def test_stage_snapshot_fingerprint_matches_the_written_full_snapshot(tmp_path: Path) -> None:
+    run = replace(
+        _run("folio-resolve", "candidate", {"one": {"iri:a"}}),
+        stages={"one": {"ranked": ["iri:a"], "committed": ["iri:a"]}},
+    )
+    out_dir = tmp_path / "stages"
+    fingerprints = write_stage_snapshots([run], out_dir)
+
+    content = (out_dir / "folio-resolve" / "candidate" / "stages.json").read_bytes()
+    assert fingerprints[run.key] == {
+        "path": "folio-resolve/candidate/stages.json",
+        "sha256": sha256(content).hexdigest(),
+        "bytes": len(content),
+    }
+
+
+def test_git_repository_state_rejects_dirty_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    status = " M tracked.py\n?? local-note.txt\n"
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess(
+            ["git", "rev-parse", "HEAD"], 0, "a" * 40 + "\n", ""
+        ),
+    )
+    monkeypatch.setattr(comparison_module, "git_status_porcelain", lambda _root: status)
+
+    with pytest.raises(ComparisonError, match="must be clean"):
+        comparison_module._git_repository_state(tmp_path)
+
+
+def test_git_repository_state_records_clean_sha(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess(
+            ["git", "rev-parse", "HEAD"], 0, "a" * 40 + "\n", ""
+        ),
+    )
+    monkeypatch.setattr(comparison_module, "git_status_porcelain", lambda _root: "")
+
+    assert comparison_module._git_repository_state(tmp_path) == {
+        "git_sha": "a" * 40,
+        "initial_status_clean": True,
+        "initial_status_entries": 0,
+        "initial_status_sha256": sha256(b"").hexdigest(),
+        "initial_status_format": "git status --porcelain",
+    }
+
+
+def test_materialized_items_fingerprint_matches_exact_bytes(tmp_path: Path) -> None:
+    path = emit_items_file(_corpus(tmp_path), tmp_path / "items.jsonl")
+
+    assert comparison_module._file_fingerprint(path, root=tmp_path) == {
+        "path": "items.jsonl",
+        "sha256": sha256(path.read_bytes()).hexdigest(),
+        "bytes": len(path.read_bytes()),
+    }
+
+
+def test_synthetic_comparison_guards_candidate_tree_after_execution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    candidate_root = tmp_path / "candidate"
+    candidate_root.mkdir()
+    items_path = tmp_path / "items.jsonl"
+    exits: list[Path] = []
+
+    class Guard:
+        def __init__(self, root: Path) -> None:
+            self.root = root
+
+        def __enter__(self) -> None:
+            return None
+
+        def __exit__(self, *_args: object) -> None:
+            exits.append(self.root)
+
+    def fake_emit(*_args: object, **_kwargs: object) -> Path:
+        items_path.write_text('{"item_id":"one"}\n', encoding="utf-8")
+        return items_path
+
+    monkeypatch.setattr(comparison_module, "FOLIO_RESOLVE_ROOT", candidate_root)
+    monkeypatch.setattr(comparison_module, "_git_repository_state", lambda _root: {})
+    monkeypatch.setattr(comparison_module, "clean_tree_guard", Guard)
+    monkeypatch.setattr(comparison_module, "emit_items_file", fake_emit)
+    monkeypatch.setattr(
+        comparison_module,
+        "run_local_stack",
+        lambda *_args, **_kwargs: _run("folio-resolve", "candidate", {"one": {"iri:a"}}),
+    )
+    monkeypatch.setattr(comparison_module, "write_stage_snapshots", lambda *_a, **_k: {})
+    monkeypatch.setattr(comparison_module, "build_comparison", lambda *_a, **_k: {"ok": True})
+
+    result = comparison_module.run_synthetic_comparison(
+        _corpus(tmp_path),
+        adapter=SimpleNamespace(phrase_extractor=lambda _text: ()),
+        config=AnswerRuleConfig(),
+        consumers=(),
+        items_path=items_path,
+        row_snapshot_dir=tmp_path / "snapshots",
+        leak_manifest=SimpleNamespace(),
+        salt=b"salt",
+        limit=1,
+        include_nomatch=False,
+    )
+
+    assert result == {"ok": True}
+    assert exits == [candidate_root]
+
+
+def test_synthetic_comparison_rejects_items_changed_by_consumer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    items_path = tmp_path / "items.jsonl"
+
+    def fake_emit(*_args: object, **_kwargs: object) -> Path:
+        items_path.write_text('{"item_id":"one"}\n', encoding="utf-8")
+        return items_path
+
+    def mutate_items(*_args: object, **_kwargs: object) -> StackRun:
+        items_path.write_text('{"item_id":"changed"}\n', encoding="utf-8")
+        return _run("folio-mapper", "incumbent", {"one": set()})
+
+    monkeypatch.setattr(comparison_module, "_git_repository_state", lambda _root: {})
+    monkeypatch.setattr(comparison_module, "clean_tree_guard", lambda _root: nullcontext())
+    monkeypatch.setattr(comparison_module, "emit_items_file", fake_emit)
+    monkeypatch.setattr(comparison_module, "run_consumer_stack", mutate_items)
+
+    with pytest.raises(ComparisonError, match="changed during folio-mapper execution"):
+        comparison_module.run_synthetic_comparison(
+            _corpus(tmp_path),
+            adapter=SimpleNamespace(phrase_extractor=lambda _text: ()),
+            config=AnswerRuleConfig(),
+            consumers=(ConsumerSpec("folio-mapper", tmp_path, tmp_path / "python"),),
+            items_path=items_path,
+            row_snapshot_dir=tmp_path / "snapshots",
+            leak_manifest=SimpleNamespace(),
+            salt=b"salt",
+            limit=1,
+            include_nomatch=False,
+        )
 
 
 def test_write_comparison_leakchecks_every_string(tmp_path: Path) -> None:
@@ -203,17 +374,249 @@ def test_write_comparison_leakchecks_every_string(tmp_path: Path) -> None:
         )
 
 
-def test_build_comparison_records_pilot_and_iri_sets(tmp_path: Path) -> None:
+def test_build_comparison_records_pilot_iri_sets_and_reproducibility_provenance(
+    tmp_path: Path,
+) -> None:
     corpus = _corpus(tmp_path)
+    candidate = replace(
+        _run("folio-resolve", "candidate", {"one": {"iri:a"}}),
+        invocation=(
+            "folio_eval.comparison.run_local_stack",
+            "--items",
+            "$COMPARISON_ITEMS",
+        ),
+        invocation_working_directory="$FOLIO_RESOLVE_REPOSITORY_ROOT",
+        repository={
+            "git_sha": "a" * 40,
+            "initial_status_clean": True,
+            "initial_status_entries": 0,
+            "initial_status_sha256": sha256(b"").hexdigest(),
+        },
+        stages={"one": {"ranked": ["iri:a", "iri:x"], "committed": ["iri:a"]}},
+    )
+    incumbent = replace(
+        _run("folio-mapper", "incumbent", {"one": set()}),
+        config=dict(comparison_module.MAPPER_DETERMINISTIC_CONFIG),
+        invocation=(
+            ".venv/bin/python",
+            "backend/scripts/synthetic_runner.py",
+            "--items",
+            "$COMPARISON_ITEMS",
+            "--out",
+            "$STACK_OUTPUT",
+            "--lane",
+            "deterministic",
+        ),
+        repository={
+            "git_sha": "c" * 40,
+            "initial_status_clean": True,
+            "initial_status_entries": 0,
+            "initial_status_sha256": sha256(b"").hexdigest(),
+        },
+        stages={
+            "one": {
+                "stage1_filter": [],
+                "embedding_rerank": [],
+                "committed": [],
+            }
+        },
+    )
     runs = [
-        _run("folio-resolve", "candidate", {"one": {"iri:a"}, "none": set()}),
-        _run("folio-mapper", "incumbent", {"one": set(), "none": set()}),
+        candidate,
+        incumbent,
     ]
-    result = build_comparison(corpus, runs, AnswerRuleConfig(), limit=1, n_resamples=100)
+    result = build_comparison(
+        corpus,
+        runs,
+        AnswerRuleConfig(),
+        limit=1,
+        include_nomatch=False,
+        n_resamples=100,
+        comparison_invocation=(
+            "python",
+            "eval/run_downstream.py",
+            "run_synthetic_comparison",
+            "--limit",
+            "1",
+            "--scoreable-only",
+        ),
+        stage_snapshot_files={
+            "folio-resolve:candidate": {
+                "path": "folio-resolve/candidate/stages.json",
+                "sha256": "d" * 64,
+                "bytes": 123,
+            }
+        },
+        items_file={"path": "items.jsonl", "sha256": "e" * 64, "bytes": 321},
+    )
     assert result["pilot"] is True
     assert result["scoreable_items"] == 1
+    assert result["nomatch_items"] == 0
     assert result["stacks"]["folio-resolve:candidate"]["items"] == {"one": ["iri:a"]}
+    assert result["stacks"]["folio-resolve:candidate"]["invocation"]["argv"][0] == (
+        "folio_eval.comparison.run_local_stack"
+    )
+    assert result["stacks"]["folio-resolve:candidate"]["invocation"]["kind"] == "in_process"
+    assert result["stacks"]["folio-resolve:candidate"]["repository"]["git_sha"] == "a" * 40
+    assert result["stacks"]["folio-resolve:candidate"]["stage_snapshot"]["by_item"] == {
+        "one": {"committed": ["iri:a"], "ranked": ["iri:a", "iri:x"]}
+    }
+    assert result["stacks"]["folio-resolve:candidate"]["stage_snapshot"]["file"] == {
+        "path": "folio-resolve/candidate/stages.json",
+        "sha256": "d" * 64,
+        "bytes": 123,
+    }
+    provenance = result["provenance"]
+    assert provenance["comparison_invocation"] == {
+        "kind": "equivalent",
+        "argv": [
+            "python",
+            "eval/run_downstream.py",
+            "run_synthetic_comparison",
+            "--limit",
+            "1",
+            "--scoreable-only",
+        ],
+        "working_directory": "$FOLIO_RESOLVE_REPOSITORY_ROOT",
+    }
+    assert provenance["cohort_selection"] == {
+        "rule": "corpus_manifest_order_prefix",
+        "scoreable_limit": 1,
+        "include_nomatch": False,
+        "scoreable_item_ids": ["one"],
+        "nomatch_item_ids": [],
+    }
+    assert provenance["config_selection"]["answer_rule_config_sha256"] == (
+        AnswerRuleConfig().content_sha256()
+    )
+    assert provenance["committed_set_rule"]["metric"] == "strict_item_level_iri_set"
+    assert provenance["gold_by_item"] == {"one": ["iri:a"]}
+    assert provenance["items_file"] == {
+        "path": "items.jsonl",
+        "sha256": "e" * 64,
+        "bytes": 321,
+    }
     assert result["verdicts"]["folio-mapper"]["verdict"] == "win"
+
+
+def test_local_stack_emits_attribution_ready_candidate_stages(tmp_path: Path) -> None:
+    candidate = MatchCandidate(
+        iri="iri:a",
+        label="A",
+        score=88.0,
+        extraction_path="multi_strategy_recall",
+        gated=True,
+    )
+    adapted = AdapterResult(
+        candidates=(candidate,),
+        raw_candidate_count=3,
+        suppression_counters={"blocklist": 1, "score_floor": 1},
+        traces=(
+            CandidateTrace(
+                "iri:a", "A", "", "multi_strategy_recall", "Alpha beta", 90.0, 88.0,
+                "survived", True, "short label demotion",
+            ),
+            CandidateTrace(
+                "iri:b", "B", "", "aho_corasick", "B", 100.0, None,
+                "blocklist", False, "alias_blocklist",
+            ),
+            CandidateTrace(
+                "iri:c", "C", "", "multi_strategy_recall", "beta", 40.0, 40.0,
+                "score_floor", False, "",
+            ),
+        ),
+    )
+    adapter = SimpleNamespace(
+        phrase_extractor=lambda _text: ("Alpha beta",),
+        adapt=lambda _text, *, segments: adapted,
+    )
+
+    run = run_local_stack(
+        _corpus(tmp_path),
+        adapter,
+        AnswerRuleConfig(),
+        limit=1,
+        include_nomatch=False,
+        extractor=lambda _text: ("Alpha beta",),
+    )
+
+    assert run.stages["one"] == {
+        "segments": ["Alpha beta"],
+        "counts": {
+            "pre_gate_unique": 3,
+            "survived": 1,
+            "suppressed": {"blocklist": 1, "score_floor": 1},
+            "committed": 1,
+        },
+        "candidates": [
+            {
+                "iri": "iri:a",
+                "label": "A",
+                "branch": "",
+                "extraction_path": "multi_strategy_recall",
+                "surface_term": "Alpha beta",
+                "pre_gate_score": 90.0,
+                "post_gate_score": 88.0,
+                "gate_disposition": "survived",
+                "gated": True,
+                "gate_reason": "short label demotion",
+                "rank": 1,
+                "probability": 0.88,
+                "commit_disposition": "committed",
+            },
+            {
+                "iri": "iri:b",
+                "label": "B",
+                "branch": "",
+                "extraction_path": "aho_corasick",
+                "surface_term": "B",
+                "pre_gate_score": 100.0,
+                "post_gate_score": None,
+                "gate_disposition": "blocklist",
+                "gated": False,
+                "gate_reason": "alias_blocklist",
+                "rank": None,
+                "probability": None,
+                "commit_disposition": "suppressed",
+            },
+            {
+                "iri": "iri:c",
+                "label": "C",
+                "branch": "",
+                "extraction_path": "multi_strategy_recall",
+                "surface_term": "beta",
+                "pre_gate_score": 40.0,
+                "post_gate_score": 40.0,
+                "gate_disposition": "score_floor",
+                "gated": False,
+                "gate_reason": "",
+                "rank": None,
+                "probability": None,
+                "commit_disposition": "suppressed",
+            },
+        ],
+        "ranked_iris": ["iri:a"],
+        "committed_iris": ["iri:a"],
+    }
+
+
+def test_mapper_fallback_config_is_rejected() -> None:
+    run = replace(
+        _run("folio-mapper", "incumbent", {"one": set()}),
+        config={
+            "threshold": 0.3,
+            "max_per_branch": 10,
+            "rerank_top_k": 20,
+            "commit_top_n": 10,
+            "keyword_weight": 0.6,
+            "embedding_weight": 0.4,
+            "embedding_rerank": "unavailable",
+            "llm_on": False,
+        },
+    )
+
+    with pytest.raises(StackContractError, match="embedding_rerank"):
+        comparison_module._assert_consumer_config(run)
 
 
 def test_build_comparison_config_hash_mismatch_raises(tmp_path: Path) -> None:
@@ -223,8 +626,103 @@ def test_build_comparison_config_hash_mismatch_raises(tmp_path: Path) -> None:
         build_comparison(corpus, runs, AnswerRuleConfig(threshold=0.9))
 
 
+def test_committed_items_include_nomatch_predictions_for_metric_recomputation(
+    tmp_path: Path,
+) -> None:
+    corpus = _corpus(tmp_path)
+    run = _run(
+        "folio-resolve",
+        "candidate",
+        {"one": {"iri:a"}, "two": {"iri:b"}, "none": {"iri:false-positive"}},
+    )
+
+    result = build_comparison(corpus, [run], AnswerRuleConfig())
+    stack = result["stacks"]["folio-resolve:candidate"]
+
+    assert stack["items"]["none"] == ["iri:false-positive"]
+    assert stack["metrics"]["nomatch_false_positives"] == 1
+
+
 def test_missing_item_is_stack_contract_error(tmp_path: Path) -> None:
     corpus = _corpus(tmp_path)
     run = _run("folio-resolve", "candidate", {"one": {"iri:a"}, "none": set()})
     with pytest.raises(StackContractError, match="omitted scoreable item"):
         build_comparison(corpus, [run], AnswerRuleConfig())
+
+
+def test_consumer_runner_translates_deterministic_lane_to_incumbent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    commands: list[list[str]] = []
+
+    def fake_run(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        commands.append(command)
+        out_path = Path(command[command.index("--out") + 1])
+        out_path.write_text(
+            json.dumps(
+                {
+                    "kind": "synthetic-stack-run",
+                    "stack": "folio-mapper",
+                    "lane": "deterministic",
+                    "folio_resolve_version": "0.4.0",
+                    "folio_python_version": "1.2.3",
+                    "config": dict(comparison_module.MAPPER_DETERMINISTIC_CONFIG),
+                }
+            )
+            + "\n"
+            + json.dumps(
+                {
+                    "item_id": "one",
+                    "iris": ["iri:a"],
+                    "stages": {
+                        "stage1_filter": ["iri:a"],
+                        "embedding_rerank": ["iri:a"],
+                        "committed": ["iri:a"],
+                    },
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(comparison_module, "prepare_incumbent", lambda *_args: {})
+    monkeypatch.setattr(comparison_module, "clean_tree_guard", lambda _root: nullcontext())
+    monkeypatch.setattr(
+        comparison_module,
+        "_git_repository_state",
+        lambda _root: {"git_sha": "a" * 40, "initial_status_clean": True},
+    )
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    spec = ConsumerSpec("folio-mapper", tmp_path, tmp_path / "python")
+    items_path = tmp_path / "items.jsonl"
+    items_path.write_text(json.dumps({"item_id": "one"}) + "\n", encoding="utf-8")
+
+    run = run_consumer_stack(spec, items_path)
+
+    assert run.lane == "incumbent"
+    assert run.invocation_working_directory == str(tmp_path.resolve())
+    assert run.repository["git_sha"] == "a" * 40
+    assert commands[0][commands[0].index("--lane") + 1] == "deterministic"
+
+
+def test_consumer_runner_translates_timeout_to_domain_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def time_out(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        raise subprocess.TimeoutExpired(command, 1.5)
+
+    monkeypatch.setattr(comparison_module, "prepare_incumbent", lambda *_args: {})
+    monkeypatch.setattr(comparison_module, "clean_tree_guard", lambda _root: nullcontext())
+    monkeypatch.setattr(
+        comparison_module,
+        "_git_repository_state",
+        lambda _root: {"git_sha": "a" * 40, "initial_status_clean": True},
+    )
+    monkeypatch.setattr(subprocess, "run", time_out)
+    spec = ConsumerSpec("folio-enrich", tmp_path, tmp_path / "python")
+    items_path = tmp_path / "items.jsonl"
+    items_path.write_text(json.dumps({"item_id": "one"}) + "\n", encoding="utf-8")
+
+    with pytest.raises(ConsumerRunError, match="timed out after 2s"):
+        run_consumer_stack(spec, items_path, timeout=1.5)

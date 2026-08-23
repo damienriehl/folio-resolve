@@ -8,10 +8,15 @@ that wraps the real ``folio-python`` package (install the ``folio`` extra).
 
 from __future__ import annotations
 
+from collections import OrderedDict
 from dataclasses import dataclass, field
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Protocol, TypeVar, runtime_checkable
 
 from .scoring import compute_relevance_score, content_words
+
+_PROVIDER_SEARCH_CACHE_SIZE = 256
+_CacheKey = TypeVar("_CacheKey")
+_CacheValue = TypeVar("_CacheValue")
 
 
 @dataclass(frozen=True)
@@ -183,6 +188,15 @@ class FolioPythonProvider:
     """
 
     _folio: Any = field(default=None)
+    _label_search_cache: OrderedDict[
+        tuple[str, int], tuple[tuple[Concept, float], ...]
+    ] = field(default_factory=OrderedDict, init=False, repr=False, compare=False)
+    _definition_search_cache: OrderedDict[
+        tuple[str, int], tuple[tuple[Concept, float], ...]
+    ] = field(default_factory=OrderedDict, init=False, repr=False, compare=False)
+    _prefix_search_cache: OrderedDict[tuple[str, int], tuple[Concept, ...]] = field(
+        default_factory=OrderedDict, init=False, repr=False, compare=False
+    )
 
     def _get(self) -> Any:
         if self._folio is None:
@@ -208,13 +222,22 @@ class FolioPythonProvider:
 
     def search_by_label(self, query: str, *, limit: int = 20) -> list[tuple[Concept, float]]:
         """Normalize returned score ties; folio-python owns pre-return limit membership."""
+        cache_key = (query, limit)
+        if (cached := _cache_get(self._label_search_cache, cache_key)) is not None:
+            return list(cached)
+
         folio = self._get()
-        results = folio.search_by_label(query, limit=limit)
-        out: list[tuple[Concept, float]] = []
-        for item in results[:limit]:
-            owl, score = item if isinstance(item, tuple) else (item, 0.0)
-            out.append((_owl_to_concept(owl), float(score)))
-        return sorted(out, key=lambda pair: (-pair[1], pair[0].iri))
+        try:
+            results = folio.search_by_label(query, limit=limit)
+            out: list[tuple[Concept, float]] = []
+            for item in results[:limit]:
+                owl, score = item if isinstance(item, tuple) else (item, 0.0)
+                out.append((_owl_to_concept(owl), float(score)))
+            normalized = tuple(sorted(out, key=lambda pair: (-pair[1], pair[0].iri)))
+            _cache_put(self._label_search_cache, cache_key, normalized)
+            return list(normalized)
+        finally:
+            _release_upstream_search_caches(folio)
 
     def get_concept(self, iri: str) -> Concept | None:
         folio = self._get()
@@ -222,18 +245,38 @@ class FolioPythonProvider:
         return _owl_to_concept(owl) if owl is not None else None
 
     def search_by_prefix(self, prefix: str, *, limit: int = 50) -> list[Concept]:
-        results = self._get().search_by_prefix(prefix)
-        concepts = (_owl_to_concept(item) for item in results)
-        return sorted(concepts, key=lambda concept: concept.iri)[:limit]
+        cache_key = (prefix, limit)
+        if (cached := _cache_get(self._prefix_search_cache, cache_key)) is not None:
+            return list(cached)
+
+        folio = self._get()
+        try:
+            results = folio.search_by_prefix(prefix)
+            concepts = (_owl_to_concept(item) for item in results)
+            normalized = tuple(sorted(concepts, key=lambda concept: concept.iri)[:limit])
+            _cache_put(self._prefix_search_cache, cache_key, normalized)
+            return list(normalized)
+        finally:
+            _release_upstream_search_caches(folio)
 
     def search_by_definition(self, query: str, *, limit: int = 20) -> list[tuple[Concept, float]]:
         """Normalize returned score ties; folio-python owns pre-return limit membership."""
-        results = self._get().search_by_definition(query, limit=limit)
-        out: list[tuple[Concept, float]] = []
-        for item in results[:limit]:
-            owl, score = item if isinstance(item, tuple) else (item, 0.0)
-            out.append((_owl_to_concept(owl), float(score)))
-        return sorted(out, key=lambda pair: (-pair[1], pair[0].iri))
+        cache_key = (query, limit)
+        if (cached := _cache_get(self._definition_search_cache, cache_key)) is not None:
+            return list(cached)
+
+        folio = self._get()
+        try:
+            results = folio.search_by_definition(query, limit=limit)
+            out: list[tuple[Concept, float]] = []
+            for item in results[:limit]:
+                owl, score = item if isinstance(item, tuple) else (item, 0.0)
+                out.append((_owl_to_concept(owl), float(score)))
+            normalized = tuple(sorted(out, key=lambda pair: (-pair[1], pair[0].iri)))
+            _cache_put(self._definition_search_cache, cache_key, normalized)
+            return list(normalized)
+        finally:
+            _release_upstream_search_caches(folio)
 
     def parents_of(self, iri: str) -> list[Concept]:
         concept = self.get_concept(iri)
@@ -247,6 +290,45 @@ class FolioPythonProvider:
             ),
             key=lambda parent: parent.iri,
         )
+
+
+def _cache_get(
+    cache: OrderedDict[_CacheKey, _CacheValue], key: _CacheKey
+) -> _CacheValue | None:
+    try:
+        value = cache.pop(key)
+    except KeyError:
+        return None
+    cache[key] = value
+    return value
+
+
+def _cache_put(
+    cache: OrderedDict[_CacheKey, _CacheValue], key: _CacheKey, value: _CacheValue
+) -> None:
+    cache[key] = value
+    cache.move_to_end(key)
+    if len(cache) > _PROVIDER_SEARCH_CACHE_SIZE:
+        cache.popitem(last=False)
+
+
+def _release_upstream_search_caches(folio: object) -> None:
+    """Drop folio-python's unbounded inner caches after results have been copied.
+
+    MultiStrategyRecall owns bounded cross-call reuse.  These private caches otherwise retain
+    every unique synthetic query and its full search corpus for the lifetime of the process.
+    Attribute probing keeps the adapter compatible with folio-python releases that do not expose
+    one or more of the affected caches.
+    """
+    basic_search = getattr(folio, "_basic_search", None)
+    cache_clear = getattr(basic_search, "cache_clear", None)
+    if callable(cache_clear):
+        cache_clear()
+
+    for cache_name in ("_prefix_cache", "_ci_prefix_cache"):
+        clear = getattr(getattr(folio, cache_name, None), "clear", None)
+        if callable(clear):
+            clear()
 
 
 def _owl_to_concept(owl: object) -> Concept:

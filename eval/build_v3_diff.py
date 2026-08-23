@@ -26,6 +26,7 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
+from typing import Any, cast
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from folio_eval.audit import Packet, PacketRow, VariantStats
@@ -40,7 +41,7 @@ label_index = json.loads(Path(sys.argv[4]).read_text()) if len(sys.argv) > 4 els
 def by_level(reading: object) -> dict[int, dict[str, str]]:
     """level -> {iri: label} for one reading."""
     out: dict[int, dict[str, str]] = {}
-    for lv in reading or []:  # type: ignore[union-attr]
+    for lv in cast(list[dict[str, Any]], reading or []):
         level = int(lv.get("level") or 0)
         for tag in lv.get("tags") or []:
             if tag.get("iri"):

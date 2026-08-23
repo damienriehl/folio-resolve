@@ -945,7 +945,7 @@ def _cmd_diff(args: argparse.Namespace) -> int:  # pragma: no cover -- real-run 
     return 1 if verdict.has_blocking else 0
 
 
-def main(argv: Sequence[str] | None = None) -> int:
+def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python -m folio_eval.downstream",
         description="Downstream consumer validation: snapshot at baseline, diff at check-ins (KTD10).",
@@ -986,11 +986,51 @@ def main(argv: Sequence[str] | None = None) -> int:
     comparison.add_argument("--consumer", choices=["mapper", "enrich", "all"], default="all")
     comparison.add_argument("--incumbent-version", default="0.4.0")
     comparison.add_argument("--limit", type=int, default=None)
+    comparison.add_argument(
+        "--scoreable-only",
+        action="store_true",
+        help=(
+            "omit no-match rows; use with --limit 1 for the U10 one-item live gate "
+            "(pilot/final runs retain no-match rows by default)"
+        ),
+    )
+    return parser
 
-    args = parser.parse_args(argv)
+
+def _execution_receipt(
+    raw_argv: Sequence[str], *, supplied_argv: bool
+) -> dict[str, object]:
+    """Record the actual process argv, or a canonical replay for programmatic calls."""
+    if supplied_argv:
+        argv = [
+            str(Path(sys.executable).resolve()),
+            str((_EVAL_ROOT / "run_downstream.py").resolve()),
+            *raw_argv,
+        ]
+        kind = "canonical_replay"
+    else:
+        argv = [str(Path(sys.executable).resolve()), *sys.argv]
+        kind = "executed_process"
+    return {
+        "kind": kind,
+        "argv": argv,
+        "working_directory": str(Path.cwd().resolve()),
+        "environment": {"PYTHONHASHSEED": os.environ.get("PYTHONHASHSEED", "")},
+    }
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    raw_argv = tuple(sys.argv[1:] if argv is None else argv)
+    parser = _parser()
+
+    args = parser.parse_args(raw_argv)
     if args.command == "snapshot":
         return _cmd_snapshot(args)
     if args.command == "run_synthetic_comparison":
+        if args.scoreable_only and args.limit != 1:
+            parser.error("--scoreable-only requires --limit 1 for the U10 live gate")
+        if os.environ.get("PYTHONHASHSEED") != "0":
+            parser.error("run_synthetic_comparison requires PYTHONHASHSEED=0")
         from folio import FOLIO
 
         from folio_resolve.ontology import FolioPythonProvider
@@ -1003,6 +1043,8 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         corpus = load_corpus(args.corpus_manifest)
         config = load_config(args.config)
+        leak_manifest = load_manifest(args.leak_manifest)
+        salt = args.salt_file.read_bytes()
         adapter = DocumentAdapter(FolioPythonProvider(_folio=FOLIO()))
         specs = []
         if args.consumer in {"mapper", "all"}:
@@ -1016,16 +1058,21 @@ def main(argv: Sequence[str] | None = None) -> int:
             consumers=specs,
             items_path=args.items,
             row_snapshot_dir=args.row_snapshot_dir,
-            leak_manifest=load_manifest(args.leak_manifest),
-            salt=args.salt_file.read_bytes(),
+            leak_manifest=leak_manifest,
+            salt=salt,
             limit=args.limit,
+            include_nomatch=not args.scoreable_only,
             incumbent_version=args.incumbent_version,
+            comparison_invocation=_execution_receipt(
+                raw_argv,
+                supplied_argv=argv is not None,
+            ),
         )
         write_comparison(
             args.out,
             payload,
-            leak_manifest=load_manifest(args.leak_manifest),
-            salt=args.salt_file.read_bytes(),
+            leak_manifest=leak_manifest,
+            salt=salt,
         )
         print(canonical_json(payload))
         return 0

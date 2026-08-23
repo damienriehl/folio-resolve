@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
+from typing import Any
 
 verdicts = json.loads(Path(sys.argv[1]).read_text())
 verdicts = verdicts.get("decisions", verdicts)
@@ -27,7 +28,7 @@ packet = json.loads(Path(sys.argv[3]).read_text())
 out_path = Path(sys.argv[4])
 
 rows = {r["decision_id"]: r for r in packet["rows"] if r["section"] == "pairing"}
-adapted: dict[str, dict] = {}
+adapted: dict[str, dict[str, Any]] = {}
 stats = {"rows": 0, "items_edited": 0, "v3_level_fallbacks": 0, "skipped_unchanged": 0}
 
 for rid, export in verdicts.items():
@@ -48,7 +49,9 @@ for rid, export in verdicts.items():
     ordered = sorted(level_inputs)
     chip_to_level = {f"L{index}": level for index, level in enumerate(ordered, start=1)}
 
-    def reading_levels(name: str, assignments: dict = assignments) -> dict[str, set[int]]:
+    def reading_levels(
+        name: str, assignments: dict[str, Any] = assignments
+    ) -> dict[str, set[int]]:
         out: dict[str, set[int]] = {}
         for lv in assignments.get(name) or []:
             for tag in lv.get("tags") or []:
@@ -72,11 +75,11 @@ for rid, export in verdicts.items():
     membership: dict[str, set[int]] = {}
     if exported_lm:
         for chip, iris in exported_lm.items():
-            level = chip_to_level.get(chip)
-            if level is None:
+            mapped_level = chip_to_level.get(chip)
+            if mapped_level is None:
                 continue
             for iri in iris:
-                membership.setdefault(iri, set()).add(level)
+                membership.setdefault(iri, set()).add(mapped_level)
     else:
         membership = {iri: set(levels) for iri, levels in applied.items()}
     for iri, verdict in state.items():
@@ -98,7 +101,7 @@ for rid, export in verdicts.items():
     for item in level_item.values():
         edited.setdefault(item, set())  # an item losing everything must still be named
 
-    prev = {}
+    prev: dict[str, set[str]] = {}
     for iri, levels in applied.items():
         for level in levels:
             item = level_item.get(level)
@@ -108,7 +111,9 @@ for rid, export in verdicts.items():
         stats["skipped_unchanged"] += 1
         continue
 
-    decision: dict = {"edited_iris": {item: sorted(iris) for item, iris in edited.items()}}
+    decision: dict[str, Any] = {
+        "edited_iris": {item: sorted(iris) for item, iris in edited.items()}
+    }
     if export.get("gold_note"):
         decision["gold_note"] = export["gold_note"]
     adapted[rid] = decision
