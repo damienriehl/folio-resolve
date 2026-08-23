@@ -41,6 +41,8 @@ PILOT_CHECKPOINT_KIND = "synthetic-comparison-pilot-checkpoint"
 PILOT_CHECKPOINT_VERSION = 1
 SHARD_COMPLETION_KIND = "synthetic-comparison-pilot-shard-completion"
 SHARD_COMPLETION_VERSION = 1
+FINAL_COMPLETION_KIND = "synthetic-comparison-pilot-final-completion"
+FINAL_COMPLETION_VERSION = 1
 DEFAULT_LIMIT = 30
 INCUMBENT_VERSION = "0.4.0"
 PUBLISHED_COMPARISON_REPORT = Path("eval/reports/synthetic-comparison-v1.json")
@@ -1213,6 +1215,7 @@ def _fingerprint(
     public_metadata_path: Path,
     mapper_root: Path,
     enrich_root: Path,
+    output_path: Path,
     limit: int,
 ) -> dict[str, object]:
     config = load_config(config_path)
@@ -1232,11 +1235,21 @@ def _fingerprint(
         require_model_assets=True,
     )
     enrich_environment = _consumer_environment_fingerprint(enrich.venv_python)
+    try:
+        output_relative = output_path.resolve().relative_to(FOLIO_RESOLVE_ROOT.resolve())
+    except ValueError:
+        allowed_candidate_outputs: tuple[Path, ...] = ()
+    else:
+        allowed_candidate_outputs = (
+            (output_path,) if output_relative == PUBLISHED_COMPARISON_REPORT else ()
+        )
     return {
         "answer_rule_config_sha256": config.content_sha256(),
         "candidate_environment": candidate_environment,
         "candidate_ignored_bytecode": candidate_ignored_bytecode,
-        "candidate_repository": _git_repository_state(FOLIO_RESOLVE_ROOT),
+        "candidate_repository": _git_repository_state(
+            FOLIO_RESOLVE_ROOT, allowed_untracked_paths=allowed_candidate_outputs
+        ),
         "corpus_content_sha256": corpus.manifest.content_sha256,
         "enrich_environment": enrich_environment,
         "enrich_ignored_bytecode": enrich_ignored_bytecode,
@@ -1275,6 +1288,7 @@ def _fingerprint_for_args(args: argparse.Namespace, corpus: LoadedCorpus) -> dic
         public_metadata_path=args.public_metadata,
         mapper_root=args.mapper_root,
         enrich_root=args.enrich_root,
+        output_path=args.out,
         limit=args.limit,
     )
 
@@ -1462,6 +1476,50 @@ def _load_completed_shard(
     if observed != _shard_completion_receipt(report, item_id, fingerprint):
         raise PilotCheckpointError(f"pilot shard completion does not match its report: {path}")
     return _load_shard(report, item_id, fingerprint)
+
+
+def _final_completion_path(root: Path) -> Path:
+    return root / "final-complete.json"
+
+
+def _final_completion_receipt(
+    report: Path, fingerprint: Mapping[str, object]
+) -> dict[str, object]:
+    try:
+        report_sha256 = _sha256_file(report)
+    except OSError as exc:
+        raise PilotCheckpointError(f"final pilot report is missing: {report}") from exc
+    return {
+        "fingerprint_sha256": sha256_bytes(
+            json.dumps(fingerprint, sort_keys=True, separators=(",", ":")).encode()
+        ),
+        "kind": FINAL_COMPLETION_KIND,
+        "report_sha256": report_sha256,
+        "schema_version": FINAL_COMPLETION_VERSION,
+    }
+
+
+def _publish_final_completion(
+    root: Path, report: Path, fingerprint: Mapping[str, object]
+) -> None:
+    path = _final_completion_path(root)
+    expected = _final_completion_receipt(report, fingerprint)
+    _atomic_create(path, expected)
+    _load_final_completion(root, report, fingerprint)
+
+
+def _load_final_completion(
+    root: Path, report: Path, fingerprint: Mapping[str, object]
+) -> None:
+    path = _final_completion_path(root)
+    if not path.is_file():
+        raise PilotCheckpointError(f"pilot has no verified final completion receipt: {path}")
+    try:
+        observed = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise PilotCheckpointError(f"pilot final completion is corrupt: {path}") from exc
+    if observed != _final_completion_receipt(report, fingerprint):
+        raise PilotCheckpointError("pilot final completion does not match its report")
 
 
 def _run_shard(args: argparse.Namespace, item_id: str, fingerprint: Mapping[str, object]) -> None:
@@ -1710,17 +1768,17 @@ def _finalize(
     _require_current_fingerprint(
         args, corpus, fingerprint, boundary="before final report publication"
     )
-    publication_temporary_dir = args.checkpoint_dir / "publication"
     _durably_create_directory(args.out.parent)
-    _durably_create_directory(publication_temporary_dir)
     write_comparison(
         args.out,
         payload,
         leak_manifest,
         salt,
         public_metadata=public_metadata,
-        temporary_dir=publication_temporary_dir,
+        temporary_dir=args.out.parent,
+        temporary_prefix=f".{args.out.name}.",
     )
+    _publish_final_completion(args.checkpoint_dir, args.out, fingerprint)
 
 
 def _load_bound_public_metadata(
@@ -1768,6 +1826,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     manifest = _checkpoint_manifest(fingerprint=fingerprint, item_ids=item_ids)
     _durably_create_directory(args.checkpoint_dir)
     _create_or_validate_manifest(args.checkpoint_dir / "manifest.json", manifest)
+    final_completion = _final_completion_path(args.checkpoint_dir)
+    if final_completion.exists():
+        _load_final_completion(args.checkpoint_dir, args.out, fingerprint)
+        print(f"pilot checkpoint: {len(item_ids)}/{len(item_ids)} complete")
+        print(f"pilot report: {args.out}")
+        return 0
     if not args.finalize_only:
         completed_before = sum(
             _shard_completion_path(args.checkpoint_dir, item_id).exists() for item_id in item_ids

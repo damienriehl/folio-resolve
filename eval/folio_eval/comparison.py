@@ -217,12 +217,18 @@ class StackRun:
 
 
 def _atomic_write_text(
-    path: Path, text: str, *, temporary_dir: Path | None = None
+    path: Path,
+    text: str,
+    *,
+    temporary_dir: Path | None = None,
+    temporary_prefix: str = "tmp",
 ) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     temp_parent = path.parent if temporary_dir is None else temporary_dir
     temp_parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_name = tempfile.mkstemp(dir=temp_parent, suffix=".tmp")
+    fd, tmp_name = tempfile.mkstemp(
+        dir=temp_parent, prefix=temporary_prefix, suffix=".tmp"
+    )
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             handle.write(text)
@@ -328,7 +334,9 @@ def emit_items_file(
     return _atomic_write_text(out_path, text)
 
 
-def _git_repository_state(repo_root: Path) -> dict[str, object]:
+def _git_repository_state(
+    repo_root: Path, *, allowed_untracked_paths: Sequence[Path] = ()
+) -> dict[str, object]:
     """Capture a reproducible Git identity, failing closed on uncommitted source state."""
     completed = subprocess.run(
         ["git", "-C", str(repo_root), "rev-parse", "HEAD"],
@@ -340,7 +348,19 @@ def _git_repository_state(repo_root: Path) -> dict[str, object]:
         raise ComparisonError(
             f"could not resolve Git SHA for {repo_root}: {completed.stderr.strip()[-2000:]}"
         )
-    status = git_status_porcelain(repo_root)
+    allowed_entries: set[str] = set()
+    for path in allowed_untracked_paths:
+        try:
+            relative = path.resolve().relative_to(repo_root.resolve())
+        except ValueError as exc:
+            raise ComparisonError("allowed untracked path is outside its repository") from exc
+        allowed_entries.add(f"?? {relative.as_posix()}")
+    raw_status = git_status_porcelain(repo_root)
+    status = "".join(
+        f"{line}\n"
+        for line in raw_status.splitlines()
+        if line not in allowed_entries
+    )
     if status:
         raise ComparisonError(
             f"comparison repository must be clean before execution: {repo_root} "
@@ -1168,6 +1188,7 @@ def write_comparison(
     *,
     public_metadata: PublicComparisonMetadata | None = None,
     temporary_dir: Path | None = None,
+    temporary_prefix: str = "tmp",
 ) -> Path:
     """Leak-check every string in the artifact, then atomically write canonical JSON."""
     preflight_comparison_publication(
@@ -1177,7 +1198,12 @@ def write_comparison(
         public_metadata=public_metadata,
     )
     text = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
-    return _atomic_write_text(path, text, temporary_dir=temporary_dir)
+    return _atomic_write_text(
+        path,
+        text,
+        temporary_dir=temporary_dir,
+        temporary_prefix=temporary_prefix,
+    )
 
 
 def write_stage_snapshots(

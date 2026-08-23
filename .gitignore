@@ -19,3 +19,5 @@ bench/results/
 eval/data/*
 !eval/data/MANIFEST.md
 eval/data/reports/
+# Recoverable atomic staging for the committed U10 comparison artifact.
+eval/reports/.synthetic-comparison-v1.json.*.tmp

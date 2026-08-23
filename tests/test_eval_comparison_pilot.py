@@ -915,7 +915,7 @@ def test_incumbents_are_prepared_once_before_read_only_fingerprinting(
         "_consumer_environment_fingerprint",
         lambda path, **_kwargs: events.append(f"probe:{path}") or {},
     )
-    monkeypatch.setattr(pilot_module, "_git_repository_state", lambda _root: {})
+    monkeypatch.setattr(pilot_module, "_git_repository_state", lambda *_args, **_kwargs: {})
     monkeypatch.setattr(
         pilot_module,
         "_assert_no_ignored_importables",
@@ -939,6 +939,7 @@ def test_incumbents_are_prepared_once_before_read_only_fingerprinting(
         public_metadata_path=Path("public.json"),
         mapper_root=mapper.repo_root,
         enrich_root=enrich.repo_root,
+        output_path=pilot_module.FOLIO_RESOLVE_ROOT / "eval/reports/report.json",
         limit=1,
     )
 
@@ -1188,6 +1189,20 @@ def test_completed_shard_receipt_binds_published_report_bytes(
         pilot_module._load_completed_shard(root, "one", fingerprint)
 
 
+def test_final_completion_receipt_binds_published_report_bytes(tmp_path: Path) -> None:
+    root = tmp_path / "checkpoint"
+    report = tmp_path / "report.json"
+    report.write_text('{"version":1}\n', encoding="utf-8")
+    fingerprint = {"stable": True}
+
+    pilot_module._publish_final_completion(root, report, fingerprint)
+    pilot_module._load_final_completion(root, report, fingerprint)
+
+    report.write_text('{"version":2}\n', encoding="utf-8")
+    with pytest.raises(PilotCheckpointError, match="does not match its report"):
+        pilot_module._load_final_completion(root, report, fingerprint)
+
+
 def test_merge_stack_runs_preserves_every_item_and_rejects_static_drift() -> None:
     shards = [_shard("one"), _shard("none", nomatch=True)]
     runs = _merge_stack_runs(shards)
@@ -1335,11 +1350,19 @@ def test_finalize_durably_creates_output_parent_before_publish(
 
     def publish(path: Path, *_args: object, **kwargs: object) -> None:
         assert path.parent.is_dir()
-        assert kwargs["temporary_dir"] == checkpoint / "publication"
+        assert kwargs["temporary_dir"] == output.parent
+        assert kwargs["temporary_prefix"] == ".report.json."
         events.append(("publish", path))
 
     monkeypatch.setattr(pilot_module, "_durably_create_directory", durable_create)
     monkeypatch.setattr(pilot_module, "write_comparison", publish)
+    monkeypatch.setattr(
+        pilot_module,
+        "_publish_final_completion",
+        lambda root, report, fingerprint: events.append(
+            ("completion", (root, report, fingerprint))
+        ),
+    )
 
     pilot_module._finalize(args, _corpus(tmp_path), ("one",), {"fingerprint": {}})
 
@@ -1347,8 +1370,8 @@ def test_finalize_durably_creates_output_parent_before_publish(
         ("directory", checkpoint / "final-stages" / "folio-mapper" / "incumbent"),
         ("fingerprint", "before final report publication"),
         ("directory", output.parent),
-        ("directory", checkpoint / "publication"),
         ("publish", output),
+        ("completion", (checkpoint, output, {})),
     ]
 
 

@@ -295,6 +295,40 @@ def test_git_repository_state_records_clean_sha(
     }
 
 
+def test_git_repository_state_allows_only_named_untracked_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess(
+            ["git", "rev-parse", "HEAD"], 0, "a" * 40 + "\n", ""
+        ),
+    )
+    monkeypatch.setattr(
+        comparison_module,
+        "git_status_porcelain",
+        lambda _root: "?? eval/reports/report.json\n",
+    )
+
+    observed = comparison_module._git_repository_state(
+        tmp_path,
+        allowed_untracked_paths=(tmp_path / "eval" / "reports" / "report.json",),
+    )
+
+    assert observed["initial_status_clean"] is True
+    monkeypatch.setattr(
+        comparison_module,
+        "git_status_porcelain",
+        lambda _root: " M eval/reports/report.json\n",
+    )
+    with pytest.raises(ComparisonError, match="must be clean"):
+        comparison_module._git_repository_state(
+            tmp_path,
+            allowed_untracked_paths=(tmp_path / "eval" / "reports" / "report.json",),
+        )
+
+
 def test_materialized_items_fingerprint_matches_exact_bytes(tmp_path: Path) -> None:
     path = emit_items_file(_corpus(tmp_path), tmp_path / "items.jsonl")
 
@@ -448,11 +482,13 @@ def test_atomic_comparison_write_can_stage_temporary_file_outside_destination(
         tmp_path / "tracked" / "report.json",
         "{}\n",
         temporary_dir=recovery_dir,
+        temporary_prefix=".report.json.",
     )
 
     assert path.read_text(encoding="utf-8") == "{}\n"
     assert len(sources) == 1
     assert sources[0].parent == recovery_dir
+    assert sources[0].name.startswith(".report.json.")
 
 
 def _comparison_public_metadata_payload() -> dict[str, object]:
