@@ -578,6 +578,39 @@ def _resolve_path_arguments(args: argparse.Namespace) -> None:
         setattr(args, name, getattr(args, name).resolve())
 
 
+def _assert_write_paths_are_safe(args: argparse.Namespace) -> None:
+    """Require repository-local outputs to be ignored before creating them."""
+    repositories = {
+        "candidate": FOLIO_RESOLVE_ROOT.resolve(),
+        "enrich": args.enrich_root,
+        "mapper": args.mapper_root,
+    }
+    for output_name in ("checkpoint_dir", "out"):
+        output_path = getattr(args, output_name)
+        for repository_name, repository_root in repositories.items():
+            try:
+                relative = output_path.relative_to(repository_root)
+            except ValueError:
+                continue
+            completed = subprocess.run(
+                ["git", "check-ignore", "--quiet", "--", relative.as_posix()],
+                cwd=repository_root,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            if completed.returncode == 1:
+                raise PilotCheckpointError(
+                    f"{output_name} must be Git-ignored inside the "
+                    f"{repository_name} repository: {output_path}"
+                )
+            if completed.returncode != 0:
+                raise PilotCheckpointError(
+                    f"could not verify {output_name} ignore status in the "
+                    f"{repository_name} repository"
+                )
+
+
 def _command_path(path: Path) -> str:
     """Render repository inputs stably while retaining absolute external targets."""
     resolved = path.resolve()
@@ -1310,6 +1343,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise PilotCheckpointError("comparison pilot requires PYTHONHASHSEED=0")
     _assert_clean_runtime_environment()
     _resolve_path_arguments(args)
+    _assert_write_paths_are_safe(args)
     corpus = load_corpus(args.corpus_manifest)
     item_ids = _pilot_ids(corpus, args.limit)
     _prepare_incumbents_for_new_checkpoint(args)

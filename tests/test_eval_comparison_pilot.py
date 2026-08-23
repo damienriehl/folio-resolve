@@ -179,6 +179,64 @@ def test_path_arguments_are_resolved_before_child_working_directory_changes(
     assert pilot_module._command_path(args.corpus_manifest) == str(args.corpus_manifest)
 
 
+def test_repository_local_write_paths_must_be_git_ignored(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    candidate = tmp_path / "candidate"
+    mapper = tmp_path / "mapper"
+    enrich = tmp_path / "enrich"
+    for root in (candidate, mapper, enrich):
+        root.mkdir()
+    args = SimpleNamespace(
+        checkpoint_dir=candidate / "eval" / "checkpoint",
+        out=tmp_path / "external-report.json",
+        mapper_root=mapper,
+        enrich_root=enrich,
+    )
+    observed: list[tuple[list[str], Path]] = []
+
+    def check_ignore(command: list[str], **kwargs: object) -> SimpleNamespace:
+        observed.append((command, kwargs["cwd"]))
+        return SimpleNamespace(returncode=1)
+
+    monkeypatch.setattr(pilot_module, "FOLIO_RESOLVE_ROOT", candidate)
+    monkeypatch.setattr(pilot_module.subprocess, "run", check_ignore)
+
+    with pytest.raises(PilotCheckpointError, match="checkpoint_dir must be Git-ignored"):
+        pilot_module._assert_write_paths_are_safe(args)
+
+    assert observed == [
+        (
+            ["git", "check-ignore", "--quiet", "--", "eval/checkpoint"],
+            candidate,
+        )
+    ]
+
+
+def test_ignored_or_external_write_paths_are_allowed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    candidate = tmp_path / "candidate"
+    mapper = tmp_path / "mapper"
+    enrich = tmp_path / "enrich"
+    for root in (candidate, mapper, enrich):
+        root.mkdir()
+    args = SimpleNamespace(
+        checkpoint_dir=candidate / "ignored" / "checkpoint",
+        out=tmp_path / "external" / "report.json",
+        mapper_root=mapper,
+        enrich_root=enrich,
+    )
+    monkeypatch.setattr(pilot_module, "FOLIO_RESOLVE_ROOT", candidate)
+    monkeypatch.setattr(
+        pilot_module.subprocess,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(returncode=0),
+    )
+
+    pilot_module._assert_write_paths_are_safe(args)
+
+
 def test_command_path_preserves_repository_relative_spelling() -> None:
     path = pilot_module.FOLIO_RESOLVE_ROOT / "eval" / "synthetic" / "corpus.json"
 
@@ -972,6 +1030,7 @@ def test_main_revalidates_fingerprint_before_and_after_each_shard(
     fingerprint_calls: list[int] = []
     fingerprint = {"stable": True}
     monkeypatch.setenv("PYTHONHASHSEED", "0")
+    monkeypatch.setattr(pilot_module, "_assert_write_paths_are_safe", lambda _args: None)
     monkeypatch.setattr(pilot_module, "load_corpus", lambda _path: _corpus(tmp_path))
     monkeypatch.setattr(pilot_module, "_prepare_incumbents", lambda *_args: None)
     monkeypatch.setattr(pilot_module, "_durably_create_directory", lambda _path: None)
@@ -1028,6 +1087,7 @@ def test_main_only_marks_shard_complete_after_post_run_fingerprint_passes(
     fingerprint = {"stable": True}
     run_count = 0
     monkeypatch.setenv("PYTHONHASHSEED", "0")
+    monkeypatch.setattr(pilot_module, "_assert_write_paths_are_safe", lambda _args: None)
     monkeypatch.setattr(pilot_module, "load_corpus", lambda _path: _corpus(tmp_path))
     monkeypatch.setattr(pilot_module, "_prepare_incumbents", lambda *_args: None)
 
@@ -1085,6 +1145,7 @@ def test_main_can_initialize_checkpoint_without_starting_an_expensive_shard(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("PYTHONHASHSEED", "0")
+    monkeypatch.setattr(pilot_module, "_assert_write_paths_are_safe", lambda _args: None)
     monkeypatch.setattr(pilot_module, "load_corpus", lambda _path: _corpus(tmp_path))
     monkeypatch.setattr(pilot_module, "_prepare_incumbents", lambda *_args: None)
     monkeypatch.setattr(pilot_module, "_durably_create_directory", lambda _path: None)
