@@ -171,9 +171,12 @@ for distribution in importlib.metadata.distributions():
                 )
             for source_root in sorted(set(source_roots)):
                 for path in sorted(source_root.rglob("*")):
+                    if any(part in excluded_source_parts for part in path.parts):
+                        continue
+                    if path.is_symlink():
+                        raise RuntimeError("symlinked editable source entry is not allowed")
                     if (
                         not path.is_file()
-                        or any(part in excluded_source_parts for part in path.parts)
                         or path.suffix in {".pyc", ".pyo"}
                     ):
                         continue
@@ -643,6 +646,32 @@ def _fingerprint(
     }
 
 
+def _fingerprint_for_args(
+    args: argparse.Namespace, corpus: LoadedCorpus
+) -> dict[str, object]:
+    return _fingerprint(
+        corpus=corpus,
+        config_path=args.config,
+        leak_manifest_path=args.leak_manifest,
+        salt_file_path=args.salt_file,
+        public_metadata_path=args.public_metadata,
+        mapper_root=args.mapper_root,
+        enrich_root=args.enrich_root,
+        limit=args.limit,
+    )
+
+
+def _require_current_fingerprint(
+    args: argparse.Namespace,
+    corpus: LoadedCorpus,
+    expected: Mapping[str, object],
+    *,
+    boundary: str,
+) -> None:
+    if _fingerprint_for_args(args, corpus) != expected:
+        raise PilotCheckpointError(f"pilot inputs drifted {boundary}")
+
+
 def _checkpoint_manifest(
     *, fingerprint: Mapping[str, object], item_ids: Sequence[str]
 ) -> dict[str, object]:
@@ -978,9 +1007,12 @@ def _finalize(
         leak_manifest=leak_manifest,
         salt=salt,
     )
+    final_stages = args.checkpoint_dir / "final-stages"
+    for run in runs:
+        _durably_create_directory(final_stages / run.stack / run.lane)
     snapshot_files = write_stage_snapshots(
         runs,
-        args.checkpoint_dir / "final-stages",
+        final_stages,
         leak_manifest=leak_manifest,
         salt=salt,
     )
@@ -1041,16 +1073,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     _resolve_path_arguments(args)
     corpus = load_corpus(args.corpus_manifest)
     item_ids = _pilot_ids(corpus, args.limit)
-    fingerprint = _fingerprint(
-        corpus=corpus,
-        config_path=args.config,
-        leak_manifest_path=args.leak_manifest,
-        salt_file_path=args.salt_file,
-        public_metadata_path=args.public_metadata,
-        mapper_root=args.mapper_root,
-        enrich_root=args.enrich_root,
-        limit=args.limit,
-    )
+    fingerprint = _fingerprint_for_args(args, corpus)
     manifest = _checkpoint_manifest(fingerprint=fingerprint, item_ids=item_ids)
     _durably_create_directory(args.checkpoint_dir)
     _create_or_validate_manifest(args.checkpoint_dir / "manifest.json", manifest)
@@ -1070,8 +1093,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                 _shard_paths(args.checkpoint_dir, candidate_id)[0].exists()
                 for candidate_id in item_ids
             ) + 1
+            _require_current_fingerprint(
+                args, corpus, fingerprint, boundary=f"before shard {ordinal}"
+            )
             print(f"pilot shard {ordinal}/{len(item_ids)}: starting", flush=True)
             _run_shard(args, item_id, fingerprint)
+            _require_current_fingerprint(
+                args, corpus, fingerprint, boundary=f"after shard {ordinal}"
+            )
             print(f"pilot shard {ordinal}/{len(item_ids)}: complete", flush=True)
             if allowance is not None:
                 allowance -= 1
@@ -1085,7 +1114,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             if completed_after == completed_before:
                 raise PilotCheckpointError("pilot checkpoint made no progress")
             return 0
+    _require_current_fingerprint(args, corpus, fingerprint, boundary="before finalization")
     _finalize(args, corpus, item_ids, manifest)
+    _require_current_fingerprint(args, corpus, fingerprint, boundary="after finalization")
     print(f"pilot report: {args.out}")
     return 0
 

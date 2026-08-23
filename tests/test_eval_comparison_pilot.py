@@ -417,6 +417,45 @@ def test_environment_probe_rejects_symlinked_package_directory(tmp_path: Path) -
     assert "symlinked site-packages entry" in completed.stderr
 
 
+def test_environment_probe_rejects_symlinked_editable_directory(tmp_path: Path) -> None:
+    interpreter, site = _isolated_python_site(tmp_path)
+    project = tmp_path / "project"
+    source_root = project / "src"
+    package = source_root / "demo"
+    external_package = tmp_path / "mutable-package"
+    dist_info = site / "demo-1.0.dist-info"
+    package.mkdir(parents=True)
+    external_package.mkdir()
+    dist_info.mkdir()
+    (external_package / "module.py").write_text("VALUE = 1\n", encoding="utf-8")
+    (package / "linked").symlink_to(external_package, target_is_directory=True)
+    (site / "demo.pth").write_text(f"{source_root}\n", encoding="utf-8")
+    (dist_info / "METADATA").write_text(
+        "Metadata-Version: 2.1\nName: demo\nVersion: 1.0\n", encoding="utf-8"
+    )
+    (dist_info / "direct_url.json").write_text(
+        json.dumps({"url": project.as_uri(), "dir_info": {"editable": True}}),
+        encoding="utf-8",
+    )
+    (dist_info / "RECORD").write_text(
+        "demo.pth,,\n"
+        "demo-1.0.dist-info/METADATA,,\n"
+        "demo-1.0.dist-info/RECORD,,\n"
+        "demo-1.0.dist-info/direct_url.json,,\n",
+        encoding="utf-8",
+    )
+
+    completed = pilot_module.subprocess.run(
+        [interpreter, "-B", "-P", "-c", pilot_module._CONSUMER_ENVIRONMENT_PROBE],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode != 0
+    assert "symlinked editable source entry" in completed.stderr
+
+
 def test_environment_probe_hashes_unowned_site_package_files(tmp_path: Path) -> None:
     interpreter, site = _isolated_python_site(tmp_path)
     module = site / "manually_copied.py"
@@ -678,7 +717,11 @@ def test_finalize_durably_creates_output_parent_before_publish(
     events: list[tuple[str, Path]] = []
 
     monkeypatch.setattr(pilot_module, "_load_shard", lambda *_args: _shard("one"))
-    monkeypatch.setattr(pilot_module, "_merge_stack_runs", lambda _shards: [])
+    monkeypatch.setattr(
+        pilot_module,
+        "_merge_stack_runs",
+        lambda _shards: [SimpleNamespace(stack="folio-mapper", lane="incumbent")],
+    )
     monkeypatch.setattr(pilot_module, "load_manifest", lambda _path: object())
     monkeypatch.setattr(pilot_module, "emit_items_file", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(
@@ -710,7 +753,50 @@ def test_finalize_durably_creates_output_parent_before_publish(
 
     pilot_module._finalize(args, _corpus(tmp_path), ("one",), {"fingerprint": {}})
 
-    assert events == [("directory", output.parent), ("publish", output)]
+    assert events == [
+        ("directory", checkpoint / "final-stages" / "folio-mapper" / "incumbent"),
+        ("directory", output.parent),
+        ("publish", output),
+    ]
+
+
+def test_main_revalidates_fingerprint_before_and_after_each_shard(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    checkpoint = tmp_path / "checkpoint"
+    fingerprint_calls: list[int] = []
+    fingerprint = {"stable": True}
+    monkeypatch.setenv("PYTHONHASHSEED", "0")
+    monkeypatch.setattr(pilot_module, "load_corpus", lambda _path: _corpus(tmp_path))
+    monkeypatch.setattr(pilot_module, "_durably_create_directory", lambda _path: None)
+    monkeypatch.setattr(
+        pilot_module,
+        "_fingerprint",
+        lambda **_kwargs: fingerprint_calls.append(1) or fingerprint,
+    )
+    monkeypatch.setattr(pilot_module, "_create_or_validate_manifest", lambda *_args: None)
+
+    def run_shard(args: SimpleNamespace, item_id: str, _fingerprint: object) -> None:
+        report = pilot_module._shard_paths(args.checkpoint_dir, item_id)[0]
+        report.parent.mkdir(parents=True)
+        report.write_text("{}", encoding="utf-8")
+
+    monkeypatch.setattr(pilot_module, "_run_shard", run_shard)
+
+    assert pilot_module.main([
+        "--corpus-manifest", "corpus.json",
+        "--config", "config.json",
+        "--out", "pilot.json",
+        "--checkpoint-dir", str(checkpoint),
+        "--leak-manifest", "leaks.json",
+        "--salt-file", "salt",
+        "--public-metadata", "public.json",
+        "--mapper-root", "/repos/mapper",
+        "--enrich-root", "/repos/enrich",
+        "--limit", "1",
+        "--max-new-items", "1",
+    ]) == 0
+    assert len(fingerprint_calls) == 3
 
 
 def test_main_can_initialize_checkpoint_without_starting_an_expensive_shard(
