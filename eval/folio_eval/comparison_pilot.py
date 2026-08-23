@@ -116,11 +116,11 @@ if include_system_site:
         for key in ("purelib", "platlib")
         if (path := sysconfig.get_path(key))
     )
-user_site = site.getusersitepackages()
-site_roots.update(
-    Path(path)
-    for path in ([user_site] if isinstance(user_site, str) else user_site)
-)
+    user_site = site.getusersitepackages()
+    site_roots.update(
+        Path(path)
+        for path in ([user_site] if isinstance(user_site, str) else user_site)
+    )
 
 search_paths = [Path(path) for path in sys.path if path]
 for site_root in sorted(site_roots):
@@ -943,6 +943,10 @@ def _prepare_incumbents(mapper_root: Path, enrich_root: Path) -> None:
 
 def _prepare_mapper_index(mapper: Any) -> None:
     """Build the exact CPU-derived mapper cache before sealing the checkpoint."""
+    cache_root = _mapper_cpu_cache_root()
+    if cache_root.is_symlink():
+        raise PilotCheckpointError("symlinked mapper embedding-cache root is not allowed")
+    _durably_create_directory(cache_root)
     code = """
 from app.models.embedding_models import EmbeddingConfig
 from app.services.embedding.service import build_embedding_index, get_embedding_index
@@ -968,7 +972,7 @@ if get_embedding_index() is None:
 
 
 def _mapper_cpu_cache_paths() -> tuple[Path, ...]:
-    root = Path.home() / ".folio" / "cache" / "embeddings"
+    root = _mapper_cpu_cache_root()
     if root.is_symlink():
         raise PilotCheckpointError("symlinked mapper embedding-cache root is not allowed")
     paths = tuple(sorted(root.glob("all-MiniLM-L6-v2_cpu_*.pkl")))
@@ -977,6 +981,10 @@ def _mapper_cpu_cache_paths() -> tuple[Path, ...]:
     if any(path.is_symlink() or not path.is_file() for path in paths):
         raise PilotCheckpointError("symlinked mapper embedding-cache entry is not allowed")
     return paths
+
+
+def _mapper_cpu_cache_root() -> Path:
+    return Path.home() / ".folio" / "cache" / "embeddings"
 
 
 def _prepare_incumbents_for_new_checkpoint(args: argparse.Namespace) -> None:

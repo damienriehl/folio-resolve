@@ -577,6 +577,32 @@ def test_environment_probe_discovers_self_hiding_sitecustomize_before_execution(
     assert not marker.exists(), "the pristine discovery process must not execute the hook"
 
 
+def test_environment_probe_ignores_disabled_venv_user_site(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    interpreter, _site = _isolated_python_site(tmp_path)
+    fake_home = tmp_path / "home"
+    user_site = (
+        fake_home
+        / ".local"
+        / "lib"
+        / f"python{pilot_module.sys.version_info.major}.{pilot_module.sys.version_info.minor}"
+        / "site-packages"
+    )
+    marker = tmp_path / "user-startup-ran"
+    user_site.mkdir(parents=True)
+    (user_site / "usercustomize.py").write_text(
+        f"from pathlib import Path\nPath({str(marker)!r}).touch()\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HOME", str(fake_home))
+
+    payload = _consumer_environment_fingerprint(interpreter)
+
+    assert payload["schema_version"] == 1
+    assert not marker.exists()
+
+
 def test_environment_probe_rejects_unowned_executable_pth(tmp_path: Path) -> None:
     interpreter, site = _isolated_python_site(tmp_path)
     (site / "unowned.pth").write_text("import sys; sys.audit('unowned-hook')\n", encoding="utf-8")
@@ -806,6 +832,7 @@ def test_mapper_index_preparation_forces_cpu_and_offline_runtime(
     cache_path = tmp_path / "all-MiniLM-L6-v2_cpu_ontology.pkl"
     cache_path.write_bytes(b"cache")
     synced: list[Path] = []
+    created: list[Path] = []
 
     def run(command: list[str], **kwargs: object) -> SimpleNamespace:
         observed["command"] = command
@@ -813,7 +840,13 @@ def test_mapper_index_preparation_forces_cpu_and_offline_runtime(
         return SimpleNamespace(returncode=0)
 
     monkeypatch.setattr(pilot_module.subprocess, "run", run)
+    monkeypatch.setattr(
+        pilot_module,
+        "_mapper_cpu_cache_root",
+        lambda: tmp_path / ".folio" / "cache" / "embeddings",
+    )
     monkeypatch.setattr(pilot_module, "_mapper_cpu_cache_paths", lambda: (cache_path,))
+    monkeypatch.setattr(pilot_module, "_durably_create_directory", created.append)
     monkeypatch.setattr(pilot_module, "_durably_sync_file", synced.append)
     pilot_module._prepare_mapper_index(mapper)
 
@@ -821,6 +854,7 @@ def test_mapper_index_preparation_forces_cpu_and_offline_runtime(
     assert 'EmbeddingConfig(device="cpu")' in command[-1]
     assert observed["cwd"] == str(mapper.repo_root / "backend")
     assert observed["env"]["HF_HUB_OFFLINE"] == "1"
+    assert created == [tmp_path / ".folio" / "cache" / "embeddings"]
     assert synced == [cache_path]
 
 
