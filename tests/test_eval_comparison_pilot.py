@@ -185,6 +185,9 @@ def test_consumer_environment_fingerprint_uses_probe_digests(
         "installed_file_count": 50,
         "installed_file_bytes": 1_000,
         "installed_files_sha256": "e" * 64,
+        "site_file_count": 60,
+        "site_file_bytes": 1_200,
+        "site_files_sha256": "3" * 64,
         "editable_source_files": 7,
         "editable_source_bytes": 700,
         "editable_sources_sha256": "f" * 64,
@@ -212,7 +215,7 @@ def test_consumer_environment_fingerprint_uses_probe_digests(
         **payload,
         "venv_path_sha256": venv_path_sha256,
     }
-    assert observed[0][:3] == [str(interpreter), "-P", "-c"]
+    assert observed[0][:4] == [str(interpreter), "-B", "-P", "-c"]
 
     payload["model_assets_complete"] = False
     with pytest.raises(PilotCheckpointError, match="load completely offline"):
@@ -249,6 +252,7 @@ def test_environment_probe_hashes_editable_source_bytes(tmp_path: Path) -> None:
         completed = pilot_module.subprocess.run(
             [
                 interpreter,
+                "-B",
                 "-P",
                 "-c",
                 pilot_module._CONSUMER_ENVIRONMENT_PROBE,
@@ -286,7 +290,7 @@ def test_environment_probe_rejects_unowned_pth_import_root(tmp_path: Path) -> No
         encoding="utf-8",
     )
     completed = pilot_module.subprocess.run(
-        [interpreter, "-P", "-c", pilot_module._CONSUMER_ENVIRONMENT_PROBE],
+        [interpreter, "-B", "-P", "-c", pilot_module._CONSUMER_ENVIRONMENT_PROBE],
         check=False,
         capture_output=True,
         text=True,
@@ -319,7 +323,7 @@ def test_environment_probe_rejects_executable_pth_path_injection(tmp_path: Path)
     )
 
     completed = pilot_module.subprocess.run(
-        [interpreter, "-P", "-c", pilot_module._CONSUMER_ENVIRONMENT_PROBE],
+        [interpreter, "-B", "-P", "-c", pilot_module._CONSUMER_ENVIRONMENT_PROBE],
         check=False,
         capture_output=True,
         text=True,
@@ -327,6 +331,28 @@ def test_environment_probe_rejects_executable_pth_path_injection(tmp_path: Path)
 
     assert completed.returncode != 0
     assert "unowned effective import root" in completed.stderr
+
+
+def test_environment_probe_hashes_unowned_site_package_files(tmp_path: Path) -> None:
+    interpreter, site = _isolated_python_site(tmp_path)
+    module = site / "manually_copied.py"
+    module.write_text("VALUE = 1\n", encoding="utf-8")
+
+    def probe() -> dict[str, object]:
+        completed = pilot_module.subprocess.run(
+            [interpreter, "-B", "-P", "-c", pilot_module._CONSUMER_ENVIRONMENT_PROBE],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return json.loads(completed.stdout)
+
+    before = probe()
+    module.write_text("VALUE = 2\n", encoding="utf-8")
+    after = probe()
+
+    assert before["site_file_count"] == after["site_file_count"]
+    assert before["site_files_sha256"] != after["site_files_sha256"]
 
 
 def test_fingerprint_prepares_both_incumbents_before_probing(
@@ -527,6 +553,8 @@ def test_run_shard_uses_one_explicit_item_and_suppresses_large_stdout(
     assert observed["stdout"] is pilot_module.subprocess.DEVNULL
     assert observed["cwd"] == pilot_module.FOLIO_RESOLVE_ROOT
     assert "PYTHONPATH" not in observed["env"]
+    assert observed["env"]["HF_HUB_OFFLINE"] == "1"
+    assert observed["env"]["TRANSFORMERS_OFFLINE"] == "1"
     assert events == ["directory:stages", "durable", "loaded"]
 
 

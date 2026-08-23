@@ -200,6 +200,25 @@ site_roots = {
     for key in ("purelib", "platlib")
     if (path := sysconfig.get_path(key))
 }
+site_entries = []
+for site_root in sorted(site_roots):
+    if not site_root.is_dir():
+        continue
+    for path in sorted(site_root.rglob("*")):
+        if not path.is_file():
+            continue
+        resolved = path.resolve()
+        cache_key = str(resolved)
+        if cache_key not in resolved_digests:
+            resolved_digests[cache_key] = digest_file(resolved)
+        site_entries.append([
+            site_root.name,
+            path.relative_to(site_root).as_posix(),
+            resolved_digests[cache_key],
+            resolved.stat().st_size,
+        ])
+site_entries.sort()
+site_payload = json.dumps(site_entries, ensure_ascii=True, separators=(",", ":")).encode()
 stdlib_zips = {
     root.parent / f"python{sys.version_info.major}{sys.version_info.minor}.zip"
     for root in stdlib_roots
@@ -299,6 +318,9 @@ print(json.dumps({
     "installed_file_count": len(installed_entries),
     "installed_file_bytes": sum(entry[3] for entry in installed_entries),
     "installed_files_sha256": digest_bytes(installed_payload),
+    "site_file_count": len(site_entries),
+    "site_file_bytes": sum(entry[3] for entry in site_entries),
+    "site_files_sha256": digest_bytes(site_payload),
     "editable_source_files": len(editable_entries),
     "editable_source_bytes": sum(entry[3] for entry in editable_entries),
     "editable_sources_sha256": digest_bytes(editable_payload),
@@ -324,6 +346,20 @@ def _runtime_environment() -> dict[str, str]:
     environment = dict(os.environ)
     environment.pop("PYTHONPATH", None)
     environment.pop("PYTHONHOME", None)
+    return environment
+
+
+def _offline_runtime_environment() -> dict[str, str]:
+    """Return a deterministic child environment that cannot mutate model or bytecode caches."""
+    environment = _runtime_environment()
+    environment.update(
+        {
+            "HF_HUB_DISABLE_TELEMETRY": "1",
+            "HF_HUB_OFFLINE": "1",
+            "PYTHONDONTWRITEBYTECODE": "1",
+            "TRANSFORMERS_OFFLINE": "1",
+        }
+    )
     return environment
 
 
@@ -364,19 +400,12 @@ def _consumer_environment_fingerprint(
     venv_python: Path, *, require_model_assets: bool = False
 ) -> dict[str, object]:
     """Hash the actual consumer interpreter, distributions, and cached embedding model."""
-    environment = _runtime_environment()
+    environment = _offline_runtime_environment()
     if require_model_assets:
-        environment.update(
-            {
-                "FOLIO_PROBE_REQUIRE_MODEL_ASSETS": "1",
-                "HF_HUB_DISABLE_TELEMETRY": "1",
-                "HF_HUB_OFFLINE": "1",
-                "TRANSFORMERS_OFFLINE": "1",
-            }
-        )
+        environment["FOLIO_PROBE_REQUIRE_MODEL_ASSETS"] = "1"
     try:
         completed = subprocess.run(
-            [str(venv_python), "-P", "-c", _CONSUMER_ENVIRONMENT_PROBE],
+            [str(venv_python), "-B", "-P", "-c", _CONSUMER_ENVIRONMENT_PROBE],
             capture_output=True,
             env=environment,
             text=True,
@@ -397,6 +426,7 @@ def _consumer_environment_fingerprint(
         "interpreter_sha256",
         "distributions_sha256",
         "installed_files_sha256",
+        "site_files_sha256",
         "editable_sources_sha256",
         "import_path_sha256",
         "model_assets_sha256",
@@ -417,6 +447,8 @@ def _consumer_environment_fingerprint(
         "distribution_count",
         "installed_file_count",
         "installed_file_bytes",
+        "site_file_count",
+        "site_file_bytes",
         "editable_source_files",
         "editable_source_bytes",
         "import_path_entries",
@@ -694,7 +726,7 @@ def _run_shard(
         command,
         cwd=FOLIO_RESOLVE_ROOT,
         check=False,
-        env=_runtime_environment(),
+        env=_offline_runtime_environment(),
         stdout=subprocess.DEVNULL,
     )
     if completed.returncode:
