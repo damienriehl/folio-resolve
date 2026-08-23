@@ -118,8 +118,18 @@ def test_mutable_python_import_overrides_are_rejected_and_sanitized(
 ) -> None:
     monkeypatch.setenv("PYTHONPATH", "/mutable/source")
     with pytest.raises(PilotCheckpointError, match="PYTHONPATH"):
-        pilot_module._assert_clean_import_environment()
+        pilot_module._assert_clean_runtime_environment()
     assert "PYTHONPATH" not in pilot_module._runtime_environment()
+
+
+def test_native_runtime_overrides_are_rejected_and_sanitized(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LD_PRELOAD", "/mutable/liboverride.so")
+
+    with pytest.raises(PilotCheckpointError, match="LD_PRELOAD"):
+        pilot_module._assert_clean_runtime_environment()
+    assert "LD_PRELOAD" not in pilot_module._runtime_environment()
 
 
 def test_path_arguments_are_resolved_before_child_working_directory_changes(
@@ -557,6 +567,29 @@ def test_incumbents_are_prepared_once_before_read_only_fingerprinting(
     assert fingerprint["incumbent_version"] == "0.4.0"
     assert fingerprint["ontology_cache_sha256"] == "ontology"
     assert fingerprint["salt_file_sha256"] == "a" * 64
+
+
+def test_existing_checkpoint_skips_incumbent_preparation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    checkpoint = tmp_path / "checkpoint"
+    checkpoint.mkdir()
+    (checkpoint / "manifest.json").write_text("{}\n", encoding="utf-8")
+    prepared: list[tuple[Path, Path]] = []
+    monkeypatch.setattr(
+        pilot_module,
+        "_prepare_incumbents",
+        lambda mapper, enrich: prepared.append((mapper, enrich)),
+    )
+    args = SimpleNamespace(
+        checkpoint_dir=checkpoint,
+        mapper_root=tmp_path / "mapper",
+        enrich_root=tmp_path / "enrich",
+    )
+
+    pilot_module._prepare_incumbents_for_new_checkpoint(args)
+
+    assert prepared == []
 
 
 def test_environment_probe_ignores_inactive_base_package_trees(tmp_path: Path) -> None:

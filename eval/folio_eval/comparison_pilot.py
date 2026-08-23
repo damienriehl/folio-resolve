@@ -56,6 +56,22 @@ _OFFLINE_RUNTIME_OVERRIDES = {
     "TRANSFORMERS_OFFLINE": "1",
     "VECLIB_MAXIMUM_THREADS": "1",
 }
+_MUTABLE_RUNTIME_OVERRIDE_KEYS = (
+    "DYLD_FALLBACK_LIBRARY_PATH",
+    "DYLD_INSERT_LIBRARIES",
+    "DYLD_LIBRARY_PATH",
+    "GOMP_CPU_AFFINITY",
+    "KMP_AFFINITY",
+    "LD_LIBRARY_PATH",
+    "LD_PRELOAD",
+    "MKL_CBWR",
+    "MKL_DEBUG_CPU_TYPE",
+    "OMP_PLACES",
+    "OMP_PROC_BIND",
+    "OPENBLAS_CORETYPE",
+    "PYTHONHOME",
+    "PYTHONPATH",
+)
 
 _CONSUMER_ENVIRONMENT_PROBE = r"""
 import hashlib
@@ -475,10 +491,10 @@ class PilotCheckpointError(RuntimeError):
 
 
 def _runtime_environment() -> dict[str, str]:
-    """Return the inherited environment without mutable Python import overrides."""
+    """Return the inherited environment without mutable runtime overrides."""
     environment = dict(os.environ)
-    environment.pop("PYTHONPATH", None)
-    environment.pop("PYTHONHOME", None)
+    for key in _MUTABLE_RUNTIME_OVERRIDE_KEYS:
+        environment.pop(key, None)
     return environment
 
 
@@ -489,11 +505,11 @@ def _offline_runtime_environment() -> dict[str, str]:
     return environment
 
 
-def _assert_clean_import_environment() -> None:
-    overrides = [key for key in ("PYTHONPATH", "PYTHONHOME") if os.environ.get(key)]
+def _assert_clean_runtime_environment() -> None:
+    overrides = [key for key in _MUTABLE_RUNTIME_OVERRIDE_KEYS if os.environ.get(key)]
     if overrides:
         raise PilotCheckpointError(
-            "comparison pilot refuses mutable Python import overrides: "
+            "comparison pilot refuses mutable runtime overrides: "
             + ", ".join(overrides)
         )
 
@@ -662,6 +678,12 @@ def _prepare_incumbents(mapper_root: Path, enrich_root: Path) -> None:
     """Perform the one permitted consumer-environment mutation before fingerprinting."""
     for consumer in (mapper_spec(mapper_root), enrich_spec(enrich_root)):
         prepare_incumbent(consumer, INCUMBENT_VERSION)
+
+
+def _prepare_incumbents_for_new_checkpoint(args: argparse.Namespace) -> None:
+    """Mutate consumer environments only before a checkpoint manifest exists."""
+    if not (args.checkpoint_dir / "manifest.json").exists():
+        _prepare_incumbents(args.mapper_root, args.enrich_root)
 
 
 def _fingerprint(
@@ -1134,11 +1156,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     if os.environ.get("PYTHONHASHSEED") != "0":
         raise PilotCheckpointError("comparison pilot requires PYTHONHASHSEED=0")
-    _assert_clean_import_environment()
+    _assert_clean_runtime_environment()
     _resolve_path_arguments(args)
     corpus = load_corpus(args.corpus_manifest)
     item_ids = _pilot_ids(corpus, args.limit)
-    _prepare_incumbents(args.mapper_root, args.enrich_root)
+    _prepare_incumbents_for_new_checkpoint(args)
     fingerprint = _fingerprint_for_args(args, corpus)
     manifest = _checkpoint_manifest(fingerprint=fingerprint, item_ids=item_ids)
     _durably_create_directory(args.checkpoint_dir)
