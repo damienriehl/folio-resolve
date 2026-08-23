@@ -182,3 +182,31 @@ def test_run_shard_uses_one_explicit_item_and_suppresses_large_stdout(
     assert command[command.index("--item-id") + 1] == "one"
     assert observed["stdout"] is pilot_module.subprocess.DEVNULL
     assert observed["cwd"] == pilot_module.FOLIO_RESOLVE_ROOT
+
+
+def test_main_can_initialize_checkpoint_without_starting_an_expensive_shard(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("PYTHONHASHSEED", "0")
+    monkeypatch.setattr(pilot_module, "load_corpus", lambda _path: _corpus(tmp_path))
+    monkeypatch.setattr(pilot_module, "_fingerprint", lambda **_kwargs: {})
+    monkeypatch.setattr(pilot_module, "_create_or_validate_manifest", lambda *_args: None)
+    monkeypatch.setattr(
+        pilot_module,
+        "_run_shard",
+        lambda *_args: (_ for _ in ()).throw(AssertionError("must not run a shard")),
+    )
+
+    assert pilot_module.main([
+        "--corpus-manifest", "corpus.json",
+        "--config", "config.json",
+        "--out", "pilot.json",
+        "--checkpoint-dir", str(tmp_path / "checkpoint"),
+        "--leak-manifest", "leaks.json",
+        "--salt-file", "salt",
+        "--public-metadata", "public.json",
+        "--mapper-root", "/repos/mapper",
+        "--enrich-root", "/repos/enrich",
+        "--limit", "1",
+        "--max-new-items", "0",
+    ]) == 0
