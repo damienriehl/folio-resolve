@@ -431,6 +431,30 @@ def test_atomic_comparison_write_is_durable_before_and_after_publish(
     assert events == ["fsync", "replace", "fsync"]
 
 
+def test_atomic_comparison_write_can_stage_temporary_file_outside_destination(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    recovery_dir = tmp_path / "ignored-recovery"
+    sources: list[Path] = []
+    real_replace = comparison_module.os.replace
+
+    def tracked_replace(source: str, destination: Path) -> None:
+        sources.append(Path(source))
+        real_replace(source, destination)
+
+    monkeypatch.setattr(comparison_module.os, "replace", tracked_replace)
+
+    path = comparison_module._atomic_write_text(
+        tmp_path / "tracked" / "report.json",
+        "{}\n",
+        temporary_dir=recovery_dir,
+    )
+
+    assert path.read_text(encoding="utf-8") == "{}\n"
+    assert len(sources) == 1
+    assert sources[0].parent == recovery_dir
+
+
 def _comparison_public_metadata_payload() -> dict[str, object]:
     argv = ["safe"] * 15
     argv[2] = "run_synthetic_comparison"

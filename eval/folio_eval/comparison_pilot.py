@@ -1710,13 +1710,16 @@ def _finalize(
     _require_current_fingerprint(
         args, corpus, fingerprint, boundary="before final report publication"
     )
+    publication_temporary_dir = args.checkpoint_dir / "publication"
     _durably_create_directory(args.out.parent)
+    _durably_create_directory(publication_temporary_dir)
     write_comparison(
         args.out,
         payload,
         leak_manifest,
         salt,
         public_metadata=public_metadata,
+        temporary_dir=publication_temporary_dir,
     )
 
 

@@ -1333,8 +1333,9 @@ def test_finalize_durably_creates_output_parent_before_publish(
         events.append(("directory", path))
         path.mkdir(parents=True)
 
-    def publish(path: Path, *_args: object, **_kwargs: object) -> None:
+    def publish(path: Path, *_args: object, **kwargs: object) -> None:
         assert path.parent.is_dir()
+        assert kwargs["temporary_dir"] == checkpoint / "publication"
         events.append(("publish", path))
 
     monkeypatch.setattr(pilot_module, "_durably_create_directory", durable_create)
@@ -1346,6 +1347,7 @@ def test_finalize_durably_creates_output_parent_before_publish(
         ("directory", checkpoint / "final-stages" / "folio-mapper" / "incumbent"),
         ("fingerprint", "before final report publication"),
         ("directory", output.parent),
+        ("directory", checkpoint / "publication"),
         ("publish", output),
     ]
 

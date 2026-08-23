@@ -216,9 +216,13 @@ class StackRun:
         return f"{self.stack}:{self.lane}"
 
 
-def _atomic_write_text(path: Path, text: str) -> Path:
+def _atomic_write_text(
+    path: Path, text: str, *, temporary_dir: Path | None = None
+) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_name = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
+    temp_parent = path.parent if temporary_dir is None else temporary_dir
+    temp_parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(dir=temp_parent, suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             handle.write(text)
@@ -1163,6 +1167,7 @@ def write_comparison(
     salt: bytes,
     *,
     public_metadata: PublicComparisonMetadata | None = None,
+    temporary_dir: Path | None = None,
 ) -> Path:
     """Leak-check every string in the artifact, then atomically write canonical JSON."""
     preflight_comparison_publication(
@@ -1172,7 +1177,7 @@ def write_comparison(
         public_metadata=public_metadata,
     )
     text = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
-    return _atomic_write_text(path, text)
+    return _atomic_write_text(path, text, temporary_dir=temporary_dir)
 
 
 def write_stage_snapshots(
