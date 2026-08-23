@@ -1251,6 +1251,8 @@ def _fingerprint(
             FOLIO_RESOLVE_ROOT, allowed_untracked_paths=allowed_candidate_outputs
         ),
         "corpus_content_sha256": corpus.manifest.content_sha256,
+        "corpus_manifest_sha256": _sha256_file(corpus.manifest.manifest_path),
+        "corpus_version": corpus.manifest.version,
         "enrich_environment": enrich_environment,
         "enrich_ignored_bytecode": enrich_ignored_bytecode,
         "enrich_lock_sha256": _sha256_file(enrich.repo_root / "backend" / "uv.lock"),
@@ -1380,6 +1382,7 @@ def _load_shard(
         if not isinstance(candidate_versions, dict):
             raise PilotCheckpointError(f"pilot shard versions are malformed: {path}")
         checks = {
+            "corpus version": (corpus.get("version"), fingerprint["corpus_version"]),
             "corpus content": (corpus.get("content_sha256"), fingerprint["corpus_content_sha256"]),
             "nomatch content": (
                 corpus.get("nomatch_content_sha256"),

@@ -957,6 +957,8 @@ def test_incumbents_are_prepared_once_before_read_only_fingerprinting(
         f"probe:{enrich.venv_python}",
     ]
     assert fingerprint["incumbent_version"] == "0.4.0"
+    assert fingerprint["corpus_manifest_sha256"] == "a" * 64
+    assert fingerprint["corpus_version"] == 1
     assert fingerprint["ontology_cache_sha256"] == "ontology"
     assert fingerprint["salt_file_sha256"] == "a" * 64
 
@@ -1150,11 +1152,16 @@ def test_load_shard_rejects_item_or_stack_drift(tmp_path: Path) -> None:
 def test_load_shard_is_bound_to_checkpoint_fingerprint(tmp_path: Path) -> None:
     path = tmp_path / "report.json"
     payload = _shard("one")
-    payload["corpus"] = {"content_sha256": "corpus", "nomatch_content_sha256": "nomatch"}
+    payload["corpus"] = {
+        "version": 1,
+        "content_sha256": "corpus",
+        "nomatch_content_sha256": "nomatch",
+    }
     payload["folio_python_version"] = "0.3.6"
     payload["provenance"]["config_selection"] = {"answer_rule_config_sha256": "config"}
     fingerprint = {
         "corpus_content_sha256": "corpus",
+        "corpus_version": 1,
         "nomatch_content_sha256": "nomatch",
         "answer_rule_config_sha256": "config",
         "folio_python_version": "0.3.6",
@@ -1166,6 +1173,12 @@ def test_load_shard_is_bound_to_checkpoint_fingerprint(tmp_path: Path) -> None:
     path.write_text(json.dumps(payload), encoding="utf-8")
 
     assert _load_shard(path, "one", fingerprint)["run_kind"] == "shard"
+    payload["corpus"]["version"] = 2
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(PilotCheckpointError, match="corpus version"):
+        _load_shard(path, "one", fingerprint)
+    payload["corpus"]["version"] = 1
+    path.write_text(json.dumps(payload), encoding="utf-8")
     fingerprint["answer_rule_config_sha256"] = "changed"
     with pytest.raises(PilotCheckpointError, match="answer-rule config"):
         _load_shard(path, "one", fingerprint)
