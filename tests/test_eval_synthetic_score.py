@@ -262,6 +262,16 @@ def test_depth_probe_has_monotone_counts_and_metrics() -> None:
         assert 0.0 <= row["mean_raw_candidate_recall_at_k"] <= 1.0
 
 
+def test_depth_probe_defaults_span_the_commit_window() -> None:
+    config = AnswerRuleConfig(threshold=0.0, top_k=6)
+    result = score_corpus(_corpus(config), _ontology(), config)
+
+    probe = depth_probe(result.run, config)
+
+    assert tuple(probe) == ("1", "3", "6")
+    assert all(row["depth"] <= config.top_k for row in probe.values())
+
+
 def test_depth_probe_rejects_config_mismatch_and_unretained_depth() -> None:
     config = AnswerRuleConfig(threshold=0.0, top_k=5)
     result = score_corpus(_corpus(config), _ontology(), config)
