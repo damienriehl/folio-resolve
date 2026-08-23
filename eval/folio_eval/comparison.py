@@ -999,13 +999,29 @@ def _comparison_value_and_resolved_path(
             value = value[index]
             resolved.append(str(index))
         elif isinstance(value, (list, tuple)) and part.startswith("--"):
-            matches = [index for index, item in enumerate(value) if item == part]
-            if len(matches) != 1 or matches[0] + 1 >= len(value):
+            separate_matches = [index for index, item in enumerate(value) if item == part]
+            equals_prefix = f"{part}="
+            equals_matches = [
+                index
+                for index, item in enumerate(value)
+                if isinstance(item, str) and item.startswith(equals_prefix)
+            ]
+            if len(separate_matches) + len(equals_matches) != 1:
                 raise ComparisonError(
                     f"comparison public metadata option is missing or duplicated: {part}"
                 )
-            index = matches[0] + 1
-            value = value[index]
+            if separate_matches:
+                index = separate_matches[0] + 1
+                if index >= len(value):
+                    raise ComparisonError(
+                        f"comparison public metadata option is missing or duplicated: {part}"
+                    )
+                value = value[index]
+            else:
+                index = equals_matches[0]
+                option_token = value[index]
+                assert isinstance(option_token, str)
+                value = option_token.removeprefix(equals_prefix)
             resolved.append(str(index))
         else:
             raise ComparisonError(f"comparison public metadata path missing: {path!r}")
@@ -1053,7 +1069,12 @@ def preflight_comparison_publication(
             actual, resolved_path = _comparison_value_and_resolved_path(payload, path)
             if actual != expected:
                 raise ComparisonError(f"comparison public metadata value mismatch at path: {path!r}")
-            public_fields[resolved_path] = expected
+            resolved_value = _comparison_value_at_path(payload, resolved_path)
+            if not isinstance(resolved_value, str):
+                raise ComparisonError(
+                    f"comparison public metadata value is not a string at path: {path!r}"
+                )
+            public_fields[resolved_path] = resolved_value
 
     def collisions(value: object, path: tuple[str, ...] = ()) -> int:
         if isinstance(value, str):

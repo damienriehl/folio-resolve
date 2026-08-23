@@ -481,6 +481,19 @@ def test_versioned_public_metadata_exempts_only_exact_comparison_paths() -> None
     ]
     preflight_comparison_publication(reordered, manifest, salt, public_metadata=metadata)
 
+    equals_form = deepcopy(payload)
+    equals_form["provenance"]["comparison_invocation"]["argv"] = [
+        "python",
+        "eval/run_downstream.py",
+        "run_synthetic_comparison",
+        "--corpus-manifest=eval/synthetic/corpus_v1.manifest.json",
+        "--config=eval/synthetic/answer_rule_config_synthetic_v1.json",
+        "--leak-manifest=eval/synthetic/firm-surface-manifest-v1.json",
+        "--limit",
+        "1",
+    ]
+    preflight_comparison_publication(equals_form, manifest, salt, public_metadata=metadata)
+
     duplicate_option = deepcopy(reordered)
     duplicate_option["provenance"]["comparison_invocation"]["argv"].extend(
         ["--config", "eval/synthetic/answer_rule_config_synthetic_v1.json"]
@@ -488,6 +501,15 @@ def test_versioned_public_metadata_exempts_only_exact_comparison_paths() -> None
     with pytest.raises(ComparisonError, match="missing or duplicated"):
         preflight_comparison_publication(
             duplicate_option, manifest, salt, public_metadata=metadata
+        )
+
+    mixed_duplicate_option = deepcopy(equals_form)
+    mixed_duplicate_option["provenance"]["comparison_invocation"]["argv"].extend(
+        ["--config", "eval/synthetic/answer_rule_config_synthetic_v1.json"]
+    )
+    with pytest.raises(ComparisonError, match="missing or duplicated"):
+        preflight_comparison_publication(
+            mixed_duplicate_option, manifest, salt, public_metadata=metadata
         )
 
     mapper_only = deepcopy(payload)
