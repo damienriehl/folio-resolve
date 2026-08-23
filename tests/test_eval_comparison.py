@@ -381,8 +381,11 @@ def test_write_comparison_leakchecks_every_string(tmp_path: Path) -> None:
 def _comparison_public_metadata_payload() -> dict[str, object]:
     argv = ["safe"] * 15
     argv[2] = "run_synthetic_comparison"
+    argv[3] = "--corpus-manifest"
     argv[4] = "eval/synthetic/corpus_v1.manifest.json"
+    argv[5] = "--config"
     argv[6] = "eval/synthetic/answer_rule_config_synthetic_v1.json"
+    argv[13] = "--leak-manifest"
     argv[14] = "eval/synthetic/firm-surface-manifest-v1.json"
     rationale = "synthetic lane v1: top_k sized to corpus gold density (uncalibrated)"
     return {
@@ -432,6 +435,31 @@ def test_versioned_public_metadata_exempts_only_exact_comparison_paths() -> None
     metadata = load_public_comparison_metadata(DEFAULT_COMPARISON_PUBLIC_METADATA_PATH)
 
     preflight_comparison_publication(payload, manifest, salt, public_metadata=metadata)
+
+    reordered = deepcopy(payload)
+    reordered["provenance"]["comparison_invocation"]["argv"] = [
+        "python",
+        "eval/run_downstream.py",
+        "run_synthetic_comparison",
+        "--limit",
+        "1",
+        "--leak-manifest",
+        "eval/synthetic/firm-surface-manifest-v1.json",
+        "--config",
+        "eval/synthetic/answer_rule_config_synthetic_v1.json",
+        "--corpus-manifest",
+        "eval/synthetic/corpus_v1.manifest.json",
+    ]
+    preflight_comparison_publication(reordered, manifest, salt, public_metadata=metadata)
+
+    duplicate_option = deepcopy(reordered)
+    duplicate_option["provenance"]["comparison_invocation"]["argv"].extend(
+        ["--config", "eval/synthetic/answer_rule_config_synthetic_v1.json"]
+    )
+    with pytest.raises(ComparisonError, match="missing or duplicated"):
+        preflight_comparison_publication(
+            duplicate_option, manifest, salt, public_metadata=metadata
+        )
 
     mapper_only = deepcopy(payload)
     del mapper_only["stacks"]["folio-enrich:incumbent"]

@@ -109,9 +109,9 @@ COMPARISON_PUBLIC_METADATA_PATHS = frozenset(
     {
         ("kind",),
         ("provenance", "comparison_invocation", "argv", "2"),
-        ("provenance", "comparison_invocation", "argv", "4"),
-        ("provenance", "comparison_invocation", "argv", "6"),
-        ("provenance", "comparison_invocation", "argv", "14"),
+        ("provenance", "comparison_invocation", "argv", "--corpus-manifest"),
+        ("provenance", "comparison_invocation", "argv", "--config"),
+        ("provenance", "comparison_invocation", "argv", "--leak-manifest"),
         ("provenance", "config_selection", "answer_rule_config", "rationale"),
         ("stacks", "folio-enrich:incumbent", "invocation", "argv", "1"),
         ("stacks", "folio-mapper:incumbent", "invocation", "argv", "1"),
@@ -933,18 +933,37 @@ def build_comparison(
     }
 
 
-def _comparison_value_at_path(
+def _comparison_value_and_resolved_path(
     payload: Mapping[str, object], path: tuple[str, ...]
-) -> object:
+) -> tuple[object, tuple[str, ...]]:
     value: object = payload
+    resolved: list[str] = []
     for part in path:
         if isinstance(value, Mapping) and part in value:
             value = value[part]
+            resolved.append(part)
         elif isinstance(value, (list, tuple)) and part.isdigit() and int(part) < len(value):
-            value = value[int(part)]
+            index = int(part)
+            value = value[index]
+            resolved.append(str(index))
+        elif isinstance(value, (list, tuple)) and part.startswith("--"):
+            matches = [index for index, item in enumerate(value) if item == part]
+            if len(matches) != 1 or matches[0] + 1 >= len(value):
+                raise ComparisonError(
+                    f"comparison public metadata option is missing or duplicated: {part}"
+                )
+            index = matches[0] + 1
+            value = value[index]
+            resolved.append(str(index))
         else:
             raise ComparisonError(f"comparison public metadata path missing: {path!r}")
-    return value
+    return value, tuple(resolved)
+
+
+def _comparison_value_at_path(
+    payload: Mapping[str, object], path: tuple[str, ...]
+) -> object:
+    return _comparison_value_and_resolved_path(payload, path)[0]
 
 
 def preflight_comparison_publication(
@@ -979,10 +998,10 @@ def preflight_comparison_publication(
                 if not isinstance(working_directory, str):
                     raise ComparisonError("comparison invocation working directory is not a string")
                 expected = expected.format(working_directory=working_directory.rstrip("/"))
-            actual = _comparison_value_at_path(payload, path)
+            actual, resolved_path = _comparison_value_and_resolved_path(payload, path)
             if actual != expected:
                 raise ComparisonError(f"comparison public metadata value mismatch at path: {path!r}")
-            public_fields[path] = expected
+            public_fields[resolved_path] = expected
 
     def collisions(value: object, path: tuple[str, ...] = ()) -> int:
         if isinstance(value, str):

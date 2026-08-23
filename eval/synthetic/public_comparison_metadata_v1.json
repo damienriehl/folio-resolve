@@ -10,15 +10,15 @@
       "value": "run_synthetic_comparison"
     },
     {
-      "path": ["provenance", "comparison_invocation", "argv", "4"],
+      "path": ["provenance", "comparison_invocation", "argv", "--corpus-manifest"],
       "value": "eval/synthetic/corpus_v1.manifest.json"
     },
     {
-      "path": ["provenance", "comparison_invocation", "argv", "6"],
+      "path": ["provenance", "comparison_invocation", "argv", "--config"],
       "value": "eval/synthetic/answer_rule_config_synthetic_v1.json"
     },
     {
-      "path": ["provenance", "comparison_invocation", "argv", "14"],
+      "path": ["provenance", "comparison_invocation", "argv", "--leak-manifest"],
       "value": "eval/synthetic/firm-surface-manifest-v1.json"
     },
     {
