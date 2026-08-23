@@ -15,6 +15,8 @@ from folio_eval.comparison_pilot import (
     _checkpoint_manifest,
     _consumer_environment_fingerprint,
     _create_or_validate_manifest,
+    _finalization_invocation,
+    _fingerprint,
     _load_shard,
     _merge_stack_runs,
     _pilot_ids,
@@ -136,6 +138,74 @@ def test_consumer_environment_fingerprint_uses_probe_digests(
     payload["model_assets_present"] = False
     with pytest.raises(PilotCheckpointError, match="model cache must be warmed"):
         _consumer_environment_fingerprint(interpreter, require_model_assets=True)
+
+
+def test_fingerprint_prepares_both_incumbents_before_probing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    events: list[str] = []
+    mapper = SimpleNamespace(
+        name="folio-mapper",
+        repo_root=tmp_path / "mapper",
+        venv_python=tmp_path / "mapper" / "backend" / ".venv" / "bin" / "python",
+    )
+    enrich = SimpleNamespace(
+        name="folio-enrich",
+        repo_root=tmp_path / "enrich",
+        venv_python=tmp_path / "enrich" / "backend" / ".venv" / "bin" / "python",
+    )
+    monkeypatch.setattr(pilot_module, "mapper_spec", lambda _root: mapper)
+    monkeypatch.setattr(pilot_module, "enrich_spec", lambda _root: enrich)
+    monkeypatch.setattr(
+        pilot_module,
+        "prepare_incumbent",
+        lambda spec, _version: events.append(f"prepare:{spec.name}"),
+    )
+    monkeypatch.setattr(
+        pilot_module,
+        "_consumer_environment_fingerprint",
+        lambda path, **_kwargs: events.append(f"probe:{path}") or {},
+    )
+    monkeypatch.setattr(pilot_module, "_git_repository_state", lambda _root: {})
+    monkeypatch.setattr(pilot_module, "_sha256_file", lambda _path: "a" * 64)
+    monkeypatch.setattr(pilot_module, "load_config", lambda _path: AnswerRuleConfig())
+    monkeypatch.setattr(pilot_module.importlib.metadata, "version", lambda _name: "0.4.0")
+
+    fingerprint = _fingerprint(
+        corpus=_corpus(tmp_path),
+        config_path=Path("config.json"),
+        leak_manifest_path=Path("leaks.json"),
+        public_metadata_path=Path("public.json"),
+        mapper_root=mapper.repo_root,
+        enrich_root=enrich.repo_root,
+        limit=1,
+    )
+
+    assert events == [
+        "prepare:folio-mapper",
+        "prepare:folio-enrich",
+        f"probe:{mapper.venv_python}",
+        f"probe:{enrich.venv_python}",
+    ]
+    assert fingerprint["incumbent_version"] == "0.4.0"
+
+
+def test_finalization_invocation_records_supplied_input_paths(tmp_path: Path) -> None:
+    args = SimpleNamespace(
+        corpus_manifest=Path("custom/corpus.json"),
+        config=Path("custom/config.json"),
+        out=Path("custom/report.json"),
+        checkpoint_dir=tmp_path / "checkpoint",
+        leak_manifest=Path("custom/leaks.json"),
+        salt_file=Path("custom/salt"),
+        limit=7,
+    )
+    receipt = _finalization_invocation(args, tmp_path / "combined.jsonl")
+    argv = receipt["argv"]
+
+    assert argv[argv.index("--corpus-manifest") + 1] == "custom/corpus.json"
+    assert argv[argv.index("--config") + 1] == "custom/config.json"
+    assert argv[argv.index("--leak-manifest") + 1] == "custom/leaks.json"
 
 
 def test_load_shard_rejects_item_or_stack_drift(tmp_path: Path) -> None:

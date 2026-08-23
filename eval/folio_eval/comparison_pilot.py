@@ -22,6 +22,7 @@ from .comparison import (
     build_comparison,
     emit_items_file,
     load_public_comparison_metadata,
+    prepare_incumbent,
     write_comparison,
     write_stage_snapshots,
 )
@@ -34,6 +35,7 @@ from .synthetic_checkpoint import _atomic_create, fsync_directory
 PILOT_CHECKPOINT_KIND = "synthetic-comparison-pilot-checkpoint"
 PILOT_CHECKPOINT_VERSION = 1
 DEFAULT_LIMIT = 30
+INCUMBENT_VERSION = "0.4.0"
 
 _CONSUMER_ENVIRONMENT_PROBE = r"""
 import hashlib
@@ -206,20 +208,25 @@ def _fingerprint(
     config = load_config(config_path)
     mapper = mapper_spec(mapper_root)
     enrich = enrich_spec(enrich_root)
+    for consumer in (mapper, enrich):
+        prepare_incumbent(consumer, INCUMBENT_VERSION)
+    mapper_environment = _consumer_environment_fingerprint(
+        mapper.venv_python, require_model_assets=True
+    )
+    enrich_environment = _consumer_environment_fingerprint(enrich.venv_python)
     return {
         "answer_rule_config_sha256": config.content_sha256(),
         "candidate_repository": _git_repository_state(FOLIO_RESOLVE_ROOT),
         "corpus_content_sha256": corpus.manifest.content_sha256,
-        "enrich_environment": _consumer_environment_fingerprint(enrich.venv_python),
+        "enrich_environment": enrich_environment,
         "enrich_lock_sha256": _sha256_file(enrich.repo_root / "backend" / "uv.lock"),
         "enrich_repository": _git_repository_state(enrich_root),
         "folio_python_lock_sha256": _sha256_file(FOLIO_RESOLVE_ROOT / "uv.lock"),
         "folio_python_version": importlib.metadata.version("folio-python"),
         "folio_resolve_version": importlib.metadata.version("folio-resolve"),
+        "incumbent_version": INCUMBENT_VERSION,
         "leak_manifest_sha256": _sha256_file(leak_manifest_path),
-        "mapper_environment": _consumer_environment_fingerprint(
-            mapper.venv_python, require_model_assets=True
-        ),
+        "mapper_environment": mapper_environment,
         "mapper_lock_sha256": _sha256_file(mapper.repo_root / "backend" / "uv.lock"),
         "mapper_repository": _git_repository_state(mapper_root),
         "nomatch_content_sha256": corpus.manifest.nomatch_content_sha256,
@@ -382,6 +389,8 @@ def _run_shard(
         str(args.mapper_root),
         "--enrich-root",
         str(args.enrich_root),
+        "--incumbent-version",
+        INCUMBENT_VERSION,
         "--item-id",
         item_id,
     ]
@@ -482,6 +491,38 @@ def _merge_stack_runs(shards: Sequence[Mapping[str, Any]]) -> list[StackRun]:
     return runs
 
 
+def _finalization_invocation(
+    args: argparse.Namespace, combined_items: Path
+) -> dict[str, object]:
+    """Record the exact supplied inputs used by equivalent checkpoint finalization."""
+    return {
+        "kind": "equivalent_checkpoint_finalization",
+        "argv": [
+            sys.executable,
+            "eval/run_downstream.py",
+            "run_synthetic_comparison",
+            "--corpus-manifest",
+            str(args.corpus_manifest),
+            "--config",
+            str(args.config),
+            "--out",
+            str(args.out),
+            "--items",
+            str(combined_items),
+            "--row-snapshot-dir",
+            str(args.checkpoint_dir / "final-stages"),
+            "--leak-manifest",
+            str(args.leak_manifest),
+            "--salt-file",
+            str(args.salt_file),
+            "--limit",
+            str(args.limit),
+        ],
+        "working_directory": str(FOLIO_RESOLVE_ROOT),
+        "environment": {"PYTHONHASHSEED": os.environ.get("PYTHONHASHSEED", "")},
+    }
+
+
 def _finalize(
     args: argparse.Namespace,
     corpus: LoadedCorpus,
@@ -517,32 +558,7 @@ def _finalize(
         leak_manifest=leak_manifest,
         salt=salt,
     )
-    comparison_invocation = {
-        "kind": "equivalent_checkpoint_finalization",
-        "argv": [
-            sys.executable,
-            "eval/run_downstream.py",
-            "run_synthetic_comparison",
-            "--corpus-manifest",
-            "eval/synthetic/corpus_v1.manifest.json",
-            "--config",
-            "eval/synthetic/answer_rule_config_synthetic_v1.json",
-            "--out",
-            str(args.out),
-            "--items",
-            str(combined_items),
-            "--row-snapshot-dir",
-            str(args.checkpoint_dir / "final-stages"),
-            "--leak-manifest",
-            "eval/synthetic/firm-surface-manifest-v1.json",
-            "--salt-file",
-            str(args.salt_file),
-            "--limit",
-            str(args.limit),
-        ],
-        "working_directory": str(FOLIO_RESOLVE_ROOT),
-        "environment": {"PYTHONHASHSEED": os.environ.get("PYTHONHASHSEED", "")},
-    }
+    comparison_invocation = _finalization_invocation(args, combined_items)
     payload = build_comparison(
         corpus,
         runs,
