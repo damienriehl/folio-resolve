@@ -229,6 +229,8 @@ for site_root in sorted(site_roots):
         if pth_path.is_file():
             read_pth_paths(pth_path)
     for path in sorted(site_root.rglob("*")):
+        if path.is_symlink():
+            raise RuntimeError("symlinked site-packages entry is not allowed")
         if not path.is_file():
             continue
         resolved = path.resolve()
@@ -1004,6 +1006,7 @@ def _finalize(
             for item_id in item_ids
         },
     }
+    _durably_create_directory(args.out.parent)
     write_comparison(
         args.out,
         payload,

@@ -399,6 +399,24 @@ def test_environment_probe_rejects_unowned_executable_pth(tmp_path: Path) -> Non
     assert "unsupported executable .pth line" in completed.stderr
 
 
+def test_environment_probe_rejects_symlinked_package_directory(tmp_path: Path) -> None:
+    interpreter, site = _isolated_python_site(tmp_path)
+    external_package = tmp_path / "mutable-package"
+    external_package.mkdir()
+    (external_package / "__init__.py").write_text("VALUE = 1\n", encoding="utf-8")
+    (site / "linked_package").symlink_to(external_package, target_is_directory=True)
+
+    completed = pilot_module.subprocess.run(
+        [interpreter, "-B", "-P", "-c", pilot_module._CONSUMER_ENVIRONMENT_PROBE],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode != 0
+    assert "symlinked site-packages entry" in completed.stderr
+
+
 def test_environment_probe_hashes_unowned_site_package_files(tmp_path: Path) -> None:
     interpreter, site = _isolated_python_site(tmp_path)
     module = site / "manually_copied.py"
@@ -638,6 +656,61 @@ def test_run_shard_uses_one_explicit_item_and_suppresses_large_stdout(
     assert observed["env"]["HF_HUB_OFFLINE"] == "1"
     assert observed["env"]["TRANSFORMERS_OFFLINE"] == "1"
     assert events == ["directory:stages", "durable", "loaded"]
+
+
+def test_finalize_durably_creates_output_parent_before_publish(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    checkpoint = tmp_path / "checkpoint"
+    checkpoint.mkdir()
+    salt_file = tmp_path / "salt"
+    salt_file.write_bytes(b"salt")
+    output = tmp_path / "new-report-directory" / "report.json"
+    args = SimpleNamespace(
+        checkpoint_dir=checkpoint,
+        leak_manifest=tmp_path / "leaks.json",
+        salt_file=salt_file,
+        limit=1,
+        config=tmp_path / "config.json",
+        out=output,
+        public_metadata=tmp_path / "public.json",
+    )
+    events: list[tuple[str, Path]] = []
+
+    monkeypatch.setattr(pilot_module, "_load_shard", lambda *_args: _shard("one"))
+    monkeypatch.setattr(pilot_module, "_merge_stack_runs", lambda _shards: [])
+    monkeypatch.setattr(pilot_module, "load_manifest", lambda _path: object())
+    monkeypatch.setattr(pilot_module, "emit_items_file", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        pilot_module, "write_stage_snapshots", lambda *_args, **_kwargs: {}
+    )
+    monkeypatch.setattr(pilot_module, "_finalization_invocation", lambda *_args: {})
+    monkeypatch.setattr(pilot_module, "load_config", lambda _path: object())
+    monkeypatch.setattr(
+        pilot_module,
+        "build_comparison",
+        lambda *_args, **_kwargs: {"provenance": {}},
+    )
+    monkeypatch.setattr(pilot_module, "_file_fingerprint", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(pilot_module, "_sha256_file", lambda _path: "a" * 64)
+    monkeypatch.setattr(
+        pilot_module, "load_public_comparison_metadata", lambda _path: object()
+    )
+
+    def durable_create(path: Path) -> None:
+        events.append(("directory", path))
+        path.mkdir(parents=True)
+
+    def publish(path: Path, *_args: object, **_kwargs: object) -> None:
+        assert path.parent.is_dir()
+        events.append(("publish", path))
+
+    monkeypatch.setattr(pilot_module, "_durably_create_directory", durable_create)
+    monkeypatch.setattr(pilot_module, "write_comparison", publish)
+
+    pilot_module._finalize(args, _corpus(tmp_path), ("one",), {"fingerprint": {}})
+
+    assert events == [("directory", output.parent), ("publish", output)]
 
 
 def test_main_can_initialize_checkpoint_without_starting_an_expensive_shard(
