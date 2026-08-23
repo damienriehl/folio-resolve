@@ -437,6 +437,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         print(f"pilot checkpoint: {completed_after}/{len(item_ids)} complete")
         if completed_after < len(item_ids):
+            if args.max_new_items == 0:
+                return 0
             if completed_after == completed_before:
                 raise PilotCheckpointError("pilot checkpoint made no progress")
             return 0
