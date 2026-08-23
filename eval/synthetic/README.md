@@ -48,3 +48,29 @@ Published versions are frozen cohorts. Extend a verified manifest only through `
 which loads and hash-verifies version `N`, combines it with newly ratified rows, and emits new
 version `N+1` paths. Never edit, regenerate in place, or repoint an old version after results cite
 it.
+
+## Resumable scoring
+
+The document adapter is intentionally expensive. Production baseline runs must use a durable,
+gitignored checkpoint directory so an interruption does not discard completed items:
+
+```bash
+PYTHONHASHSEED=0 uv run python eval/run_synthetic.py \
+  --corpus-manifest eval/synthetic/corpus_v1.manifest.json \
+  --config eval/synthetic/answer_rule_config_synthetic_v1.json \
+  --out eval/reports/synthetic-baseline-v1.json \
+  --leak-manifest eval/synthetic/firm-surface-manifest-v1.json \
+  --salt-file <owner-provisioned-salt-path> \
+  --checkpoint-dir .synthetic-checkpoints/baseline-v1
+```
+
+Re-running the same command validates and reuses completed items. Checkpoints are bound to the
+corpus and no-match hashes, answer-rule config, ontology cache, clean Git commit, Python and
+package versions, `PYTHONHASHSEED`, and lockfile; drift fails closed. Item files contain only an
+opaque item key, kind, ranked IRI/score pairs, counts, and suppression totals. They never contain
+passages, labels, gold, extracted surfaces, or U10 candidate traces.
+
+For parallel workers, give every process the same directory and `--shard-count N`, with a unique
+`--shard-index` from `0` through `N-1`. Shards checkpoint only their stable hash partition and do
+not publish a partial report. After all shards finish, run once with the same `--shard-count N`
+and `--finalize-only`; it validates complete coverage and publishes through the normal leak gate.

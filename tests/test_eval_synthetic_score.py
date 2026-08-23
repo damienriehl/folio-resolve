@@ -141,7 +141,9 @@ def test_adapter_is_deterministic_and_accounts_for_every_raw_candidate() -> None
         (candidate.iri for candidate in first.candidates),
         key=lambda iri: next(-c.score for c in first.candidates if c.iri == iri),
     )
-    assert first.raw_candidate_count == len(first.candidates) + sum(first.suppression_counters.values())
+    assert first.raw_candidate_count == len(first.candidates) + sum(
+        first.suppression_counters.values()
+    )
     assert first.suppression_counters["blocklist"] >= 1
     assert len(first.traces) == first.raw_candidate_count
     assert [trace.iri for trace in first.traces] == sorted(trace.iri for trace in first.traces)
@@ -165,9 +167,7 @@ def test_adapter_does_not_retain_candidates_for_identical_passage(
     calls = 0
     original = adapter._raw_candidates
 
-    def counted(
-        passage: str, *, segments: tuple[str, ...] | None = None
-    ) -> list[MatchCandidate]:
+    def counted(passage: str, *, segments: tuple[str, ...] | None = None) -> list[MatchCandidate]:
         nonlocal calls
         calls += 1
         return original(passage, segments=segments)
@@ -240,9 +240,13 @@ def test_unscoreable_corpus_requires_explicit_diagnostics_override() -> None:
     result = score_corpus(corpus, _ontology(), config, allow_unscoreable=True)
     assert result.unscoreable_override is True
     report = build_synthetic_report(
-        result, corpus=corpus, config=config, label="diagnostic",
+        result,
+        corpus=corpus,
+        config=config,
+        label="diagnostic",
         ontology_pin=corpus.manifest.ontology_cache_sha256,
-        depth_probe_result={}, determinism_selftest={},
+        depth_probe_result={},
+        determinism_selftest={},
     )
     assert report["unscoreable_override"] is True
 
@@ -280,14 +284,11 @@ def test_depth_probe_matches_independent_candidate_depth_rescore() -> None:
     depths = (1, 2, 3)
     observed = depth_probe(result.run, config, depths=depths)
     records = corpus.gold_item_records()
-    candidates = {
-        item.item_id: adapter.adapt(item.input_text).candidates for item in records
-    }
+    candidates = {item.item_id: adapter.adapt(item.input_text).candidates for item in records}
 
     for depth in depths:
-        def predict_at_depth(
-            item: GoldItemRecord, cap: int = depth
-        ) -> tuple[MatchCandidate, ...]:
+
+        def predict_at_depth(item: GoldItemRecord, cap: int = depth) -> tuple[MatchCandidate, ...]:
             return candidates[item.item_id][:cap]
 
         rescored = score_items(
@@ -298,10 +299,7 @@ def test_depth_probe_matches_independent_candidate_depth_rescore() -> None:
             keep_ranked=depth,
         )
         recalls = [
-            len(
-                {candidate.iri for candidate in candidates[item.item_id][:depth]}
-                & item.gold_iris
-            )
+            len({candidate.iri for candidate in candidates[item.item_id][:depth]} & item.gold_iris)
             / len(item.gold_iris)
             for item in records
         ]
@@ -359,15 +357,44 @@ def test_versioned_public_metadata_allows_only_exact_approved_paths(tmp_path: Pa
         "label": "synthetic-baseline-v1",
         "answer_rule_config_sha256": config.content_sha256(),
         "answer_rule_config": config.to_json(),
-        "determinism_selftest": {
-            "target": "folio_eval.selftest:synthetic_scoring_payload"
-        },
+        "determinism_selftest": {"target": "folio_eval.selftest:synthetic_scoring_payload"},
     }
 
     out = tmp_path / "report.json"
     write_report(out, report, manifest, salt, public_metadata=metadata)
 
     assert out.exists()
+
+
+def test_report_publication_fsyncs_file_before_replace_and_directory_after(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    salt = b"tiny-test-salt"
+    manifest = build_manifest(
+        ["private-only"],
+        salt=salt,
+        scrypt_params=ScryptParams(n=2, r=1, p=1, dklen=8, test_params=True),
+        gold_version="test",
+        gold_content_sha256="d" * 64,
+    )
+    events: list[str] = []
+    real_fsync = synthetic_score_module.os.fsync
+    real_replace = synthetic_score_module.os.replace
+
+    def record_fsync(descriptor: int) -> None:
+        events.append("fsync")
+        real_fsync(descriptor)
+
+    def record_replace(source: str, destination: Path) -> None:
+        events.append("replace")
+        real_replace(source, destination)
+
+    monkeypatch.setattr(synthetic_score_module.os, "fsync", record_fsync)
+    monkeypatch.setattr(synthetic_score_module.os, "replace", record_replace)
+
+    write_report(tmp_path / "report.json", {"value": "public"}, manifest, salt)
+
+    assert events == ["fsync", "replace", "fsync"]
 
 
 def test_public_metadata_contract_rejects_every_malformed_shape(tmp_path: Path) -> None:
@@ -412,9 +439,7 @@ def test_public_metadata_never_exempts_data_derived_collisions(tmp_path: Path) -
         "label": "synthetic-baseline-v1",
         "answer_rule_config_sha256": config.content_sha256(),
         "answer_rule_config": config.to_json(),
-        "determinism_selftest": {
-            "target": "folio_eval.selftest:synthetic_scoring_payload"
-        },
+        "determinism_selftest": {"target": "folio_eval.selftest:synthetic_scoring_payload"},
         "slices": {"generated": "planted collision"},
     }
 
@@ -445,9 +470,7 @@ def test_approved_value_still_collides_at_an_unapproved_path(tmp_path: Path) -> 
         "label": approved_label,
         "answer_rule_config_sha256": config.content_sha256(),
         "answer_rule_config": config.to_json(),
-        "determinism_selftest": {
-            "target": "folio_eval.selftest:synthetic_scoring_payload"
-        },
+        "determinism_selftest": {"target": "folio_eval.selftest:synthetic_scoring_payload"},
         "slices": {"generated": approved_label},
     }
 
@@ -517,17 +540,159 @@ def test_main_runs_publication_preflight_before_adapter_construction(
     with pytest.raises(SyntheticScoringError, match="leak check"):
         synthetic_score_module.main(
             [
-                "--corpus-manifest", str(tmp_path / "corpus.json"),
-                "--config", str(tmp_path / "config.json"),
-                "--out", str(tmp_path / "report.json"),
-                "--leak-manifest", str(tmp_path / "leak.json"),
-                "--salt-file", str(salt_path),
-                "--public-metadata", str(metadata_path),
-                "--label", "synthetic-baseline-v1",
+                "--corpus-manifest",
+                str(tmp_path / "corpus.json"),
+                "--config",
+                str(tmp_path / "config.json"),
+                "--out",
+                str(tmp_path / "report.json"),
+                "--leak-manifest",
+                str(tmp_path / "leak.json"),
+                "--salt-file",
+                str(salt_path),
+                "--public-metadata",
+                str(metadata_path),
+                "--label",
+                "synthetic-baseline-v1",
             ]
         )
 
     assert adapter_constructed is False
+
+
+def _stub_checkpoint_main_dependencies(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    config: AnswerRuleConfig,
+    corpus: LoadedCorpus,
+) -> Path:
+    salt_path = tmp_path / "salt"
+    salt_path.write_bytes(b"tiny-test-salt")
+    monkeypatch.setattr(synthetic_score_module, "ensure_hash_seed", lambda: None)
+    monkeypatch.setattr(synthetic_score_module, "load_corpus", lambda _path: corpus)
+    monkeypatch.setattr(
+        synthetic_score_module,
+        "assert_ontology_pin",
+        lambda _sha: SimpleNamespace(sha256=corpus.manifest.ontology_cache_sha256),
+    )
+    monkeypatch.setattr(
+        synthetic_score_module,
+        "run_determinism_selftest",
+        lambda: SimpleNamespace(to_json=lambda: {"matched": True}),
+    )
+    monkeypatch.setattr(synthetic_score_module, "load_config", lambda _path: config)
+    monkeypatch.setattr(synthetic_score_module, "load_manifest", lambda _path: object())
+    monkeypatch.setattr(
+        synthetic_score_module,
+        "load_public_report_metadata",
+        lambda _path: None,
+    )
+    monkeypatch.setattr(
+        synthetic_score_module,
+        "preflight_report_publication",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        synthetic_score_module,
+        "build_checkpoint_fingerprint",
+        lambda *_args, **_kwargs: object(),
+    )
+    return salt_path
+
+
+def _checkpoint_main_argv(tmp_path: Path, salt_path: Path) -> list[str]:
+    return [
+        "--corpus-manifest",
+        str(tmp_path / "corpus.json"),
+        "--config",
+        str(tmp_path / "config.json"),
+        "--out",
+        str(tmp_path / "report.json"),
+        "--leak-manifest",
+        str(tmp_path / "leak.json"),
+        "--salt-file",
+        str(salt_path),
+        "--public-metadata",
+        str(tmp_path / "public.json"),
+        "--checkpoint-dir",
+        str(tmp_path / "checkpoint"),
+        "--shard-count",
+        "2",
+        "--shard-index",
+        "0",
+    ]
+
+
+def test_checkpoint_cli_does_not_publish_an_incomplete_shard(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = AnswerRuleConfig()
+    corpus = _corpus(config)
+    salt_path = _stub_checkpoint_main_dependencies(
+        tmp_path, monkeypatch, config=config, corpus=corpus
+    )
+    store = SimpleNamespace(completed_count=lambda: 2, expected_item_count=4)
+    monkeypatch.setattr(
+        synthetic_score_module.SyntheticCheckpointStore,
+        "create",
+        lambda *_args, **_kwargs: store,
+    )
+    monkeypatch.setattr(
+        synthetic_score_module,
+        "score_corpus_checkpointed",
+        lambda *_args, **_kwargs: None,
+    )
+
+    def fail_if_published(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("an incomplete shard must not publish a report")
+
+    monkeypatch.setattr(synthetic_score_module, "write_report", fail_if_published)
+
+    assert synthetic_score_module.main(_checkpoint_main_argv(tmp_path, salt_path)) == 0
+    assert not (tmp_path / "report.json").exists()
+
+
+def test_checkpoint_cli_publishes_complete_result_through_normal_writer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = AnswerRuleConfig()
+    corpus = _corpus(config)
+    result = score_corpus(corpus, _ontology(), config)
+    salt_path = _stub_checkpoint_main_dependencies(
+        tmp_path, monkeypatch, config=config, corpus=corpus
+    )
+    store = SimpleNamespace(completed_count=lambda: 4, expected_item_count=4)
+    monkeypatch.setattr(
+        synthetic_score_module.SyntheticCheckpointStore,
+        "create",
+        lambda *_args, **_kwargs: store,
+    )
+    monkeypatch.setattr(
+        synthetic_score_module,
+        "score_corpus_checkpointed",
+        lambda *_args, **_kwargs: result,
+    )
+    monkeypatch.setattr(
+        synthetic_score_module,
+        "depth_probe",
+        lambda *_args, **_kwargs: {"1": {"micro_f1": 1.0}},
+    )
+    report = {"overall": {"f1": 1.0}}
+    monkeypatch.setattr(
+        synthetic_score_module,
+        "build_synthetic_report",
+        lambda *_args, **_kwargs: report,
+    )
+    published: list[tuple[Path, object]] = []
+    monkeypatch.setattr(
+        synthetic_score_module,
+        "write_report",
+        lambda path, observed, *_args, **_kwargs: published.append((path, observed)),
+    )
+
+    assert synthetic_score_module.main(_checkpoint_main_argv(tmp_path, salt_path)) == 0
+    assert published == [(tmp_path / "report.json", report)]
 
 
 def test_existing_synthetic_scoring_payload_is_unchanged_and_deterministic() -> None:

@@ -8,10 +8,12 @@ import os
 import re
 import sys
 import tempfile
+import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
+from typing import Protocol
 
 from folio_resolve.blocklist import AliasBlocklist, load_seed_blocklist
 from folio_resolve.gates import PlaceNameGate, ShortLabelGate
@@ -33,9 +35,18 @@ from .score import EMPTY_HIERARCHY, MicroCounts, ScoreRun, score_items
 from .selftest import assert_ontology_pin, ensure_hash_seed, run_determinism_selftest
 from .splits import GoldItemRecord
 from .synthesize import LoadedCorpus, load_corpus
+from .synthetic_checkpoint import (
+    CheckpointAdapterResult,
+    CheckpointError,
+    SyntheticCheckpointStore,
+    build_checkpoint_fingerprint,
+    checkpoint_item_key,
+    fsync_directory,
+    shard_for_item,
+)
+from .synthetic_contract import SUPPRESSION_CATEGORIES, SyntheticItemKind
 
 PhraseExtractor = Callable[[str], Sequence[str]]
-SUPPRESSION_CATEGORIES = ("blocklist", "place_gate", "short_label_gate", "score_floor")
 REPORT_KIND = "synthetic_baseline"
 PUBLIC_METADATA_KIND = "synthetic-report-public-metadata"
 PUBLIC_METADATA_VERSION = 1
@@ -149,6 +160,24 @@ class AdapterResult:
     suppression_counters: Mapping[str, int]
     traces: tuple[CandidateTrace, ...] = ()
 
+    @property
+    def survivor_count(self) -> int:
+        return len(self.candidates)
+
+
+class AdapterOutcome(Protocol):
+    @property
+    def candidates(self) -> Sequence[CandidateLike]: ...
+
+    @property
+    def raw_candidate_count(self) -> int: ...
+
+    @property
+    def survivor_count(self) -> int: ...
+
+    @property
+    def suppression_counters(self) -> Mapping[str, int]: ...
+
 
 @dataclass
 class DocumentAdapter:
@@ -208,9 +237,7 @@ class DocumentAdapter:
                 )
         return raw
 
-    def adapt(
-        self, passage: str, *, segments: Sequence[str] | None = None
-    ) -> AdapterResult:
+    def adapt(self, passage: str, *, segments: Sequence[str] | None = None) -> AdapterResult:
         best: dict[str, MatchCandidate] = {}
         for candidate in self._raw_candidates(passage, segments=segments):
             current = best.get(candidate.iri)
@@ -352,7 +379,7 @@ def _assert_config(corpus: LoadedCorpus, config: AnswerRuleConfig) -> None:
     expected = corpus.manifest.answer_rule_config_sha256
     if actual != expected:
         raise SyntheticScoringError(
-            "answer_rule_config_sha256 mismatch: " f"expected={expected} actual={actual}"
+            f"answer_rule_config_sha256 mismatch: expected={expected} actual={actual}"
         )
 
 
@@ -371,15 +398,35 @@ def score_corpus(
             "corpus manifest is not scoreable; pass allow_unscoreable=True for diagnostics"
         )
     document_adapter = adapter or DocumentAdapter(ontology)
+
+    def resolve(_kind: SyntheticItemKind, _item_id: str, text: str) -> AdapterOutcome:
+        return document_adapter.adapt(text)
+
+    return _score_from_adapter_results(
+        corpus,
+        config,
+        resolve,
+        allow_unscoreable=allow_unscoreable,
+    )
+
+
+def _score_from_adapter_results(
+    corpus: LoadedCorpus,
+    config: AnswerRuleConfig,
+    resolve: Callable[[SyntheticItemKind, str, str], AdapterOutcome],
+    *,
+    allow_unscoreable: bool,
+) -> SyntheticScoreResult:
+    """Run the unchanged scorer over live or validated checkpoint adapter results."""
     counters = dict.fromkeys(SUPPRESSION_CATEGORIES, 0)
     raw_count = 0
     survivor_count = 0
 
     def predict(item: GoldItemRecord) -> Sequence[CandidateLike]:
         nonlocal raw_count, survivor_count
-        result = document_adapter.adapt(item.input_text)
+        result = resolve("scoreable", item.item_id, item.input_text)
         raw_count += result.raw_candidate_count
-        survivor_count += len(result.candidates)
+        survivor_count += result.survivor_count
         for category, count in result.suppression_counters.items():
             counters[category] += count
         return result.candidates
@@ -394,9 +441,9 @@ def score_corpus(
     )
     false_positives = 0
     for item in sorted(corpus.nomatch_items, key=lambda row: row.item_id):
-        adapted = document_adapter.adapt(item.text)
+        adapted = resolve("nomatch", item.item_id, item.text)
         raw_count += adapted.raw_candidate_count
-        survivor_count += len(adapted.candidates)
+        survivor_count += adapted.survivor_count
         for category, count in adapted.suppression_counters.items():
             counters[category] += count
         committed = commit_from_ranked(rank_candidates(adapted.candidates, config), config)
@@ -409,6 +456,122 @@ def score_corpus(
         raw_candidate_count=raw_count,
         survivor_count=survivor_count,
         unscoreable_override=not corpus.manifest.scoreable and allow_unscoreable,
+    )
+
+
+def score_corpus_checkpointed(
+    corpus: LoadedCorpus,
+    ontology: RecallOntology | None,
+    config: AnswerRuleConfig,
+    *,
+    store: SyntheticCheckpointStore,
+    shard_index: int | None = None,
+    finalize_only: bool = False,
+    adapter: DocumentAdapter | None = None,
+    adapter_factory: Callable[[], DocumentAdapter] | None = None,
+    allow_unscoreable: bool = False,
+    progress: Callable[[dict[str, object]], None] | None = None,
+) -> SyntheticScoreResult | None:
+    """Checkpoint expensive adapter results and finalize through the unchanged scorer.
+
+    A non-final shard returns ``None`` until every expected item is durable. Finalization reads
+    and validates all item files before it constructs a report-worthy score result.
+    """
+    _assert_config(corpus, config)
+    if not corpus.manifest.scoreable and not allow_unscoreable:
+        raise SyntheticScoringError(
+            "corpus manifest is not scoreable; pass allow_unscoreable=True for diagnostics"
+        )
+    retained_limit = max(DEPTH_PROBE_MAX, config.top_k)
+    scoreable_records = corpus.gold_item_records()
+    work: list[tuple[SyntheticItemKind, str, str]] = [
+        ("scoreable", record.item_id, record.input_text) for record in scoreable_records
+    ] + [("nomatch", item.item_id, item.text) for item in corpus.nomatch_items]
+    work.sort(key=lambda row: checkpoint_item_key(row[0], row[1]))
+    if store.expected_item_count != len(work):
+        raise CheckpointError("checkpoint expected item count does not match the corpus")
+    if store.retained_limit != retained_limit:
+        raise CheckpointError("checkpoint retained limit does not match the scorer")
+    if finalize_only:
+        selected: list[tuple[SyntheticItemKind, str, str]] = []
+    else:
+        selected_index = 0 if shard_index is None else shard_index
+        if not 0 <= selected_index < store.shard_count:
+            raise CheckpointError("shard_index must be within the configured shard count")
+        selected = [
+            row
+            for row in work
+            if shard_for_item(checkpoint_item_key(row[0], row[1]), store.shard_count)
+            == selected_index
+        ]
+        document_adapter = adapter
+        started = time.perf_counter()
+        new_items = 0
+        completed = store.completed_count()
+        loaded: dict[tuple[SyntheticItemKind, str], CheckpointAdapterResult] = {}
+        for kind, item_id, text in selected:
+            existing = store.maybe_load_item(kind, item_id)
+            if existing is not None:
+                loaded[(kind, item_id)] = existing
+                continue
+            if document_adapter is None:
+                if adapter_factory is not None:
+                    document_adapter = adapter_factory()
+                elif ontology is not None:
+                    document_adapter = DocumentAdapter(ontology)
+                else:
+                    raise CheckpointError("missing adapter factory for incomplete checkpoint")
+            adapted = document_adapter.adapt(text)
+            loaded[(kind, item_id)] = store.write_item(
+                kind,
+                item_id,
+                candidates=adapted.candidates,
+                raw_candidate_count=adapted.raw_candidate_count,
+                suppression_counters=adapted.suppression_counters,
+            )
+            new_items += 1
+            completed += 1
+            if progress is not None:
+                elapsed = time.perf_counter() - started
+                remaining = max(store.expected_item_count - completed, 0)
+                progress(
+                    {
+                        "completed": completed,
+                        "elapsed_seconds": round(elapsed, 3),
+                        "eta_seconds": round((elapsed / new_items) * remaining, 3),
+                        "item_key": checkpoint_item_key(kind, item_id),
+                        "shard_index": selected_index,
+                        "total": store.expected_item_count,
+                    }
+                )
+    if finalize_only:
+        loaded = {}
+
+    expected_paths = {store.item_path(kind, item_id) for kind, item_id, _text in work}
+    observed_paths = set(store.item_paths())
+    unexpected = observed_paths - expected_paths
+    if unexpected:
+        raise CheckpointError("checkpoint contains unexpected item files")
+    if expected_paths - observed_paths:
+        if finalize_only:
+            raise CheckpointError(
+                f"checkpoint incomplete: {len(expected_paths - observed_paths)} items missing"
+            )
+        return None
+
+    cached: dict[tuple[SyntheticItemKind, str], CheckpointAdapterResult] = {
+        (kind, item_id): loaded.get((kind, item_id)) or store.load_item(kind, item_id)
+        for kind, item_id, _text in work
+    }
+
+    def resolve(kind: SyntheticItemKind, item_id: str, _text: str) -> AdapterOutcome:
+        return cached[(kind, item_id)]
+
+    return _score_from_adapter_results(
+        corpus,
+        config,
+        resolve,
+        allow_unscoreable=allow_unscoreable,
     )
 
 
@@ -487,9 +650,7 @@ def build_synthetic_report(
         "content_sha256": corpus.manifest.content_sha256,
         "ontology_cache_sha256": ontology_pin,
         "overall": result.run.overall.to_json(),
-        "slices": {
-            key: counts.to_json() for key, counts in sorted(result.run.by_stratum.items())
-        },
+        "slices": {key: counts.to_json() for key, counts in sorted(result.run.by_stratum.items())},
         "nomatch_fp_rate": round(result.nomatch_fp_rate, 6),
         "suppression_counters": dict(sorted(result.suppression_counters.items())),
         "raw_candidate_count": result.raw_candidate_count,
@@ -573,7 +734,10 @@ def write_report(
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             handle.write(serialized)
+            handle.flush()
+            os.fsync(handle.fileno())
         os.replace(temporary, path)
+        fsync_directory(path.parent)
     finally:
         if os.path.exists(temporary):
             os.unlink(temporary)
@@ -589,6 +753,10 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - I/O or
     parser.add_argument("--salt-file", type=Path, required=True)
     parser.add_argument("--public-metadata", type=Path, default=DEFAULT_PUBLIC_METADATA_PATH)
     parser.add_argument("--label", default="synthetic-baseline-v1")
+    parser.add_argument("--checkpoint-dir", type=Path)
+    parser.add_argument("--shard-count", type=int, default=1)
+    parser.add_argument("--shard-index", type=int, default=0)
+    parser.add_argument("--finalize-only", action="store_true")
     args = parser.parse_args(argv)
     ensure_hash_seed()
     corpus = load_corpus(args.corpus_manifest)
@@ -607,9 +775,44 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - I/O or
     )
     from folio import FOLIO
 
-    ontology = FolioPythonProvider(_folio=FOLIO())
-    adapter = DocumentAdapter(ontology)
-    result = score_corpus(corpus, ontology, config, adapter=adapter)
+    result: SyntheticScoreResult | None
+    if args.checkpoint_dir is None:
+        if args.shard_count != 1 or args.shard_index != 0 or args.finalize_only:
+            parser.error("sharding and finalization require --checkpoint-dir")
+        result = score_corpus(corpus, FolioPythonProvider(_folio=FOLIO()), config)
+    else:
+        repo_root = Path(__file__).resolve().parents[2]
+        fingerprint = build_checkpoint_fingerprint(corpus, config, repo_root=repo_root)
+        store = SyntheticCheckpointStore.create(
+            args.checkpoint_dir,
+            fingerprint=fingerprint,
+            shard_count=args.shard_count,
+            expected_item_count=len(corpus.gold_item_records()) + len(corpus.nomatch_items),
+            retained_limit=max(DEPTH_PROBE_MAX, config.top_k),
+        )
+        result = score_corpus_checkpointed(
+            corpus,
+            None,
+            config,
+            store=store,
+            shard_index=args.shard_index,
+            finalize_only=args.finalize_only,
+            adapter_factory=lambda: DocumentAdapter(FolioPythonProvider(_folio=FOLIO())),
+            progress=lambda payload: print(json.dumps(payload, sort_keys=True), file=sys.stderr),
+        )
+        if result is None:
+            print(
+                json.dumps(
+                    {
+                        "checkpoint_dir": str(args.checkpoint_dir),
+                        "completed": store.completed_count(),
+                        "status": "checkpointed",
+                        "total": store.expected_item_count,
+                    },
+                    sort_keys=True,
+                )
+            )
+            return 0
     probe = depth_probe(result.run, config)
     report = build_synthetic_report(
         result,
