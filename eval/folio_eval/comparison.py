@@ -214,8 +214,32 @@ def _atomic_write_text(path: Path, text: str) -> Path:
 
 
 def _selected_cohort(
-    corpus: LoadedCorpus, limit: int | None, *, include_nomatch: bool = True
+    corpus: LoadedCorpus,
+    limit: int | None,
+    *,
+    include_nomatch: bool = True,
+    item_ids: Sequence[str] | None = None,
 ) -> tuple[tuple[SyntheticItem, ...], tuple[SyntheticItem, ...]]:
+    if item_ids is not None and limit is not None:
+        raise ValueError("item_ids and limit are mutually exclusive")
+    if item_ids is not None:
+        requested = tuple(item_ids)
+        if not requested or len(requested) != len(set(requested)):
+            raise ValueError("item_ids must be nonempty and unique")
+        requested_set = set(requested)
+        scoreable = tuple(
+            item for item in corpus.scoreable_items if item.item_id in requested_set
+        )
+        nomatch = tuple(
+            item for item in corpus.nomatch_items if item.item_id in requested_set
+        )
+        if not include_nomatch and nomatch:
+            raise ValueError("item_ids includes no-match rows while include_nomatch is false")
+        observed = {item.item_id for item in (*scoreable, *nomatch)}
+        unknown = sorted(requested_set - observed)
+        if unknown:
+            raise ValueError(f"unknown comparison item_ids: {', '.join(unknown)}")
+        return scoreable, nomatch
     if limit is not None and limit < 1:
         raise ValueError("limit must be positive")
     if not include_nomatch and limit != 1:
@@ -228,10 +252,14 @@ def _selected_cohort(
 
 
 def _comparison_items(
-    corpus: LoadedCorpus, limit: int | None, *, include_nomatch: bool = True
+    corpus: LoadedCorpus,
+    limit: int | None,
+    *,
+    include_nomatch: bool = True,
+    item_ids: Sequence[str] | None = None,
 ) -> tuple[SyntheticItem, ...]:
     scoreable, nomatch = _selected_cohort(
-        corpus, limit, include_nomatch=include_nomatch
+        corpus, limit, include_nomatch=include_nomatch, item_ids=item_ids
     )
     return scoreable + nomatch
 
@@ -242,6 +270,7 @@ def emit_items_file(
     *,
     limit: int | None = None,
     include_nomatch: bool = True,
+    item_ids: Sequence[str] | None = None,
     extractor: PhraseExtractor = nounish_ngrams,
     leak_manifest: Manifest | None = None,
     salt: bytes | None = None,
@@ -253,7 +282,9 @@ def emit_items_file(
     A live gate may explicitly omit them to exercise exactly one scoreable item end-to-end.
     """
     lines: list[str] = []
-    for item in _comparison_items(corpus, limit, include_nomatch=include_nomatch):
+    for item in _comparison_items(
+        corpus, limit, include_nomatch=include_nomatch, item_ids=item_ids
+    ):
         payload = {
             "item_id": item.item_id,
             "text": item.text,
@@ -605,6 +636,7 @@ def run_local_stack(
     *,
     limit: int | None = None,
     include_nomatch: bool = True,
+    item_ids: Sequence[str] | None = None,
     extractor: PhraseExtractor = nounish_ngrams,
     items_path: Path | None = None,
 ) -> StackRun:
@@ -618,7 +650,9 @@ def run_local_stack(
             )
     rows: dict[str, frozenset[str]] = {}
     stages: dict[str, Mapping[str, object]] = {}
-    for item in _comparison_items(corpus, limit, include_nomatch=include_nomatch):
+    for item in _comparison_items(
+        corpus, limit, include_nomatch=include_nomatch, item_ids=item_ids
+    ):
         segments = (
             materialized[item.item_id] if items_path is not None else tuple(extractor(item.text))
         )
@@ -725,12 +759,13 @@ def score_stack(
     *,
     limit: int | None = None,
     include_nomatch: bool = True,
+    item_ids: Sequence[str] | None = None,
 ) -> tuple[dict[str, object], dict[str, float]]:
     """Join predictions to gold by item_id and compute strict set micro metrics."""
     counts = MicroCounts()
     item_f1: dict[str, float] = {}
     selected_scoreable, selected_nomatch = _selected_cohort(
-        corpus, limit, include_nomatch=include_nomatch
+        corpus, limit, include_nomatch=include_nomatch, item_ids=item_ids
     )
     for item in selected_scoreable:
         if item.item_id not in run.rows:
@@ -804,6 +839,7 @@ def build_comparison(
     *,
     limit: int | None = None,
     include_nomatch: bool = True,
+    item_ids: Sequence[str] | None = None,
     n_resamples: int = DEFAULT_BOOTSTRAP_RESAMPLES,
     seed: int = DEFAULT_BOOTSTRAP_SEED,
     comparison_invocation: Mapping[str, object] | Sequence[str] = (),
@@ -820,14 +856,18 @@ def build_comparison(
     stack_payloads: dict[str, object] = {}
     item_scores: dict[str, dict[str, float]] = {}
     scoreable, nomatch = _selected_cohort(
-        corpus, limit, include_nomatch=include_nomatch
+        corpus, limit, include_nomatch=include_nomatch, item_ids=item_ids
     )
     selected_ids = tuple(item.item_id for item in (*scoreable, *nomatch))
     for run in sorted(runs, key=lambda value: value.key):
         if run.lane == "incumbent" and run.invocation:
             _assert_consumer_config(run)
         metrics, per_item = score_stack(
-            corpus, run, limit=limit, include_nomatch=include_nomatch
+            corpus,
+            run,
+            limit=limit,
+            include_nomatch=include_nomatch,
+            item_ids=item_ids,
         )
         missing_stages = sorted(set(selected_ids) - set(run.stages))
         if missing_stages:
@@ -898,8 +938,16 @@ def build_comparison(
             "content_sha256": corpus.manifest.content_sha256,
             "nomatch_content_sha256": corpus.manifest.nomatch_content_sha256,
         },
-        "pilot": limit is not None,
-        "run_kind": "live_gate" if not include_nomatch else "pilot" if limit else "final",
+        "pilot": limit is not None or item_ids is not None,
+        "run_kind": (
+            "shard"
+            if item_ids is not None
+            else "live_gate"
+            if not include_nomatch
+            else "pilot"
+            if limit
+            else "final"
+        ),
         "limit": limit,
         "scoreable_items": len(ids),
         "nomatch_items": len(nomatch),
@@ -907,7 +955,11 @@ def build_comparison(
         "provenance": {
             "comparison_invocation": comparison_receipt,
             "cohort_selection": {
-                "rule": "corpus_manifest_order_prefix",
+                "rule": (
+                    "explicit_item_ids"
+                    if item_ids is not None
+                    else "corpus_manifest_order_prefix"
+                ),
                 "scoreable_limit": limit,
                 "include_nomatch": include_nomatch,
                 "scoreable_item_ids": ids,
@@ -1120,6 +1172,7 @@ def run_synthetic_comparison(
     salt: bytes,
     limit: int | None = None,
     include_nomatch: bool = True,
+    item_ids: Sequence[str] | None = None,
     incumbent_version: str = "0.4.0",
     comparison_invocation: Mapping[str, object] | Sequence[str] = (),
 ) -> dict[str, object]:
@@ -1128,7 +1181,11 @@ def run_synthetic_comparison(
     candidate_repository = _git_repository_state(FOLIO_RESOLVE_ROOT)
     with clean_tree_guard(FOLIO_RESOLVE_ROOT):
         emit_items_file(
-            corpus, items_path, limit=limit, include_nomatch=include_nomatch,
+            corpus,
+            items_path,
+            limit=limit,
+            include_nomatch=include_nomatch,
+            item_ids=item_ids,
             extractor=adapter.phrase_extractor,
             leak_manifest=leak_manifest, salt=salt,
         )
@@ -1150,6 +1207,7 @@ def run_synthetic_comparison(
             config,
             limit=limit,
             include_nomatch=include_nomatch,
+            item_ids=item_ids,
             items_path=items_path,
         )
         runs.append(replace(local_run, repository=candidate_repository))
@@ -1164,6 +1222,7 @@ def run_synthetic_comparison(
             config,
             limit=limit,
             include_nomatch=include_nomatch,
+            item_ids=item_ids,
             comparison_invocation=comparison_invocation,
             stage_snapshot_files=snapshot_files,
             items_file=items_fingerprint,

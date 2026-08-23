@@ -75,6 +75,12 @@ def test_synthetic_comparison_cli_has_explicit_scoreable_only_live_gate() -> Non
     assert args.public_metadata.name == "public_comparison_metadata_v1.json"
 
 
+def test_synthetic_comparison_cli_accepts_repeatable_item_shards() -> None:
+    args = _parser().parse_args([*_comparison_argv(), "--item-id", "one", "--item-id", "none"])
+
+    assert args.item_id == ["one", "none"]
+
+
 def _comparison_argv(*extra: str) -> list[str]:
     return [
         "run_synthetic_comparison",
@@ -102,6 +108,13 @@ def test_scoreable_only_rejects_non_live_gate_limits(extra: tuple[str, ...]) -> 
         main([*_comparison_argv(*extra), "--scoreable-only"])
 
     assert error.value.code == 2
+
+
+def test_item_shard_rejects_limit_or_scoreable_only() -> None:
+    with pytest.raises(SystemExit):
+        main([*_comparison_argv("--limit", "1"), "--item-id", "one"])
+    with pytest.raises(SystemExit):
+        main([*_comparison_argv("--limit", "1"), "--scoreable-only", "--item-id", "one"])
 
 
 def test_execution_receipt_records_resolved_process_and_determinism(
