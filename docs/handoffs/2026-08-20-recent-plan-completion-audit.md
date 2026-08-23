@@ -115,9 +115,9 @@ branch: "docs/recent-plan-audit-2026-08-20"
   clean commit `933c6ef`; later PR commits do not change scoring semantics. If another interruption
   occurs, resume/finalize this checkpoint from an exact clean `933c6ef` checkout rather than from
   the moving PR head. Do not edit the accepted manifest or bypass its fingerprint check.
-- Durable item files are landing and memory remains bounded with no swap use. First-item samples
-  were roughly 6.7–9.2 minutes, implying an early four-to-five-hour eight-shard estimate; use the
-  item-file timestamps for this in-flight generation because `933c6ef` predates the shard-ETA
+- Durable item files are landing and memory remains bounded with no swap use. All eight first-item
+  samples were roughly 6.7–15.5 minutes, implying an early six-to-nine-hour eight-shard estimate;
+  use item-file timestamps for this in-flight generation because `933c6ef` predates the shard-ETA
   display correction.
 - The U10 live-gate preflight remains clean and ready behind U8. The durable consumer worktrees are
   still exactly `a5bd0512` (mapper) and `bb576ac` (enrich); both environments resolve
