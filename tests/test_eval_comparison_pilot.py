@@ -415,6 +415,9 @@ def test_consumer_environment_fingerprint_uses_probe_digests(
         "model_embedding_dimension": 384,
         "model_device": "cpu",
         "model_snapshot_revision_sha256": "2" * 64,
+        "native_runtime_bytes": 2_500_000,
+        "native_runtime_file_count": 20,
+        "native_runtime_sha256": "9" * 64,
     }
     observed: list[list[str]] = []
 

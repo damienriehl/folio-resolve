@@ -597,6 +597,7 @@ cpu_backend = {
     "processor": platform.processor(),
     "system": platform.system(),
 }
+native_runtime_paths = set()
 if importlib.util.find_spec("numpy") is not None:
     import numpy
 
@@ -621,6 +622,12 @@ if importlib.util.find_spec("torch") is not None:
 if importlib.util.find_spec("threadpoolctl") is not None:
     import threadpoolctl
 
+    threadpool_info = threadpoolctl.threadpool_info()
+    native_runtime_paths.update(
+        Path(entry["filepath"])
+        for entry in threadpool_info
+        if isinstance(entry.get("filepath"), str) and entry["filepath"]
+    )
     cpu_backend["threadpools"] = sorted(
         (
             {
@@ -637,10 +644,35 @@ if importlib.util.find_spec("threadpoolctl") is not None:
                     "version",
                 }
             }
-            for entry in threadpoolctl.threadpool_info()
+            for entry in threadpool_info
         ),
         key=lambda entry: json.dumps(entry, sort_keys=True, separators=(",", ":")),
     )
+maps_path = Path("/proc/self/maps")
+if maps_path.is_file():
+    for line in maps_path.read_text(encoding="utf-8").splitlines():
+        fields = line.split(maxsplit=5)
+        if len(fields) != 6 or not fields[5].startswith("/"):
+            continue
+        mapped_path = fields[5]
+        if mapped_path.endswith(" (deleted)"):
+            raise RuntimeError("deleted native runtime mapping is not allowed")
+        native_runtime_paths.add(Path(mapped_path))
+native_runtime_entries = []
+for path in sorted({path.resolve() for path in native_runtime_paths}):
+    if not path.is_file():
+        raise RuntimeError("loaded native runtime file is unavailable")
+    cache_key = str(path)
+    if cache_key not in resolved_digests:
+        resolved_digests[cache_key] = digest_file(path)
+    native_runtime_entries.append([
+        str(path),
+        resolved_digests[cache_key],
+        path.stat().st_size,
+    ])
+native_runtime_payload = json.dumps(
+    native_runtime_entries, ensure_ascii=True, separators=(",", ":")
+).encode()
 cpu_backend_payload = json.dumps(
     cpu_backend, ensure_ascii=True, sort_keys=True, separators=(",", ":")
 ).encode()
@@ -651,6 +683,9 @@ print(json.dumps({
     "interpreter_sha256": digest_file(interpreter),
     "python_version": sys.version,
     "cpu_backend_sha256": digest_bytes(cpu_backend_payload),
+    "native_runtime_file_count": len(native_runtime_entries),
+    "native_runtime_bytes": sum(entry[2] for entry in native_runtime_entries),
+    "native_runtime_sha256": digest_bytes(native_runtime_payload),
     "distribution_count": len(distributions),
     "distributions_sha256": digest_bytes(distribution_payload),
     "installed_file_count": len(installed_entries),
@@ -948,6 +983,7 @@ def _consumer_environment_fingerprint(
         "path_hooks_sha256",
         "model_assets_sha256",
         "model_snapshot_revision_sha256",
+        "native_runtime_sha256",
     }
     if (
         not isinstance(payload, dict)
@@ -978,6 +1014,8 @@ def _consumer_environment_fingerprint(
         "model_asset_files",
         "model_asset_bytes",
         "model_embedding_dimension",
+        "native_runtime_bytes",
+        "native_runtime_file_count",
     ):
         if not isinstance(payload.get(key), int) or payload[key] < 0:
             raise PilotCheckpointError("consumer environment probe was malformed")
