@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.machinery
 import importlib.metadata
 import json
 import os
@@ -101,8 +102,12 @@ from pathlib import Path
 from urllib.parse import unquote, urlparse
 
 
-if any(name in sys.modules for name in ("sitecustomize", "usercustomize")):
-    raise RuntimeError("startup customization module is not allowed")
+for startup_module in ("sitecustomize", "usercustomize"):
+    if (
+        startup_module in sys.modules
+        or importlib.machinery.PathFinder.find_spec(startup_module, sys.path) is not None
+    ):
+        raise RuntimeError("startup customization module is not allowed")
 
 
 def digest_bytes(value):

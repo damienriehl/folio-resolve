@@ -540,6 +540,27 @@ def test_environment_probe_rejects_sitecustomize(tmp_path: Path) -> None:
     assert "startup customization module" in completed.stderr
 
 
+def test_environment_probe_rejects_failed_sitecustomize(tmp_path: Path) -> None:
+    interpreter, site = _isolated_python_site(tmp_path)
+    marker = tmp_path / "startup-ran"
+    (site / "sitecustomize.py").write_text(
+        f"from pathlib import Path\nPath({str(marker)!r}).touch()\n"
+        "raise ImportError('suppressed startup failure', name='sitecustomize')\n",
+        encoding="utf-8",
+    )
+
+    completed = pilot_module.subprocess.run(
+        [interpreter, "-B", "-P", "-c", pilot_module._CONSUMER_ENVIRONMENT_PROBE],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert marker.is_file(), "the regression must prove startup customization executed"
+    assert completed.returncode != 0
+    assert "startup customization module" in completed.stderr
+
+
 def test_environment_probe_rejects_unowned_executable_pth(tmp_path: Path) -> None:
     interpreter, site = _isolated_python_site(tmp_path)
     (site / "unowned.pth").write_text("import sys; sys.audit('unowned-hook')\n", encoding="utf-8")
