@@ -817,6 +817,7 @@ def test_mapper_fallback_config_is_rejected() -> None:
             "commit_top_n": 10,
             "keyword_weight": 0.6,
             "embedding_weight": 0.4,
+            "embedding_device": "cpu",
             "embedding_rerank": "unavailable",
             "llm_on": False,
         },

@@ -68,6 +68,7 @@ MAPPER_DETERMINISTIC_CONFIG: Mapping[str, object] = {
     "commit_top_n": 10,
     "keyword_weight": 0.6,
     "embedding_weight": 0.4,
+    "embedding_device": "cpu",
     "embedding_rerank": "available",
     "llm_on": False,
 }

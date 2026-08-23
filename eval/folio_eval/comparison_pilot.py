@@ -423,6 +423,7 @@ if model_root.is_dir():
 model_payload = json.dumps(model_entries, ensure_ascii=True, separators=(",", ":")).encode()
 model_assets_complete = False
 model_embedding_dimension = 0
+model_device = ""
 model_snapshot_revision = ""
 if os.environ.get("FOLIO_PROBE_REQUIRE_MODEL_ASSETS") == "1":
     ref_path = model_root / "refs" / "main"
@@ -442,9 +443,15 @@ if os.environ.get("FOLIO_PROBE_REQUIRE_MODEL_ASSETS") == "1":
 
     model = SentenceTransformer(
         "sentence-transformers/all-MiniLM-L6-v2",
+        device="cpu",
         revision=model_snapshot_revision,
         local_files_only=True,
     )
+    model_device = str(model.device)
+    if model_device != "cpu":
+        raise RuntimeError(
+            f"embedding model loaded on {model_device!r}, expected 'cpu'"
+        )
     dimension = model.get_sentence_embedding_dimension()
     if not isinstance(dimension, int) or dimension < 1:
         raise RuntimeError("embedding model cache did not load a valid dimension")
@@ -497,6 +504,7 @@ print(json.dumps({
     "model_assets_complete": model_assets_complete,
     "model_assets_sha256": digest_bytes(model_payload),
     "model_embedding_dimension": model_embedding_dimension,
+    "model_device": model_device,
     "model_snapshot_revision_sha256": digest_bytes(model_snapshot_revision.encode()),
 }, sort_keys=True, separators=(",", ":")))
 """
@@ -631,6 +639,8 @@ def _consumer_environment_fingerprint(
             raise PilotCheckpointError("consumer environment probe was malformed")
     if not isinstance(payload.get("python_version"), str) or not payload["python_version"]:
         raise PilotCheckpointError("consumer environment probe was malformed")
+    if not isinstance(payload.get("model_device"), str):
+        raise PilotCheckpointError("consumer environment probe was malformed")
     if not isinstance(payload.get("model_assets_present"), bool):
         raise PilotCheckpointError("consumer environment probe was malformed")
     if not isinstance(payload.get("model_assets_complete"), bool):
@@ -638,6 +648,7 @@ def _consumer_environment_fingerprint(
     if require_model_assets and (
         payload.get("model_assets_present") is not True
         or payload.get("model_assets_complete") is not True
+        or payload.get("model_device") != "cpu"
     ):
         raise PilotCheckpointError(
             "consumer embedding model cache must load completely offline before pilot initialization"

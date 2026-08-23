@@ -233,6 +233,7 @@ def test_consumer_environment_fingerprint_uses_probe_digests(
         "model_assets_complete": True,
         "model_assets_sha256": "d" * 64,
         "model_embedding_dimension": 384,
+        "model_device": "cpu",
         "model_snapshot_revision_sha256": "2" * 64,
     }
     observed: list[list[str]] = []
@@ -458,6 +459,11 @@ def test_environment_probe_rejects_symlinked_model_cache_directory(
 
     assert completed.returncode != 0
     assert "symlinked model-cache directory" in completed.stderr
+
+
+def test_environment_probe_explicitly_forces_and_verifies_cpu() -> None:
+    assert 'device="cpu"' in pilot_module._CONSUMER_ENVIRONMENT_PROBE
+    assert 'model_device != "cpu"' in pilot_module._CONSUMER_ENVIRONMENT_PROBE
 
 
 def test_environment_probe_rejects_symlinked_editable_directory(tmp_path: Path) -> None:
