@@ -578,10 +578,8 @@ def run_local_stack(
             candidate_rows.append(
                 {
                     "iri": trace.iri,
-                    "label": trace.label,
                     "branch": trace.branch,
                     "extraction_path": trace.extraction_path,
-                    "surface_term": trace.surface_term,
                     "pre_gate_score": trace.pre_gate_score,
                     "post_gate_score": trace.post_gate_score,
                     "gate_disposition": trace.gate_disposition,

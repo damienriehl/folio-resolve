@@ -551,10 +551,8 @@ def test_local_stack_emits_attribution_ready_candidate_stages(tmp_path: Path) ->
         "candidates": [
             {
                 "iri": "iri:a",
-                "label": "A",
                 "branch": "",
                 "extraction_path": "multi_strategy_recall",
-                "surface_term": "Alpha beta",
                 "pre_gate_score": 90.0,
                 "post_gate_score": 88.0,
                 "gate_disposition": "survived",
@@ -566,10 +564,8 @@ def test_local_stack_emits_attribution_ready_candidate_stages(tmp_path: Path) ->
             },
             {
                 "iri": "iri:b",
-                "label": "B",
                 "branch": "",
                 "extraction_path": "aho_corasick",
-                "surface_term": "B",
                 "pre_gate_score": 100.0,
                 "post_gate_score": None,
                 "gate_disposition": "blocklist",
@@ -581,10 +577,8 @@ def test_local_stack_emits_attribution_ready_candidate_stages(tmp_path: Path) ->
             },
             {
                 "iri": "iri:c",
-                "label": "C",
                 "branch": "",
                 "extraction_path": "multi_strategy_recall",
-                "surface_term": "beta",
                 "pre_gate_score": 40.0,
                 "post_gate_score": 40.0,
                 "gate_disposition": "score_floor",
