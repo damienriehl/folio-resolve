@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import subprocess
 from contextlib import nullcontext
+from copy import deepcopy
 from dataclasses import replace
 from hashlib import sha256
 from pathlib import Path
@@ -460,6 +461,14 @@ def test_versioned_public_metadata_exempts_only_exact_comparison_paths() -> None
     metadata = load_public_comparison_metadata(DEFAULT_COMPARISON_PUBLIC_METADATA_PATH)
 
     preflight_comparison_publication(payload, manifest, salt, public_metadata=metadata)
+
+    mapper_only = deepcopy(payload)
+    del mapper_only["stacks"]["folio-enrich:incumbent"]
+    preflight_comparison_publication(mapper_only, manifest, salt, public_metadata=metadata)
+
+    enrich_only = deepcopy(payload)
+    del enrich_only["stacks"]["folio-mapper:incumbent"]
+    preflight_comparison_publication(enrich_only, manifest, salt, public_metadata=metadata)
 
     with pytest.raises(ComparisonError, match="collisions=1"):
         preflight_comparison_publication(

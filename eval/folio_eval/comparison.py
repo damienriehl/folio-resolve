@@ -1007,6 +1007,12 @@ def preflight_comparison_publication(
         if config_sha != public_metadata.answer_rule_config_sha256:
             raise ComparisonError("comparison public metadata answer-rule config hash mismatch")
         for path, (kind, expected) in public_metadata.fields.items():
+            if path[0] == "stacks":
+                stacks = payload.get("stacks")
+                if not isinstance(stacks, Mapping):
+                    raise ComparisonError("comparison stacks are malformed")
+                if path[1] not in stacks:
+                    continue
             if kind == "template":
                 if len(path) < 2 or path[0] != "stacks":
                     raise ComparisonError("comparison public metadata template is not stack-bound")
