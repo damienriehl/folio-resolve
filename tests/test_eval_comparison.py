@@ -14,6 +14,7 @@ import folio_eval.comparison as comparison_module
 import pytest
 from folio_eval.answer_rule import AnswerRuleConfig
 from folio_eval.comparison import (
+    DEFAULT_COMPARISON_PUBLIC_METADATA_PATH,
     ComparisonError,
     IncumbentInstallMismatch,
     StackContractError,
@@ -23,7 +24,9 @@ from folio_eval.comparison import (
     build_comparison,
     classify_verdict,
     emit_items_file,
+    load_public_comparison_metadata,
     parse_stack_output,
+    preflight_comparison_publication,
     run_consumer_stack,
     run_local_stack,
     score_stack,
@@ -372,6 +375,93 @@ def test_write_comparison_leakchecks_every_string(tmp_path: Path) -> None:
             leak_manifest=manifest,
             salt=salt,
         )
+
+
+def _comparison_public_metadata_payload() -> dict[str, object]:
+    argv = ["safe"] * 15
+    argv[2] = "run_synthetic_comparison"
+    argv[4] = "eval/synthetic/corpus_v1.manifest.json"
+    argv[6] = "eval/synthetic/answer_rule_config_synthetic_v1.json"
+    argv[14] = "eval/synthetic/firm-surface-manifest-v1.json"
+    rationale = "synthetic lane v1: top_k sized to corpus gold density (uncalibrated)"
+    return {
+        "kind": "synthetic_comparison",
+        "provenance": {
+            "comparison_invocation": {"argv": argv},
+            "config_selection": {
+                "answer_rule_config_sha256": (
+                    "ac413db665602cdde841a7e7590adc4eba02cded82266df5e763d7be7dd87c03"
+                ),
+                "answer_rule_config": {"rationale": rationale},
+            },
+        },
+        "stacks": {
+            "folio-enrich:incumbent": {
+                "invocation": {
+                    "argv": ["python", "/repos/enrich/backend/eval/synthetic_runner.py"],
+                    "working_directory": "/repos/enrich",
+                }
+            },
+            "folio-mapper:incumbent": {
+                "invocation": {
+                    "argv": ["python", "/repos/mapper/backend/scripts/synthetic_runner.py"],
+                    "working_directory": "/repos/mapper",
+                }
+            },
+            "folio-resolve:candidate": {"config": {"rationale": rationale}},
+        },
+    }
+
+
+def test_versioned_public_metadata_exempts_only_exact_comparison_paths() -> None:
+    salt = b"0123456789abcdef"
+    payload = _comparison_public_metadata_payload()
+    public_values = [
+        "synthetic_comparison",
+        "run_synthetic_comparison",
+        "eval/synthetic/corpus_v1.manifest.json",
+        "eval/synthetic/answer_rule_config_synthetic_v1.json",
+        "eval/synthetic/firm-surface-manifest-v1.json",
+        "synthetic lane v1: top_k sized to corpus gold density (uncalibrated)",
+        "/repos/enrich/backend/eval/synthetic_runner.py",
+        "/repos/mapper/backend/scripts/synthetic_runner.py",
+        "Secret Surface",
+    ]
+    manifest = build_manifest(public_values, salt=salt, gold_version="g", gold_content_sha256="h")
+    metadata = load_public_comparison_metadata(DEFAULT_COMPARISON_PUBLIC_METADATA_PATH)
+
+    preflight_comparison_publication(payload, manifest, salt, public_metadata=metadata)
+
+    with pytest.raises(ComparisonError, match="collisions=1"):
+        preflight_comparison_publication(
+            {**payload, "note": "Secret Surface"},
+            manifest,
+            salt,
+            public_metadata=metadata,
+        )
+    with pytest.raises(ComparisonError, match="collisions"):
+        preflight_comparison_publication(
+            {**payload, "note": {"escaped": "Secret\nSurface"}},
+            manifest,
+            salt,
+            public_metadata=metadata,
+        )
+
+
+def test_comparison_public_metadata_rejects_value_drift() -> None:
+    salt = b"0123456789abcdef"
+    payload = _comparison_public_metadata_payload()
+    payload["kind"] = "changed"
+    metadata = load_public_comparison_metadata(DEFAULT_COMPARISON_PUBLIC_METADATA_PATH)
+    manifest = build_manifest(
+        ["unrelated protected value"],
+        salt=salt,
+        gold_version="g",
+        gold_content_sha256="h",
+    )
+
+    with pytest.raises(ComparisonError, match="value mismatch"):
+        preflight_comparison_publication(payload, manifest, salt, public_metadata=metadata)
 
 
 def test_build_comparison_records_pilot_iri_sets_and_reproducibility_provenance(

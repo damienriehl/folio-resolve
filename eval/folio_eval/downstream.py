@@ -981,6 +981,11 @@ def _parser() -> argparse.ArgumentParser:
     comparison.add_argument("--row-snapshot-dir", type=Path, required=True)
     comparison.add_argument("--leak-manifest", type=Path, required=True)
     comparison.add_argument("--salt-file", type=Path, required=True)
+    comparison.add_argument(
+        "--public-metadata",
+        type=Path,
+        default=_EVAL_ROOT / "synthetic" / "public_comparison_metadata_v1.json",
+    )
     comparison.add_argument("--mapper-root", type=Path, default=None)
     comparison.add_argument("--enrich-root", type=Path, default=None)
     comparison.add_argument("--consumer", choices=["mapper", "enrich", "all"], default="all")
@@ -1036,7 +1041,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         from folio_resolve.ontology import FolioPythonProvider
 
         from .answer_rule import load_config
-        from .comparison import run_synthetic_comparison, write_comparison
+        from .comparison import (
+            load_public_comparison_metadata,
+            run_synthetic_comparison,
+            write_comparison,
+        )
         from .leakcheck import load_manifest
         from .synthesize import load_corpus
         from .synthetic_score import DocumentAdapter
@@ -1044,6 +1053,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         corpus = load_corpus(args.corpus_manifest)
         config = load_config(args.config)
         leak_manifest = load_manifest(args.leak_manifest)
+        public_metadata = load_public_comparison_metadata(args.public_metadata)
         salt = args.salt_file.read_bytes()
         adapter = DocumentAdapter(FolioPythonProvider(_folio=FOLIO()))
         specs = []
@@ -1073,6 +1083,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             payload,
             leak_manifest=leak_manifest,
             salt=salt,
+            public_metadata=public_metadata,
         )
         print(canonical_json(payload))
         return 0

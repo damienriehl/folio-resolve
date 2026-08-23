@@ -72,6 +72,7 @@ def test_synthetic_comparison_cli_has_explicit_scoreable_only_live_gate() -> Non
 
     assert args.limit == 1
     assert args.scoreable_only is True
+    assert args.public_metadata.name == "public_comparison_metadata_v1.json"
 
 
 def _comparison_argv(*extra: str) -> list[str]:
