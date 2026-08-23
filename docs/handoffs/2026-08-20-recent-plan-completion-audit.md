@@ -156,7 +156,7 @@ branch: "docs/recent-plan-audit-2026-08-20"
 | U7 grader/close-call lane | **Partial** | Code is complete. The first consensus-audit sitting, confidence-floor calibration, and human ratification into corpus v2 wait on D1/D2 and owner adjudication. |
 | U8 synthetic scoring | **Partial; resumable eight-shard rerun active** | The bounded-cache path and power-loss-safe checkpointing are committed and pushed in PR #9. The generation is pinned to `933c6ef`; it must finish, finalize, validate, and commit `eval/reports/synthetic-baseline-v1.json`. |
 | U9 guarded iteration loop | **Partial** | Code is complete; no real corpus-v1 improvement iteration is recorded yet. Pilot must run first. |
-| U10 deterministic comparison | **Partial; prerequisites merged and verified** | Local live-gate selection, reproducibility receipts, stage attribution, and fail-closed consumer contracts are implemented and pushed. Mapper #9 and enrich #38 are merged; both landed trees and active environments resolve the required common `folio-python 0.3.6`. Run the live gate, 30-item pilot, and final full comparison after U8 releases the shared runtime. |
+| U10 deterministic comparison | **Partial; code published in PR #9 and prerequisites verified** | Local live-gate selection, reproducibility receipts, stage attribution, and fail-closed consumer contracts are included in PR #9. Mapper #9 and enrich #38 are merged; both landed trees and active environments resolve the required common `folio-python 0.3.6`. Run the live gate, 30-item pilot, and final full comparison after U8 releases the shared runtime. |
 | U11 owner-run LLM lanes | **Partial / owner-run** | Flags and seams are merged. Run both shipped configurations with owner-held keys and record explicit skip markers where unavailable. |
 | U12 parity + attribution | **Partial** | Static parity map is complete. Add controlled replay/ablation only where U10 reveals an incumbent win, subject to D4. |
 | U13 campaign report/verdict | **Not started** | Assemble after U9/U10/U12; final firm exam and adoption decision are owner gates. |
@@ -176,11 +176,11 @@ from running in the same session.
    locks and active environments resolve `folio-python 0.3.6`. Focused contract suites passed on
    the identical pre-merge trees. Preserve the fail-closed aborts for version drift, unavailable
    mapper embedding rerank, and enrich setting drift in every live run.
-3. **Publish the completed U10 deterministic-receipt hardening after U8.** The implementation is
-   committed and pushed on `fix/u10-comparison-provenance`; once the parent U8 branch contains its
-   validated report and is ready for review, open the correctly scoped folio-resolve PR without
-   dropping the true one-scoreable-item gate, exact process receipts, input fingerprints, full
-   stage snapshots, gold/no-match sets, or candidate lifecycle attribution.
+3. **Complete — publish the U10 deterministic-receipt hardening.** The implementation commits
+   `732325b` and `f64f08c` are included in PR #9 together with the U8 recovery chain. Do not open a
+   duplicate U10 PR. Preserve the true one-scoreable-item gate, exact process receipts, input
+   fingerprints, full stage snapshots, gold/no-match sets, and candidate lifecycle attribution
+   when running the live gate and pilot.
 4. **Run U10 live gate and 30-item pilot.** Use the pinned v0.4.0 incumbent lanes in the two
    sibling repos, leave both trees byte-identical to their starting status, and commit the pilot
    artifact or a clearly named pilot report if the final report path is reserved.
