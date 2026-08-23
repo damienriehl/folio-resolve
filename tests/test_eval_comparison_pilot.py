@@ -341,9 +341,12 @@ def test_ignored_legacy_importable_files_are_rejected(
         pilot_module._assert_no_ignored_importables(tmp_path, "eval")
 
 
-def test_nonimportable_and_pep3147_cache_files_are_allowed(
+def test_nonimportable_files_are_allowed_and_pep3147_bytecode_is_hashed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    bytecode = tmp_path / "eval" / "__pycache__" / "json.cpython-311.pyc"
+    bytecode.parent.mkdir(parents=True)
+    bytecode.write_bytes(b"loadable-bytecode")
     monkeypatch.setattr(
         pilot_module.subprocess,
         "run",
@@ -357,7 +360,18 @@ def test_nonimportable_and_pep3147_cache_files_are_allowed(
         ),
     )
 
-    pilot_module._assert_no_ignored_importables(tmp_path, "eval")
+    observed = pilot_module._assert_no_ignored_importables(tmp_path, "eval")
+
+    assert observed == {
+        "bytes": len(b"loadable-bytecode"),
+        "files": 1,
+        "sha256": pilot_module.sha256_bytes(
+            json.dumps(
+                [["eval/__pycache__/json.cpython-311.pyc", pilot_module._sha256_file(bytecode), 17]],
+                separators=(",", ":"),
+            ).encode()
+        ),
+    }
 
 
 def test_checkpoint_manifest_is_create_once_and_fingerprint_bound(tmp_path: Path) -> None:
@@ -372,6 +386,32 @@ def test_checkpoint_manifest_is_create_once_and_fingerprint_bound(tmp_path: Path
             path,
             _checkpoint_manifest(fingerprint={"git": "changed"}, item_ids=("one", "none")),
         )
+
+
+def test_fingerprint_boundary_reloads_corpus_from_supplied_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stale = _corpus(tmp_path)
+    current = deepcopy(stale)
+    manifest_path = tmp_path / "external" / "corpus.manifest.json"
+    args = SimpleNamespace(corpus_manifest=manifest_path)
+    observed: list[LoadedCorpus] = []
+    monkeypatch.setattr(pilot_module, "load_corpus", lambda path: current if path == manifest_path else None)
+    monkeypatch.setattr(
+        pilot_module,
+        "_fingerprint_for_args",
+        lambda _args, corpus: observed.append(corpus) or {"stable": True},
+    )
+
+    refreshed = pilot_module._require_current_fingerprint(
+        args,
+        stale,
+        {"stable": True},
+        boundary="test boundary",
+    )
+
+    assert refreshed is current
+    assert observed == [current]
 
 
 def test_consumer_environment_fingerprint_uses_probe_digests(
@@ -1160,7 +1200,13 @@ def test_run_shard_uses_one_explicit_item_and_suppresses_large_stdout(
     assert observed["env"]["ACCELERATE_USE_CPU"] == "true"
     assert observed["env"]["CUDA_VISIBLE_DEVICES"] == ""
     assert observed["env"]["OMP_NUM_THREADS"] == "1"
-    assert events == ["directory:stages", "durable", "loaded"]
+    assert events == [
+        "directory:incumbent",
+        "directory:incumbent",
+        "directory:candidate",
+        "durable",
+        "loaded",
+    ]
 
 
 def test_finalize_durably_creates_output_parent_before_publish(

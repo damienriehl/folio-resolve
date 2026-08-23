@@ -41,6 +41,11 @@ SHARD_COMPLETION_VERSION = 1
 DEFAULT_LIMIT = 30
 INCUMBENT_VERSION = "0.4.0"
 PUBLISHED_COMPARISON_REPORT = Path("eval/reports/synthetic-comparison-v1.json")
+PILOT_STACK_LANES = (
+    ("folio-enrich", "incumbent"),
+    ("folio-mapper", "incumbent"),
+    ("folio-resolve", "candidate"),
+)
 _OFFLINE_RUNTIME_OVERRIDES = {
     "ACCELERATE_USE_CPU": "true",
     "CUDA_VISIBLE_DEVICES": "",
@@ -862,8 +867,8 @@ def _item_key(item_id: str) -> str:
     return hashlib.sha256(item_id.encode()).hexdigest()
 
 
-def _assert_no_ignored_importables(repo_root: Path, import_root: str) -> None:
-    """Reject ignored files that Python could execute from a runner import root."""
+def _assert_no_ignored_importables(repo_root: Path, import_root: str) -> dict[str, object]:
+    """Reject sourceless imports and hash source-associated ignored bytecode."""
     completed = subprocess.run(
         [
             "git",
@@ -884,6 +889,7 @@ def _assert_no_ignored_importables(repo_root: Path, import_root: str) -> None:
         raise PilotCheckpointError(
             f"could not inspect ignored importables under {repo_root / import_root}"
         )
+    bytecode_entries: list[tuple[str, str, int]] = []
     rejected = []
     for raw_path in completed.stdout.splitlines():
         relative = Path(raw_path)
@@ -891,6 +897,12 @@ def _assert_no_ignored_importables(repo_root: Path, import_root: str) -> None:
             continue
         suffix = relative.suffix.lower()
         if suffix in {".pyc", ".pyo"} and "__pycache__" in relative.parts:
+            path = repo_root / relative
+            if not path.is_file():
+                raise PilotCheckpointError(f"ignored bytecode is unavailable: {path}")
+            bytecode_entries.append(
+                (relative.as_posix(), _sha256_file(path), path.stat().st_size)
+            )
             continue
         if suffix in {".py", ".pyc", ".pyo", ".pyd", ".so"}:
             rejected.append(relative.as_posix())
@@ -899,6 +911,14 @@ def _assert_no_ignored_importables(repo_root: Path, import_root: str) -> None:
             f"ignored executable import files are not allowed under {repo_root / import_root}: "
             + ", ".join(sorted(rejected))
         )
+    bytecode_entries.sort()
+    return {
+        "bytes": sum(entry[2] for entry in bytecode_entries),
+        "files": len(bytecode_entries),
+        "sha256": sha256_bytes(
+            json.dumps(bytecode_entries, ensure_ascii=True, separators=(",", ":")).encode()
+        ),
+    }
 
 
 def _consumer_environment_fingerprint(
@@ -1157,9 +1177,9 @@ def _fingerprint(
     ontology_pin = assert_ontology_pin(corpus.manifest.ontology_cache_sha256)
     mapper = mapper_spec(mapper_root)
     enrich = enrich_spec(enrich_root)
-    _assert_no_ignored_importables(FOLIO_RESOLVE_ROOT, "eval")
-    _assert_no_ignored_importables(mapper.repo_root, "backend")
-    _assert_no_ignored_importables(enrich.repo_root, "backend")
+    candidate_ignored_bytecode = _assert_no_ignored_importables(FOLIO_RESOLVE_ROOT, "eval")
+    mapper_ignored_bytecode = _assert_no_ignored_importables(mapper.repo_root, "backend")
+    enrich_ignored_bytecode = _assert_no_ignored_importables(enrich.repo_root, "backend")
     candidate_environment = _consumer_environment_fingerprint(Path(sys.executable))
     mapper_environment = _consumer_environment_fingerprint(
         mapper.venv_python,
@@ -1170,9 +1190,11 @@ def _fingerprint(
     return {
         "answer_rule_config_sha256": config.content_sha256(),
         "candidate_environment": candidate_environment,
+        "candidate_ignored_bytecode": candidate_ignored_bytecode,
         "candidate_repository": _git_repository_state(FOLIO_RESOLVE_ROOT),
         "corpus_content_sha256": corpus.manifest.content_sha256,
         "enrich_environment": enrich_environment,
+        "enrich_ignored_bytecode": enrich_ignored_bytecode,
         "enrich_lock_sha256": _sha256_file(enrich.repo_root / "backend" / "uv.lock"),
         "enrich_repository": _git_repository_state(enrich_root),
         "folio_python_lock_sha256": _sha256_file(FOLIO_RESOLVE_ROOT / "uv.lock"),
@@ -1181,6 +1203,7 @@ def _fingerprint(
         "incumbent_version": INCUMBENT_VERSION,
         "leak_manifest_sha256": _sha256_file(leak_manifest_path),
         "mapper_environment": mapper_environment,
+        "mapper_ignored_bytecode": mapper_ignored_bytecode,
         "mapper_lock_sha256": _sha256_file(mapper.repo_root / "backend" / "uv.lock"),
         "mapper_repository": _git_repository_state(mapper_root),
         "nomatch_content_sha256": corpus.manifest.nomatch_content_sha256,
@@ -1216,9 +1239,11 @@ def _require_current_fingerprint(
     expected: Mapping[str, object],
     *,
     boundary: str,
-) -> None:
-    if _fingerprint_for_args(args, corpus) != expected:
+) -> LoadedCorpus:
+    current_corpus = load_corpus(args.corpus_manifest)
+    if _fingerprint_for_args(args, current_corpus) != expected:
         raise PilotCheckpointError(f"pilot inputs drifted {boundary}")
+    return current_corpus
 
 
 def _checkpoint_manifest(
@@ -1402,7 +1427,8 @@ def _run_shard(args: argparse.Namespace, item_id: str, fingerprint: Mapping[str,
     if report.exists():
         report.unlink()
         fsync_directory(report.parent)
-    _durably_create_directory(stages)
+    for stack, lane in PILOT_STACK_LANES:
+        _durably_create_directory(stages / stack / lane)
     command = [
         sys.executable,
         "eval/run_downstream.py",
@@ -1733,7 +1759,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             if completed_after == completed_before:
                 raise PilotCheckpointError("pilot checkpoint made no progress")
             return 0
-    _require_current_fingerprint(args, corpus, fingerprint, boundary="before finalization")
+    corpus = _require_current_fingerprint(
+        args, corpus, fingerprint, boundary="before finalization"
+    )
     _finalize(args, corpus, item_ids, manifest)
     print(f"pilot report: {args.out}")
     return 0
