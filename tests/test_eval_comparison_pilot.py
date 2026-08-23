@@ -602,11 +602,24 @@ def test_finalization_invocation_records_supplied_input_paths(tmp_path: Path) ->
     assert argv[argv.index("--enrich-root") + 1] == "custom/enrich"
     assert argv[argv.index("--incumbent-version") + 1] == "0.4.0"
     assert receipt["environment"] == {
+        "ACCELERATE_USE_CPU": "true",
+        "CUDA_VISIBLE_DEVICES": "",
         "HF_HUB_DISABLE_TELEMETRY": "1",
         "HF_HUB_OFFLINE": "1",
+        "HIP_VISIBLE_DEVICES": "",
+        "MKL_DYNAMIC": "FALSE",
+        "MKL_NUM_THREADS": "1",
+        "NVIDIA_VISIBLE_DEVICES": "none",
+        "NUMEXPR_NUM_THREADS": "1",
+        "OMP_DYNAMIC": "FALSE",
+        "OMP_NUM_THREADS": "1",
+        "OPENBLAS_NUM_THREADS": "1",
         "PYTHONDONTWRITEBYTECODE": "1",
         "PYTHONHASHSEED": pilot_module.os.environ.get("PYTHONHASHSEED", ""),
+        "ROCR_VISIBLE_DEVICES": "",
+        "TOKENIZERS_PARALLELISM": "false",
         "TRANSFORMERS_OFFLINE": "1",
+        "VECLIB_MAXIMUM_THREADS": "1",
     }
 
 
@@ -733,6 +746,9 @@ def test_run_shard_uses_one_explicit_item_and_suppresses_large_stdout(
     assert "PYTHONPATH" not in observed["env"]
     assert observed["env"]["HF_HUB_OFFLINE"] == "1"
     assert observed["env"]["TRANSFORMERS_OFFLINE"] == "1"
+    assert observed["env"]["ACCELERATE_USE_CPU"] == "true"
+    assert observed["env"]["CUDA_VISIBLE_DEVICES"] == ""
+    assert observed["env"]["OMP_NUM_THREADS"] == "1"
     assert events == ["directory:stages", "durable", "loaded"]
 
 

@@ -37,6 +37,25 @@ PILOT_CHECKPOINT_KIND = "synthetic-comparison-pilot-checkpoint"
 PILOT_CHECKPOINT_VERSION = 1
 DEFAULT_LIMIT = 30
 INCUMBENT_VERSION = "0.4.0"
+_OFFLINE_RUNTIME_OVERRIDES = {
+    "ACCELERATE_USE_CPU": "true",
+    "CUDA_VISIBLE_DEVICES": "",
+    "HF_HUB_DISABLE_TELEMETRY": "1",
+    "HF_HUB_OFFLINE": "1",
+    "HIP_VISIBLE_DEVICES": "",
+    "MKL_DYNAMIC": "FALSE",
+    "MKL_NUM_THREADS": "1",
+    "NVIDIA_VISIBLE_DEVICES": "none",
+    "NUMEXPR_NUM_THREADS": "1",
+    "OMP_DYNAMIC": "FALSE",
+    "OMP_NUM_THREADS": "1",
+    "OPENBLAS_NUM_THREADS": "1",
+    "PYTHONDONTWRITEBYTECODE": "1",
+    "ROCR_VISIBLE_DEVICES": "",
+    "TOKENIZERS_PARALLELISM": "false",
+    "TRANSFORMERS_OFFLINE": "1",
+    "VECLIB_MAXIMUM_THREADS": "1",
+}
 
 _CONSUMER_ENVIRONMENT_PROBE = r"""
 import hashlib
@@ -466,14 +485,7 @@ def _runtime_environment() -> dict[str, str]:
 def _offline_runtime_environment() -> dict[str, str]:
     """Return a deterministic child environment that cannot mutate model or bytecode caches."""
     environment = _runtime_environment()
-    environment.update(
-        {
-            "HF_HUB_DISABLE_TELEMETRY": "1",
-            "HF_HUB_OFFLINE": "1",
-            "PYTHONDONTWRITEBYTECODE": "1",
-            "TRANSFORMERS_OFFLINE": "1",
-        }
-    )
+    environment.update(_OFFLINE_RUNTIME_OVERRIDES)
     return environment
 
 
@@ -693,6 +705,10 @@ def _fingerprint(
         "public_metadata_sha256": _sha256_file(public_metadata_path),
         "python_hash_seed": os.environ.get("PYTHONHASHSEED", ""),
         "python_version": platform.python_version(),
+        "runtime_environment": {
+            **_OFFLINE_RUNTIME_OVERRIDES,
+            "PYTHONHASHSEED": os.environ.get("PYTHONHASHSEED", ""),
+        },
         "salt_file_sha256": _sha256_file(salt_file_path),
         "scoreable_limit": limit,
     }
@@ -1019,13 +1035,7 @@ def _finalization_invocation(
         "working_directory": str(FOLIO_RESOLVE_ROOT),
         "environment": {
             key: environment.get(key, "")
-            for key in (
-                "HF_HUB_DISABLE_TELEMETRY",
-                "HF_HUB_OFFLINE",
-                "PYTHONDONTWRITEBYTECODE",
-                "PYTHONHASHSEED",
-                "TRANSFORMERS_OFFLINE",
-            )
+            for key in (*sorted(_OFFLINE_RUNTIME_OVERRIDES), "PYTHONHASHSEED")
         },
     }
 
