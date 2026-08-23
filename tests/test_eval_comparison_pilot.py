@@ -139,6 +139,15 @@ def test_python_optimization_is_rejected_and_bound(
         pilot_module._assert_unoptimized_runtime()
 
 
+def test_external_python_bytecode_cache_is_rejected_and_sanitized(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("PYTHONPYCACHEPREFIX", "/mutable/bytecode-cache")
+    with pytest.raises(PilotCheckpointError, match="PYTHONPYCACHEPREFIX"):
+        pilot_module._assert_clean_runtime_environment()
+    assert "PYTHONPYCACHEPREFIX" not in pilot_module._runtime_environment()
+
+
 def test_native_runtime_overrides_are_rejected_and_sanitized(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
