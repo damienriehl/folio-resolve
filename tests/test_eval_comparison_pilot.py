@@ -221,6 +221,39 @@ def test_environment_probe_hashes_editable_source_bytes(tmp_path: Path) -> None:
     assert before["editable_sources_sha256"] != after["editable_sources_sha256"]
 
 
+def test_environment_probe_rejects_unowned_pth_import_root(tmp_path: Path) -> None:
+    site = tmp_path / "site"
+    dist_info = site / "demo-1.0.dist-info"
+    source_root = tmp_path / "unowned"
+    dist_info.mkdir(parents=True)
+    source_root.mkdir()
+    (source_root / "module.py").write_text("VALUE = 1\n", encoding="utf-8")
+    (site / "demo.pth").write_text(f"{source_root}\n", encoding="utf-8")
+    (dist_info / "METADATA").write_text(
+        "Metadata-Version: 2.1\nName: demo\nVersion: 1.0\n",
+        encoding="utf-8",
+    )
+    (dist_info / "RECORD").write_text(
+        "demo.pth,,\n"
+        "demo-1.0.dist-info/METADATA,,\n"
+        "demo-1.0.dist-info/RECORD,,\n",
+        encoding="utf-8",
+    )
+    environment = dict(pilot_module.os.environ)
+    environment["PYTHONPATH"] = str(site)
+
+    completed = pilot_module.subprocess.run(
+        [pilot_module.sys.executable, "-S", "-c", pilot_module._CONSUMER_ENVIRONMENT_PROBE],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+
+    assert completed.returncode != 0
+    assert "unowned .pth import root" in completed.stderr
+
+
 def test_fingerprint_prepares_both_incumbents_before_probing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

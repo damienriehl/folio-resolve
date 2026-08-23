@@ -93,36 +93,44 @@ for distribution in importlib.metadata.distributions():
                         pth_paths.append(candidate.resolve())
 
     editable_sources = []
+    excluded_source_parts = {
+        ".git",
+        ".mypy_cache",
+        ".pytest_cache",
+        ".ruff_cache",
+        ".venv",
+        "__pycache__",
+        "node_modules",
+    }
     if direct_url_text:
         direct_url_payload = json.loads(direct_url_text)
         if direct_url_payload.get("dir_info", {}).get("editable") is True:
             parsed = urlparse(direct_url_payload.get("url", ""))
             editable_root = Path(unquote(parsed.path)).resolve()
             source_roots = []
-            pyproject = editable_root / "pyproject.toml"
-            if pyproject.is_file():
-                project_config = tomllib.loads(pyproject.read_text(encoding="utf-8"))
-                hatch_packages = (
-                    project_config.get("tool", {})
-                    .get("hatch", {})
-                    .get("build", {})
-                    .get("targets", {})
-                    .get("wheel", {})
-                    .get("packages", [])
-                )
-                source_roots.extend(
-                    (editable_root / package).resolve()
-                    for package in hatch_packages
-                    if isinstance(package, str) and (editable_root / package).is_dir()
-                )
+            for candidate in pth_paths:
+                try:
+                    candidate.relative_to(editable_root)
+                except ValueError as exc:
+                    raise RuntimeError("editable .pth import root is outside its project") from exc
+                source_roots.append(candidate)
             if not source_roots:
-                for candidate in pth_paths:
-                    try:
-                        candidate.relative_to(editable_root)
-                    except ValueError:
-                        continue
-                    if candidate != editable_root:
-                        source_roots.append(candidate)
+                pyproject = editable_root / "pyproject.toml"
+                if pyproject.is_file():
+                    project_config = tomllib.loads(pyproject.read_text(encoding="utf-8"))
+                    hatch_packages = (
+                        project_config.get("tool", {})
+                        .get("hatch", {})
+                        .get("build", {})
+                        .get("targets", {})
+                        .get("wheel", {})
+                        .get("packages", [])
+                    )
+                    source_roots.extend(
+                        (editable_root / package).resolve()
+                        for package in hatch_packages
+                        if isinstance(package, str) and (editable_root / package).is_dir()
+                    )
             if not source_roots and (editable_root / "src").is_dir():
                 source_roots.append((editable_root / "src").resolve())
             if not source_roots:
@@ -140,7 +148,7 @@ for distribution in importlib.metadata.distributions():
                 for path in sorted(source_root.rglob("*")):
                     if (
                         not path.is_file()
-                        or "__pycache__" in path.parts
+                        or any(part in excluded_source_parts for part in path.parts)
                         or path.suffix in {".pyc", ".pyo"}
                     ):
                         continue
@@ -155,6 +163,8 @@ for distribution in importlib.metadata.distributions():
                     ]
                     editable_sources.append(entry)
                     editable_entries.append([canonical_name, *entry])
+    elif pth_paths:
+        raise RuntimeError("unowned .pth import root is not allowed")
     distributions.append([
         canonical_name,
         distribution.version,
