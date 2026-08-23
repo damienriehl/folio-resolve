@@ -55,7 +55,7 @@ The document adapter is intentionally expensive. Production baseline runs must u
 gitignored checkpoint directory so an interruption does not discard completed items:
 
 ```bash
-PYTHONHASHSEED=0 uv run python eval/run_synthetic.py \
+PYTHONHASHSEED=0 uv run --extra folio python eval/run_synthetic.py \
   --corpus-manifest eval/synthetic/corpus_v1.manifest.json \
   --config eval/synthetic/answer_rule_config_synthetic_v1.json \
   --out eval/reports/synthetic-baseline-v1.json \
