@@ -903,6 +903,7 @@ def test_incumbents_are_prepared_once_before_read_only_fingerprinting(
         "prepare-index:folio-mapper",
         "pin:ontology",
         f"imports:{pilot_module.FOLIO_RESOLVE_ROOT}:eval",
+        f"imports:{pilot_module.FOLIO_RESOLVE_ROOT}:src",
         f"imports:{mapper.repo_root}:backend",
         f"imports:{enrich.repo_root}:backend",
         f"probe:{Path(pilot_module.sys.executable)}",

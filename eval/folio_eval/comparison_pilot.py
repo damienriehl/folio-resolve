@@ -1177,7 +1177,10 @@ def _fingerprint(
     ontology_pin = assert_ontology_pin(corpus.manifest.ontology_cache_sha256)
     mapper = mapper_spec(mapper_root)
     enrich = enrich_spec(enrich_root)
-    candidate_ignored_bytecode = _assert_no_ignored_importables(FOLIO_RESOLVE_ROOT, "eval")
+    candidate_ignored_bytecode = {
+        "eval": _assert_no_ignored_importables(FOLIO_RESOLVE_ROOT, "eval"),
+        "src": _assert_no_ignored_importables(FOLIO_RESOLVE_ROOT, "src"),
+    }
     mapper_ignored_bytecode = _assert_no_ignored_importables(mapper.repo_root, "backend")
     enrich_ignored_bytecode = _assert_no_ignored_importables(enrich.repo_root, "backend")
     candidate_environment = _consumer_environment_fingerprint(Path(sys.executable))
