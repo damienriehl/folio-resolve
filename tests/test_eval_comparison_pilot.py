@@ -237,6 +237,44 @@ def test_ignored_or_external_write_paths_are_allowed(
     pilot_module._assert_write_paths_are_safe(args)
 
 
+def test_ignored_write_paths_inside_source_roots_are_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    candidate = tmp_path / "candidate"
+    mapper = tmp_path / "mapper"
+    enrich = tmp_path / "enrich"
+    for root in (candidate, mapper, enrich):
+        root.mkdir()
+    args = SimpleNamespace(
+        checkpoint_dir=candidate / "src" / "folio_resolve" / ".checkpoints" / "pilot",
+        out=tmp_path / "report.json",
+        mapper_root=mapper,
+        enrich_root=enrich,
+    )
+    monkeypatch.setattr(pilot_module, "FOLIO_RESOLVE_ROOT", candidate)
+    monkeypatch.setattr(
+        pilot_module.subprocess,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(returncode=0),
+    )
+
+    with pytest.raises(PilotCheckpointError, match="outside fingerprinted source roots"):
+        pilot_module._assert_write_paths_are_safe(args)
+
+
+def test_final_report_must_not_overlap_checkpoint_artifacts(tmp_path: Path) -> None:
+    checkpoint = tmp_path / "checkpoint"
+    args = SimpleNamespace(
+        checkpoint_dir=checkpoint,
+        out=checkpoint / "final-stages" / "folio-mapper" / "incumbent" / "stages.json",
+        mapper_root=tmp_path / "mapper",
+        enrich_root=tmp_path / "enrich",
+    )
+
+    with pytest.raises(PilotCheckpointError, match="must not overlap"):
+        pilot_module._assert_write_paths_are_safe(args)
+
+
 def test_command_path_preserves_repository_relative_spelling() -> None:
     path = pilot_module.FOLIO_RESOLVE_ROOT / "eval" / "synthetic" / "corpus.json"
 
