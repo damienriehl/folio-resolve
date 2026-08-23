@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import importlib.machinery
 import importlib.metadata
 import json
 import os
@@ -89,6 +88,71 @@ _MUTABLE_RUNTIME_OVERRIDE_KEYS = (
     "XDG_CACHE_HOME",
 )
 
+_STARTUP_CUSTOMIZATION_PROBE = r"""
+import importlib.machinery
+import json
+import site
+import sys
+import sysconfig
+from pathlib import Path
+
+
+venv_root = Path(sys.argv[1])
+version_dir = f"python{sys.version_info.major}.{sys.version_info.minor}"
+site_roots = {
+    venv_root / "Lib" / "site-packages",
+    venv_root / "lib" / version_dir / "site-packages",
+}
+config_path = venv_root / "pyvenv.cfg"
+include_system_site = not config_path.is_file()
+if config_path.is_file():
+    for line in config_path.read_text(encoding="utf-8").splitlines():
+        key, separator, value = line.partition("=")
+        if separator and key.strip().lower() == "include-system-site-packages":
+            include_system_site = value.strip().lower() == "true"
+if include_system_site:
+    site_roots.update(
+        Path(path)
+        for key in ("purelib", "platlib")
+        if (path := sysconfig.get_path(key))
+    )
+user_site = site.getusersitepackages()
+site_roots.update(
+    Path(path)
+    for path in ([user_site] if isinstance(user_site, str) else user_site)
+)
+
+search_paths = [Path(path) for path in sys.path if path]
+for site_root in sorted(site_roots):
+    if not site_root.is_dir():
+        continue
+    search_paths.append(site_root)
+    for pth_path in sorted(site_root.glob("*.pth")):
+        for line in pth_path.read_text(encoding="utf-8").splitlines():
+            stripped = line.strip()
+            if (
+                not stripped
+                or stripped.startswith("#")
+                or stripped.startswith(("import ", "import\t"))
+            ):
+                continue
+            candidate = Path(stripped)
+            if not candidate.is_absolute():
+                candidate = site_root / candidate
+            if candidate.exists():
+                search_paths.append(candidate)
+
+found = []
+for name in ("sitecustomize", "usercustomize"):
+    spec = importlib.machinery.PathFinder.find_spec(
+        name, [str(path) for path in search_paths]
+    )
+    if spec is not None:
+        found.append({"name": name, "origin": str(spec.origin or "")})
+print(json.dumps({"found": found}, ensure_ascii=True, separators=(",", ":")))
+"""
+
+
 _CONSUMER_ENVIRONMENT_PROBE = r"""
 import hashlib
 import importlib.metadata
@@ -102,12 +166,8 @@ from pathlib import Path
 from urllib.parse import unquote, urlparse
 
 
-for startup_module in ("sitecustomize", "usercustomize"):
-    if (
-        startup_module in sys.modules
-        or importlib.machinery.PathFinder.find_spec(startup_module, sys.path) is not None
-    ):
-        raise RuntimeError("startup customization module is not allowed")
+if any(name in sys.modules for name in ("sitecustomize", "usercustomize")):
+    raise RuntimeError("startup customization module is not allowed")
 
 
 def digest_bytes(value):
@@ -704,6 +764,45 @@ def _consumer_environment_fingerprint(
 ) -> dict[str, object]:
     """Hash the actual consumer interpreter, distributions, and cached embedding model."""
     environment = _offline_runtime_environment()
+    try:
+        startup_probe = subprocess.run(
+            [
+                str(venv_python),
+                "-I",
+                "-S",
+                "-B",
+                "-c",
+                _STARTUP_CUSTOMIZATION_PROBE,
+                str(venv_python.parent.parent),
+            ],
+            capture_output=True,
+            env=environment,
+            text=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise PilotCheckpointError("startup customization probe could not run") from exc
+    if startup_probe.returncode:
+        raise PilotCheckpointError(
+            f"startup customization probe failed (rc={startup_probe.returncode})"
+        )
+    try:
+        startup_payload = json.loads(startup_probe.stdout.strip().splitlines()[-1])
+    except (IndexError, json.JSONDecodeError) as exc:
+        raise PilotCheckpointError("startup customization probe was malformed") from exc
+    if (
+        not isinstance(startup_payload, dict)
+        or not isinstance(startup_payload.get("found"), list)
+        or any(
+            not isinstance(entry, dict)
+            or entry.get("name") not in {"sitecustomize", "usercustomize"}
+            or not isinstance(entry.get("origin"), str)
+            for entry in startup_payload["found"]
+        )
+    ):
+        raise PilotCheckpointError("startup customization probe was malformed")
+    if startup_payload["found"]:
+        raise PilotCheckpointError("startup customization module is not allowed")
     if require_model_assets:
         environment["FOLIO_PROBE_REQUIRE_MODEL_ASSETS"] = "1"
     if require_mapper_cache:

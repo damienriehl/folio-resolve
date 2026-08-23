@@ -375,7 +375,8 @@ def test_consumer_environment_fingerprint_uses_probe_digests(
 
     def fake_run(command: list[str], **_kwargs: object) -> SimpleNamespace:
         observed.append(command)
-        return SimpleNamespace(returncode=0, stdout=json.dumps(payload))
+        stdout = json.dumps({"found": []}) if "-S" in command else json.dumps(payload)
+        return SimpleNamespace(returncode=0, stdout=stdout)
 
     monkeypatch.setattr(pilot_module.subprocess, "run", fake_run)
     interpreter = tmp_path / "consumer" / "bin" / "python"
@@ -385,7 +386,8 @@ def test_consumer_environment_fingerprint_uses_probe_digests(
         **payload,
         "venv_path_sha256": venv_path_sha256,
     }
-    assert observed[0][:4] == [str(interpreter), "-B", "-P", "-c"]
+    assert observed[0][:5] == [str(interpreter), "-I", "-S", "-B", "-c"]
+    assert observed[1][:4] == [str(interpreter), "-B", "-P", "-c"]
 
     payload["model_assets_complete"] = False
     with pytest.raises(PilotCheckpointError, match="load completely offline"):
@@ -540,25 +542,39 @@ def test_environment_probe_rejects_sitecustomize(tmp_path: Path) -> None:
     assert "startup customization module" in completed.stderr
 
 
-def test_environment_probe_rejects_failed_sitecustomize(tmp_path: Path) -> None:
+def test_environment_probe_discovers_self_hiding_sitecustomize_before_execution(
+    tmp_path: Path,
+) -> None:
     interpreter, site = _isolated_python_site(tmp_path)
     marker = tmp_path / "startup-ran"
     (site / "sitecustomize.py").write_text(
+        "import importlib.machinery\n"
+        "_original = importlib.machinery.PathFinder.find_spec\n"
+        "def _hidden(name, path=None, target=None):\n"
+        "    if name in {'sitecustomize', 'usercustomize'}:\n"
+        "        return None\n"
+        "    return _original(name, path, target)\n"
+        "importlib.machinery.PathFinder.find_spec = _hidden\n"
         f"from pathlib import Path\nPath({str(marker)!r}).touch()\n"
         "raise ImportError('suppressed startup failure', name='sitecustomize')\n",
         encoding="utf-8",
     )
 
-    completed = pilot_module.subprocess.run(
+    evasion = pilot_module.subprocess.run(
         [interpreter, "-B", "-P", "-c", pilot_module._CONSUMER_ENVIRONMENT_PROBE],
         check=False,
         capture_output=True,
         text=True,
     )
 
-    assert marker.is_file(), "the regression must prove startup customization executed"
-    assert completed.returncode != 0
-    assert "startup customization module" in completed.stderr
+    assert evasion.returncode == 0, evasion.stderr
+    assert marker.is_file(), "the regression must prove the post-startup probe can be evaded"
+    marker.unlink()
+
+    with pytest.raises(PilotCheckpointError, match="startup customization module"):
+        _consumer_environment_fingerprint(interpreter)
+
+    assert not marker.exists(), "the pristine discovery process must not execute the hook"
 
 
 def test_environment_probe_rejects_unowned_executable_pth(tmp_path: Path) -> None:
