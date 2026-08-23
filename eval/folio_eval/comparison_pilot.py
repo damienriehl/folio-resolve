@@ -652,6 +652,45 @@ def _item_key(item_id: str) -> str:
     return hashlib.sha256(item_id.encode()).hexdigest()
 
 
+def _assert_no_ignored_importables(repo_root: Path, import_root: str) -> None:
+    """Reject ignored files that Python could execute from a runner import root."""
+    completed = subprocess.run(
+        [
+            "git",
+            "ls-files",
+            "--others",
+            "--ignored",
+            "--exclude-standard",
+            "--",
+            import_root,
+            f":(exclude){import_root}/.venv/**",
+        ],
+        cwd=repo_root,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if completed.returncode:
+        raise PilotCheckpointError(
+            f"could not inspect ignored importables under {repo_root / import_root}"
+        )
+    rejected = []
+    for raw_path in completed.stdout.splitlines():
+        relative = Path(raw_path)
+        if ".venv" in relative.parts:
+            continue
+        suffix = relative.suffix.lower()
+        if suffix in {".pyc", ".pyo"} and "__pycache__" in relative.parts:
+            continue
+        if suffix in {".py", ".pyc", ".pyo", ".pyd", ".so"}:
+            rejected.append(relative.as_posix())
+    if rejected:
+        raise PilotCheckpointError(
+            f"ignored executable import files are not allowed under {repo_root / import_root}: "
+            + ", ".join(sorted(rejected))
+        )
+
+
 def _consumer_environment_fingerprint(
     venv_python: Path,
     *,
@@ -857,6 +896,9 @@ def _fingerprint(
     ontology_pin = assert_ontology_pin(corpus.manifest.ontology_cache_sha256)
     mapper = mapper_spec(mapper_root)
     enrich = enrich_spec(enrich_root)
+    _assert_no_ignored_importables(FOLIO_RESOLVE_ROOT, "eval")
+    _assert_no_ignored_importables(mapper.repo_root, "backend")
+    _assert_no_ignored_importables(enrich.repo_root, "backend")
     candidate_environment = _consumer_environment_fingerprint(Path(sys.executable))
     mapper_environment = _consumer_environment_fingerprint(
         mapper.venv_python,

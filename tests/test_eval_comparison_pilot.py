@@ -281,6 +281,41 @@ def test_command_path_preserves_repository_relative_spelling() -> None:
     assert pilot_module._command_path(path) == "eval/synthetic/corpus.json"
 
 
+def test_ignored_legacy_importable_files_are_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        pilot_module.subprocess,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            returncode=0,
+            stdout="eval/json.pyc\neval/hidden.py\neval/native.so\n",
+        ),
+    )
+
+    with pytest.raises(PilotCheckpointError, match="ignored executable import files"):
+        pilot_module._assert_no_ignored_importables(tmp_path, "eval")
+
+
+def test_nonimportable_and_pep3147_cache_files_are_allowed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        pilot_module.subprocess,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            returncode=0,
+            stdout=(
+                "eval/__pycache__/json.cpython-311.pyc\n"
+                "eval/data/report.json\n"
+                "eval/.venv/lib/module.py\n"
+            ),
+        ),
+    )
+
+    pilot_module._assert_no_ignored_importables(tmp_path, "eval")
+
+
 def test_checkpoint_manifest_is_create_once_and_fingerprint_bound(tmp_path: Path) -> None:
     path = tmp_path / "manifest.json"
     expected = _checkpoint_manifest(fingerprint={"git": "abc"}, item_ids=("one", "none"))
@@ -680,6 +715,11 @@ def test_incumbents_are_prepared_once_before_read_only_fingerprinting(
         lambda path, **_kwargs: events.append(f"probe:{path}") or {},
     )
     monkeypatch.setattr(pilot_module, "_git_repository_state", lambda _root: {})
+    monkeypatch.setattr(
+        pilot_module,
+        "_assert_no_ignored_importables",
+        lambda root, import_root: events.append(f"imports:{root}:{import_root}"),
+    )
     monkeypatch.setattr(pilot_module, "_sha256_file", lambda _path: "a" * 64)
     monkeypatch.setattr(pilot_module, "load_config", lambda _path: AnswerRuleConfig())
     monkeypatch.setattr(
@@ -706,6 +746,9 @@ def test_incumbents_are_prepared_once_before_read_only_fingerprinting(
         "prepare:folio-enrich",
         "prepare-index:folio-mapper",
         "pin:ontology",
+        f"imports:{pilot_module.FOLIO_RESOLVE_ROOT}:eval",
+        f"imports:{mapper.repo_root}:backend",
+        f"imports:{enrich.repo_root}:backend",
         f"probe:{Path(pilot_module.sys.executable)}",
         f"probe:{mapper.venv_python}",
         f"probe:{enrich.venv_python}",
