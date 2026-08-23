@@ -191,6 +191,7 @@ def test_fingerprint_prepares_both_incumbents_before_probing(
         "pin:ontology",
         "prepare:folio-mapper",
         "prepare:folio-enrich",
+        f"probe:{Path(pilot_module.sys.executable)}",
         f"probe:{mapper.venv_python}",
         f"probe:{enrich.venv_python}",
     ]
@@ -207,6 +208,8 @@ def test_finalization_invocation_records_supplied_input_paths(tmp_path: Path) ->
         leak_manifest=Path("custom/leaks.json"),
         salt_file=Path("custom/salt"),
         public_metadata=Path("custom/public.json"),
+        mapper_root=Path("custom/mapper"),
+        enrich_root=Path("custom/enrich"),
         limit=7,
     )
     receipt = _finalization_invocation(args, tmp_path / "combined.jsonl")
@@ -216,6 +219,9 @@ def test_finalization_invocation_records_supplied_input_paths(tmp_path: Path) ->
     assert argv[argv.index("--config") + 1] == "custom/config.json"
     assert argv[argv.index("--leak-manifest") + 1] == "custom/leaks.json"
     assert argv[argv.index("--public-metadata") + 1] == "custom/public.json"
+    assert argv[argv.index("--mapper-root") + 1] == "custom/mapper"
+    assert argv[argv.index("--enrich-root") + 1] == "custom/enrich"
+    assert argv[argv.index("--incumbent-version") + 1] == "0.4.0"
 
 
 def test_load_shard_rejects_item_or_stack_drift(tmp_path: Path) -> None:

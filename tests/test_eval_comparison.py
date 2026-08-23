@@ -407,6 +407,30 @@ def test_write_comparison_leakchecks_every_string(tmp_path: Path) -> None:
         )
 
 
+def test_atomic_comparison_write_is_durable_before_and_after_publish(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    events: list[str] = []
+    real_fsync = comparison_module.os.fsync
+    real_replace = comparison_module.os.replace
+
+    def tracked_fsync(descriptor: int) -> None:
+        events.append("fsync")
+        real_fsync(descriptor)
+
+    def tracked_replace(source: str, destination: Path) -> None:
+        events.append("replace")
+        real_replace(source, destination)
+
+    monkeypatch.setattr(comparison_module.os, "fsync", tracked_fsync)
+    monkeypatch.setattr(comparison_module.os, "replace", tracked_replace)
+
+    path = comparison_module._atomic_write_text(tmp_path / "report.json", "{}\n")
+
+    assert path.read_text(encoding="utf-8") == "{}\n"
+    assert events == ["fsync", "replace", "fsync"]
+
+
 def _comparison_public_metadata_payload() -> dict[str, object]:
     argv = ["safe"] * 15
     argv[2] = "run_synthetic_comparison"

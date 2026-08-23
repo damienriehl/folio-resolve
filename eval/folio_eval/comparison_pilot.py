@@ -212,12 +212,14 @@ def _fingerprint(
     enrich = enrich_spec(enrich_root)
     for consumer in (mapper, enrich):
         prepare_incumbent(consumer, INCUMBENT_VERSION)
+    candidate_environment = _consumer_environment_fingerprint(Path(sys.executable))
     mapper_environment = _consumer_environment_fingerprint(
         mapper.venv_python, require_model_assets=True
     )
     enrich_environment = _consumer_environment_fingerprint(enrich.venv_python)
     return {
         "answer_rule_config_sha256": config.content_sha256(),
+        "candidate_environment": candidate_environment,
         "candidate_repository": _git_repository_state(FOLIO_RESOLVE_ROOT),
         "corpus_content_sha256": corpus.manifest.content_sha256,
         "enrich_environment": enrich_environment,
@@ -520,6 +522,12 @@ def _finalization_invocation(
             str(args.salt_file),
             "--public-metadata",
             str(args.public_metadata),
+            "--mapper-root",
+            str(args.mapper_root),
+            "--enrich-root",
+            str(args.enrich_root),
+            "--incumbent-version",
+            INCUMBENT_VERSION,
             "--limit",
             str(args.limit),
         ],
