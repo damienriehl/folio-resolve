@@ -132,6 +132,16 @@ def test_native_runtime_overrides_are_rejected_and_sanitized(
     assert "LD_PRELOAD" not in pilot_module._runtime_environment()
 
 
+def test_alternate_model_cache_overrides_are_rejected_and_sanitized(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SENTENCE_TRANSFORMERS_HOME", "/mutable/model-cache")
+
+    with pytest.raises(PilotCheckpointError, match="SENTENCE_TRANSFORMERS_HOME"):
+        pilot_module._assert_clean_runtime_environment()
+    assert "SENTENCE_TRANSFORMERS_HOME" not in pilot_module._runtime_environment()
+
+
 def test_path_arguments_are_resolved_before_child_working_directory_changes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -166,9 +176,7 @@ def test_path_arguments_are_resolved_before_child_working_directory_changes(
             "enrich_root",
         )
     )
-    assert pilot_module._command_path(args.corpus_manifest) == str(
-        args.corpus_manifest
-    )
+    assert pilot_module._command_path(args.corpus_manifest) == str(args.corpus_manifest)
 
 
 def test_command_path_preserves_repository_relative_spelling() -> None:
@@ -310,9 +318,7 @@ def test_environment_probe_rejects_unowned_pth_import_root(tmp_path: Path) -> No
         encoding="utf-8",
     )
     (dist_info / "RECORD").write_text(
-        "demo.pth,,\n"
-        "demo-1.0.dist-info/METADATA,,\n"
-        "demo-1.0.dist-info/RECORD,,\n",
+        "demo.pth,,\ndemo-1.0.dist-info/METADATA,,\ndemo-1.0.dist-info/RECORD,,\n",
         encoding="utf-8",
     )
     completed = pilot_module.subprocess.run(
@@ -342,9 +348,7 @@ def test_environment_probe_rejects_executable_pth_path_injection(tmp_path: Path)
         encoding="utf-8",
     )
     (dist_info / "RECORD").write_text(
-        "hook.pth,,\n"
-        "hook-1.0.dist-info/METADATA,,\n"
-        "hook-1.0.dist-info/RECORD,,\n",
+        "hook.pth,,\nhook-1.0.dist-info/METADATA,,\nhook-1.0.dist-info/RECORD,,\n",
         encoding="utf-8",
     )
 
@@ -397,9 +401,7 @@ def test_environment_probe_rejects_sitecustomize(tmp_path: Path) -> None:
 
 def test_environment_probe_rejects_unowned_executable_pth(tmp_path: Path) -> None:
     interpreter, site = _isolated_python_site(tmp_path)
-    (site / "unowned.pth").write_text(
-        "import sys; sys.audit('unowned-hook')\n", encoding="utf-8"
-    )
+    (site / "unowned.pth").write_text("import sys; sys.audit('unowned-hook')\n", encoding="utf-8")
 
     completed = pilot_module.subprocess.run(
         [interpreter, "-B", "-P", "-c", pilot_module._CONSUMER_ENVIRONMENT_PROBE],
@@ -567,8 +569,7 @@ def test_incumbents_are_prepared_once_before_read_only_fingerprinting(
     monkeypatch.setattr(
         pilot_module,
         "assert_ontology_pin",
-        lambda expected: events.append(f"pin:{expected}")
-        or SimpleNamespace(sha256=expected),
+        lambda expected: events.append(f"pin:{expected}") or SimpleNamespace(sha256=expected),
     )
     monkeypatch.setattr(pilot_module.importlib.metadata, "version", lambda _name: "0.4.0")
 
@@ -724,6 +725,24 @@ def test_load_shard_is_bound_to_checkpoint_fingerprint(tmp_path: Path) -> None:
         _load_shard(path, "one", fingerprint)
 
 
+def test_completed_shard_receipt_binds_published_report_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "checkpoint"
+    report = pilot_module._shard_paths(root, "one")[0]
+    report.parent.mkdir(parents=True)
+    report.write_text('{"version":1}\n', encoding="utf-8")
+    fingerprint = {"stable": True}
+    monkeypatch.setattr(pilot_module, "_load_shard", lambda *_args, **_kwargs: {"accepted": True})
+
+    pilot_module._publish_shard_completion(root, "one", fingerprint)
+    assert pilot_module._load_completed_shard(root, "one", fingerprint) == {"accepted": True}
+
+    report.write_text('{"version":2}\n', encoding="utf-8")
+    with pytest.raises(PilotCheckpointError, match="does not match its report"):
+        pilot_module._load_completed_shard(root, "one", fingerprint)
+
+
 def test_merge_stack_runs_preserves_every_item_and_rejects_static_drift() -> None:
     shards = [_shard("one"), _shard("none", nomatch=True)]
     runs = _merge_stack_runs(shards)
@@ -834,7 +853,7 @@ def test_finalize_durably_creates_output_parent_before_publish(
     )
     events: list[tuple[str, object]] = []
 
-    monkeypatch.setattr(pilot_module, "_load_shard", lambda *_args: _shard("one"))
+    monkeypatch.setattr(pilot_module, "_load_completed_shard", lambda *_args: _shard("one"))
     monkeypatch.setattr(
         pilot_module,
         "_merge_stack_runs",
@@ -842,9 +861,7 @@ def test_finalize_durably_creates_output_parent_before_publish(
     )
     monkeypatch.setattr(pilot_module, "load_manifest", lambda _path: object())
     monkeypatch.setattr(pilot_module, "emit_items_file", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(
-        pilot_module, "write_stage_snapshots", lambda *_args, **_kwargs: {}
-    )
+    monkeypatch.setattr(pilot_module, "write_stage_snapshots", lambda *_args, **_kwargs: {})
     monkeypatch.setattr(pilot_module, "_finalization_invocation", lambda *_args: {})
     monkeypatch.setattr(pilot_module, "load_config", lambda _path: object())
     monkeypatch.setattr(
@@ -854,15 +871,11 @@ def test_finalize_durably_creates_output_parent_before_publish(
     )
     monkeypatch.setattr(pilot_module, "_file_fingerprint", lambda *_args, **_kwargs: {})
     monkeypatch.setattr(pilot_module, "_sha256_file", lambda _path: "a" * 64)
-    monkeypatch.setattr(
-        pilot_module, "load_public_comparison_metadata", lambda _path: object()
-    )
+    monkeypatch.setattr(pilot_module, "load_public_comparison_metadata", lambda _path: object())
     monkeypatch.setattr(
         pilot_module,
         "_require_current_fingerprint",
-        lambda _args, _corpus, _expected, *, boundary: events.append(
-            ("fingerprint", boundary)
-        ),
+        lambda _args, _corpus, _expected, *, boundary: events.append(("fingerprint", boundary)),
     )
 
     def durable_create(path: Path) -> None:
@@ -910,20 +923,96 @@ def test_main_revalidates_fingerprint_before_and_after_each_shard(
 
     monkeypatch.setattr(pilot_module, "_run_shard", run_shard)
 
-    assert pilot_module.main([
-        "--corpus-manifest", "corpus.json",
-        "--config", "config.json",
-        "--out", "pilot.json",
-        "--checkpoint-dir", str(checkpoint),
-        "--leak-manifest", "leaks.json",
-        "--salt-file", "salt",
-        "--public-metadata", "public.json",
-        "--mapper-root", "/repos/mapper",
-        "--enrich-root", "/repos/enrich",
-        "--limit", "1",
-        "--max-new-items", "1",
-    ]) == 0
+    assert (
+        pilot_module.main(
+            [
+                "--corpus-manifest",
+                "corpus.json",
+                "--config",
+                "config.json",
+                "--out",
+                "pilot.json",
+                "--checkpoint-dir",
+                str(checkpoint),
+                "--leak-manifest",
+                "leaks.json",
+                "--salt-file",
+                "salt",
+                "--public-metadata",
+                "public.json",
+                "--mapper-root",
+                "/repos/mapper",
+                "--enrich-root",
+                "/repos/enrich",
+                "--limit",
+                "1",
+                "--max-new-items",
+                "1",
+            ]
+        )
+        == 0
+    )
     assert len(fingerprint_calls) == 3
+
+
+def test_main_only_marks_shard_complete_after_post_run_fingerprint_passes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    checkpoint = tmp_path / "checkpoint"
+    fingerprint = {"stable": True}
+    run_count = 0
+    monkeypatch.setenv("PYTHONHASHSEED", "0")
+    monkeypatch.setattr(pilot_module, "load_corpus", lambda _path: _corpus(tmp_path))
+    monkeypatch.setattr(pilot_module, "_prepare_incumbents", lambda *_args: None)
+
+    def run_shard(args: SimpleNamespace, item_id: str, _fingerprint: object) -> None:
+        nonlocal run_count
+        run_count += 1
+        report = pilot_module._shard_paths(args.checkpoint_dir, item_id)[0]
+        report.parent.mkdir(parents=True, exist_ok=True)
+        report.write_text("{}", encoding="utf-8")
+
+    monkeypatch.setattr(pilot_module, "_run_shard", run_shard)
+    fingerprints = iter((fingerprint, fingerprint, {"stable": False}))
+    monkeypatch.setattr(pilot_module, "_fingerprint", lambda **_kwargs: next(fingerprints))
+    argv = [
+        "--corpus-manifest",
+        "corpus.json",
+        "--config",
+        "config.json",
+        "--out",
+        "pilot.json",
+        "--checkpoint-dir",
+        str(checkpoint),
+        "--leak-manifest",
+        "leaks.json",
+        "--salt-file",
+        "salt",
+        "--public-metadata",
+        "public.json",
+        "--mapper-root",
+        "/repos/mapper",
+        "--enrich-root",
+        "/repos/enrich",
+        "--limit",
+        "1",
+        "--max-new-items",
+        "1",
+    ]
+
+    with pytest.raises(PilotCheckpointError, match="after shard 1"):
+        pilot_module.main(argv)
+
+    item_id = _pilot_ids(_corpus(tmp_path), 1)[0]
+    report = pilot_module._shard_paths(checkpoint, item_id)[0]
+    completion = pilot_module._shard_completion_path(checkpoint, item_id)
+    assert report.exists()
+    assert not completion.exists()
+
+    monkeypatch.setattr(pilot_module, "_fingerprint", lambda **_kwargs: fingerprint)
+    assert pilot_module.main(argv) == 0
+    assert run_count == 2
+    assert completion.exists()
 
 
 def test_main_can_initialize_checkpoint_without_starting_an_expensive_shard(
@@ -941,16 +1030,32 @@ def test_main_can_initialize_checkpoint_without_starting_an_expensive_shard(
         lambda *_args: (_ for _ in ()).throw(AssertionError("must not run a shard")),
     )
 
-    assert pilot_module.main([
-        "--corpus-manifest", "corpus.json",
-        "--config", "config.json",
-        "--out", "pilot.json",
-        "--checkpoint-dir", str(tmp_path / "checkpoint"),
-        "--leak-manifest", "leaks.json",
-        "--salt-file", "salt",
-        "--public-metadata", "public.json",
-        "--mapper-root", "/repos/mapper",
-        "--enrich-root", "/repos/enrich",
-        "--limit", "1",
-        "--max-new-items", "0",
-    ]) == 0
+    assert (
+        pilot_module.main(
+            [
+                "--corpus-manifest",
+                "corpus.json",
+                "--config",
+                "config.json",
+                "--out",
+                "pilot.json",
+                "--checkpoint-dir",
+                str(tmp_path / "checkpoint"),
+                "--leak-manifest",
+                "leaks.json",
+                "--salt-file",
+                "salt",
+                "--public-metadata",
+                "public.json",
+                "--mapper-root",
+                "/repos/mapper",
+                "--enrich-root",
+                "/repos/enrich",
+                "--limit",
+                "1",
+                "--max-new-items",
+                "0",
+            ]
+        )
+        == 0
+    )

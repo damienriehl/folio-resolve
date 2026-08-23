@@ -35,6 +35,8 @@ from .synthetic_checkpoint import _atomic_create, fsync_directory
 
 PILOT_CHECKPOINT_KIND = "synthetic-comparison-pilot-checkpoint"
 PILOT_CHECKPOINT_VERSION = 1
+SHARD_COMPLETION_KIND = "synthetic-comparison-pilot-shard-completion"
+SHARD_COMPLETION_VERSION = 1
 DEFAULT_LIMIT = 30
 INCUMBENT_VERSION = "0.4.0"
 _OFFLINE_RUNTIME_OVERRIDES = {
@@ -64,6 +66,12 @@ _MUTABLE_RUNTIME_OVERRIDE_KEYS = (
     "KMP_AFFINITY",
     "LD_LIBRARY_PATH",
     "LD_PRELOAD",
+    "HF_ASSETS_CACHE",
+    "HF_HOME",
+    "HF_HUB_CACHE",
+    "HF_MODULES_CACHE",
+    "HF_XET_CACHE",
+    "HUGGINGFACE_HUB_CACHE",
     "MKL_CBWR",
     "MKL_DEBUG_CPU_TYPE",
     "OMP_PLACES",
@@ -71,6 +79,12 @@ _MUTABLE_RUNTIME_OVERRIDE_KEYS = (
     "OPENBLAS_CORETYPE",
     "PYTHONHOME",
     "PYTHONPATH",
+    "PYTORCH_PRETRAINED_BERT_CACHE",
+    "PYTORCH_TRANSFORMERS_CACHE",
+    "SENTENCE_TRANSFORMERS_HOME",
+    "TRANSFORMERS_CACHE",
+    "TORCH_HOME",
+    "XDG_CACHE_HOME",
 )
 
 _CONSUMER_ENVIRONMENT_PROBE = r"""
@@ -511,8 +525,7 @@ def _assert_clean_runtime_environment() -> None:
     overrides = [key for key in _MUTABLE_RUNTIME_OVERRIDE_KEYS if os.environ.get(key)]
     if overrides:
         raise PilotCheckpointError(
-            "comparison pilot refuses mutable runtime overrides: "
-            + ", ".join(overrides)
+            "comparison pilot refuses mutable runtime overrides: " + ", ".join(overrides)
         )
 
 
@@ -567,9 +580,7 @@ def _consumer_environment_fingerprint(
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise PilotCheckpointError("consumer environment probe could not run") from exc
     if completed.returncode:
-        raise PilotCheckpointError(
-            f"consumer environment probe failed (rc={completed.returncode})"
-        )
+        raise PilotCheckpointError(f"consumer environment probe failed (rc={completed.returncode})")
     try:
         payload = json.loads(completed.stdout.strip().splitlines()[-1])
     except (IndexError, json.JSONDecodeError) as exc:
@@ -631,9 +642,7 @@ def _consumer_environment_fingerprint(
         raise PilotCheckpointError(
             "consumer embedding model cache must load completely offline before pilot initialization"
         )
-    payload["venv_path_sha256"] = sha256_bytes(
-        str(venv_python.absolute()).encode()
-    )
+    payload["venv_path_sha256"] = sha256_bytes(str(venv_python.absolute()).encode())
     return payload
 
 
@@ -671,9 +680,7 @@ def _durably_create_directory(path: Path) -> None:
 def _pilot_ids(corpus: LoadedCorpus, limit: int) -> tuple[str, ...]:
     if limit < 1 or limit > len(corpus.scoreable_items):
         raise PilotCheckpointError("pilot scoreable limit is outside the corpus")
-    return tuple(
-        item.item_id for item in (*corpus.scoreable_items[:limit], *corpus.nomatch_items)
-    )
+    return tuple(item.item_id for item in (*corpus.scoreable_items[:limit], *corpus.nomatch_items))
 
 
 def _prepare_incumbents(mapper_root: Path, enrich_root: Path) -> None:
@@ -738,9 +745,7 @@ def _fingerprint(
     }
 
 
-def _fingerprint_for_args(
-    args: argparse.Namespace, corpus: LoadedCorpus
-) -> dict[str, object]:
+def _fingerprint_for_args(args: argparse.Namespace, corpus: LoadedCorpus) -> dict[str, object]:
     return _fingerprint(
         corpus=corpus,
         config_path=args.config,
@@ -838,18 +843,18 @@ def _load_shard(
         if not isinstance(candidate_versions, dict):
             raise PilotCheckpointError(f"pilot shard versions are malformed: {path}")
         checks = {
-            "corpus content": (
-                corpus.get("content_sha256"), fingerprint["corpus_content_sha256"]
-            ),
+            "corpus content": (corpus.get("content_sha256"), fingerprint["corpus_content_sha256"]),
             "nomatch content": (
-                corpus.get("nomatch_content_sha256"), fingerprint["nomatch_content_sha256"]
+                corpus.get("nomatch_content_sha256"),
+                fingerprint["nomatch_content_sha256"],
             ),
             "answer-rule config": (
                 config_selection.get("answer_rule_config_sha256"),
                 fingerprint["answer_rule_config_sha256"],
             ),
             "folio-python version": (
-                payload.get("folio_python_version"), fingerprint["folio_python_version"]
+                payload.get("folio_python_version"),
+                fingerprint["folio_python_version"],
             ),
             "folio-resolve version": (
                 candidate_versions.get("folio-resolve"),
@@ -885,13 +890,66 @@ def _shard_paths(root: Path, item_id: str) -> tuple[Path, Path, Path]:
     )
 
 
-def _run_shard(
-    args: argparse.Namespace, item_id: str, fingerprint: Mapping[str, object]
-) -> None:
+def _shard_completion_path(root: Path, item_id: str) -> Path:
+    return root / "items" / _item_key(item_id) / "complete.json"
+
+
+def _shard_completion_receipt(
+    report: Path, item_id: str, fingerprint: Mapping[str, object]
+) -> dict[str, object]:
+    try:
+        report_sha256 = _sha256_file(report)
+    except OSError as exc:
+        raise PilotCheckpointError(f"pilot shard report is missing: {report}") from exc
+    return {
+        "fingerprint_sha256": sha256_bytes(
+            json.dumps(fingerprint, sort_keys=True, separators=(",", ":")).encode()
+        ),
+        "item_key": _item_key(item_id),
+        "kind": SHARD_COMPLETION_KIND,
+        "report_sha256": report_sha256,
+        "schema_version": SHARD_COMPLETION_VERSION,
+    }
+
+
+def _publish_shard_completion(root: Path, item_id: str, fingerprint: Mapping[str, object]) -> None:
+    report = _shard_paths(root, item_id)[0]
+    path = _shard_completion_path(root, item_id)
+    expected = _shard_completion_receipt(report, item_id, fingerprint)
+    _atomic_create(path, expected)
+    try:
+        observed = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise PilotCheckpointError(f"pilot shard completion is corrupt: {path}") from exc
+    if observed != expected:
+        raise PilotCheckpointError(f"pilot shard completion does not match its report: {path}")
+
+
+def _load_completed_shard(
+    root: Path, item_id: str, fingerprint: Mapping[str, object]
+) -> dict[str, Any]:
+    report = _shard_paths(root, item_id)[0]
+    path = _shard_completion_path(root, item_id)
+    if not path.is_file():
+        raise PilotCheckpointError(f"pilot shard has no verified completion receipt: {path}")
+    try:
+        observed = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise PilotCheckpointError(f"pilot shard completion is corrupt: {path}") from exc
+    if observed != _shard_completion_receipt(report, item_id, fingerprint):
+        raise PilotCheckpointError(f"pilot shard completion does not match its report: {path}")
+    return _load_shard(report, item_id, fingerprint)
+
+
+def _run_shard(args: argparse.Namespace, item_id: str, fingerprint: Mapping[str, object]) -> None:
     report, items, stages = _shard_paths(args.checkpoint_dir, item_id)
-    if report.exists():
-        _load_shard(report, item_id, fingerprint)
+    completion = _shard_completion_path(args.checkpoint_dir, item_id)
+    if completion.exists():
+        _load_completed_shard(args.checkpoint_dir, item_id, fingerprint)
         return
+    if report.exists():
+        report.unlink()
+        fsync_directory(report.parent)
     _durably_create_directory(stages)
     command = [
         sys.executable,
@@ -1021,9 +1079,7 @@ def _merge_stack_runs(shards: Sequence[Mapping[str, Any]]) -> list[StackRun]:
     return runs
 
 
-def _finalization_invocation(
-    args: argparse.Namespace, combined_items: Path
-) -> dict[str, object]:
+def _finalization_invocation(args: argparse.Namespace, combined_items: Path) -> dict[str, object]:
     """Record the exact supplied inputs used by equivalent checkpoint finalization."""
     environment = _offline_runtime_environment()
     return {
@@ -1076,8 +1132,8 @@ def _finalize(
     if not isinstance(fingerprint, Mapping):
         raise PilotCheckpointError("pilot checkpoint fingerprint is malformed")
     shard_payloads = [
-        _load_shard(
-            _shard_paths(args.checkpoint_dir, item_id)[0],
+        _load_completed_shard(
+            args.checkpoint_dir,
             item_id,
             fingerprint,
         )
@@ -1171,20 +1227,23 @@ def main(argv: Sequence[str] | None = None) -> int:
     _create_or_validate_manifest(args.checkpoint_dir / "manifest.json", manifest)
     if not args.finalize_only:
         completed_before = sum(
-            _shard_paths(args.checkpoint_dir, item_id)[0].exists() for item_id in item_ids
+            _shard_completion_path(args.checkpoint_dir, item_id).exists() for item_id in item_ids
         )
         allowance = args.max_new_items
         for item_id in item_ids:
-            report = _shard_paths(args.checkpoint_dir, item_id)[0]
-            if report.exists():
-                _load_shard(report, item_id, fingerprint)
+            completion = _shard_completion_path(args.checkpoint_dir, item_id)
+            if completion.exists():
+                _load_completed_shard(args.checkpoint_dir, item_id, fingerprint)
                 continue
             if allowance is not None and allowance <= 0:
                 break
-            ordinal = sum(
-                _shard_paths(args.checkpoint_dir, candidate_id)[0].exists()
-                for candidate_id in item_ids
-            ) + 1
+            ordinal = (
+                sum(
+                    _shard_completion_path(args.checkpoint_dir, candidate_id).exists()
+                    for candidate_id in item_ids
+                )
+                + 1
+            )
             _require_current_fingerprint(
                 args, corpus, fingerprint, boundary=f"before shard {ordinal}"
             )
@@ -1193,11 +1252,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             _require_current_fingerprint(
                 args, corpus, fingerprint, boundary=f"after shard {ordinal}"
             )
+            _publish_shard_completion(args.checkpoint_dir, item_id, fingerprint)
             print(f"pilot shard {ordinal}/{len(item_ids)}: complete", flush=True)
             if allowance is not None:
                 allowance -= 1
         completed_after = sum(
-            _shard_paths(args.checkpoint_dir, item_id)[0].exists() for item_id in item_ids
+            _shard_completion_path(args.checkpoint_dir, item_id).exists() for item_id in item_ids
         )
         print(f"pilot checkpoint: {completed_after}/{len(item_ids)} complete")
         if completed_after < len(item_ids):
