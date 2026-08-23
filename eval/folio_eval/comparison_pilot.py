@@ -242,6 +242,42 @@ import_path_payload = json.dumps(
     effective_import_paths, ensure_ascii=True, separators=(",", ":")
 ).encode()
 
+meta_path = [
+    [
+        getattr(finder, "__module__", type(finder).__module__),
+        getattr(finder, "__qualname__", type(finder).__qualname__),
+    ]
+    for finder in sys.meta_path
+]
+allowed_meta_path = [
+    ["_distutils_hack", "DistutilsMetaFinder"],
+    ["_virtualenv", "_Finder"],
+    ["_frozen_importlib", "BuiltinImporter"],
+    ["_frozen_importlib", "FrozenImporter"],
+    ["_frozen_importlib_external", "PathFinder"],
+]
+if (
+    any(entry not in allowed_meta_path for entry in meta_path)
+    or meta_path[-3:] != allowed_meta_path[-3:]
+):
+    raise RuntimeError("unsupported meta-path finder is not allowed")
+meta_path_payload = json.dumps(meta_path, ensure_ascii=True, separators=(",", ":")).encode()
+
+path_hooks = [
+    [
+        getattr(hook, "__module__", type(hook).__module__),
+        getattr(hook, "__qualname__", type(hook).__qualname__),
+    ]
+    for hook in sys.path_hooks
+]
+allowed_path_hooks = [
+    ["zipimport", "zipimporter"],
+    ["_frozen_importlib_external", "FileFinder.path_hook.<locals>.path_hook_for_FileFinder"],
+]
+if path_hooks != allowed_path_hooks:
+    raise RuntimeError("unsupported path hook is not allowed")
+path_hooks_payload = json.dumps(path_hooks, ensure_ascii=True, separators=(",", ":")).encode()
+
 try:
     from huggingface_hub.constants import HF_HUB_CACHE
     model_root = Path(HF_HUB_CACHE) / "models--sentence-transformers--all-MiniLM-L6-v2"
@@ -326,6 +362,10 @@ print(json.dumps({
     "editable_sources_sha256": digest_bytes(editable_payload),
     "import_path_entries": len(effective_import_paths),
     "import_path_sha256": digest_bytes(import_path_payload),
+    "meta_path_entries": len(meta_path),
+    "meta_path_sha256": digest_bytes(meta_path_payload),
+    "path_hook_entries": len(path_hooks),
+    "path_hooks_sha256": digest_bytes(path_hooks_payload),
     "model_asset_files": len(model_entries),
     "model_asset_bytes": sum(entry[2] for entry in model_entries),
     "model_assets_present": bool(model_entries),
@@ -429,6 +469,8 @@ def _consumer_environment_fingerprint(
         "site_files_sha256",
         "editable_sources_sha256",
         "import_path_sha256",
+        "meta_path_sha256",
+        "path_hooks_sha256",
         "model_assets_sha256",
         "model_snapshot_revision_sha256",
     }
@@ -452,6 +494,8 @@ def _consumer_environment_fingerprint(
         "editable_source_files",
         "editable_source_bytes",
         "import_path_entries",
+        "meta_path_entries",
+        "path_hook_entries",
         "model_asset_files",
         "model_asset_bytes",
         "model_embedding_dimension",
@@ -824,6 +868,7 @@ def _finalization_invocation(
     args: argparse.Namespace, combined_items: Path
 ) -> dict[str, object]:
     """Record the exact supplied inputs used by equivalent checkpoint finalization."""
+    environment = _offline_runtime_environment()
     return {
         "kind": "equivalent_checkpoint_finalization",
         "argv": [
@@ -856,7 +901,16 @@ def _finalization_invocation(
             str(args.limit),
         ],
         "working_directory": str(FOLIO_RESOLVE_ROOT),
-        "environment": {"PYTHONHASHSEED": os.environ.get("PYTHONHASHSEED", "")},
+        "environment": {
+            key: environment.get(key, "")
+            for key in (
+                "HF_HUB_DISABLE_TELEMETRY",
+                "HF_HUB_OFFLINE",
+                "PYTHONDONTWRITEBYTECODE",
+                "PYTHONHASHSEED",
+                "TRANSFORMERS_OFFLINE",
+            )
+        },
     }
 
 

@@ -193,6 +193,10 @@ def test_consumer_environment_fingerprint_uses_probe_digests(
         "editable_sources_sha256": "f" * 64,
         "import_path_entries": 5,
         "import_path_sha256": "1" * 64,
+        "meta_path_entries": 5,
+        "meta_path_sha256": "4" * 64,
+        "path_hook_entries": 2,
+        "path_hooks_sha256": "5" * 64,
         "model_asset_files": 5,
         "model_asset_bytes": 100,
         "model_assets_present": True,
@@ -333,6 +337,37 @@ def test_environment_probe_rejects_executable_pth_path_injection(tmp_path: Path)
     assert "unowned effective import root" in completed.stderr
 
 
+def test_environment_probe_rejects_executable_pth_meta_path_hook(tmp_path: Path) -> None:
+    interpreter, site = _isolated_python_site(tmp_path)
+    dist_info = site / "hook-1.0.dist-info"
+    dist_info.mkdir(parents=True)
+    (site / "hook.pth").write_text(
+        "import sys; sys.meta_path.insert(0, type('InjectedFinder', (), "
+        "{'find_spec': lambda self, *args: None})())\n",
+        encoding="utf-8",
+    )
+    (dist_info / "METADATA").write_text(
+        "Metadata-Version: 2.1\nName: hook\nVersion: 1.0\n",
+        encoding="utf-8",
+    )
+    (dist_info / "RECORD").write_text(
+        "hook.pth,,\n"
+        "hook-1.0.dist-info/METADATA,,\n"
+        "hook-1.0.dist-info/RECORD,,\n",
+        encoding="utf-8",
+    )
+
+    completed = pilot_module.subprocess.run(
+        [interpreter, "-B", "-P", "-c", pilot_module._CONSUMER_ENVIRONMENT_PROBE],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode != 0
+    assert "unsupported meta-path finder" in completed.stderr
+
+
 def test_environment_probe_hashes_unowned_site_package_files(tmp_path: Path) -> None:
     interpreter, site = _isolated_python_site(tmp_path)
     module = site / "manually_copied.py"
@@ -439,6 +474,13 @@ def test_finalization_invocation_records_supplied_input_paths(tmp_path: Path) ->
     assert argv[argv.index("--mapper-root") + 1] == "custom/mapper"
     assert argv[argv.index("--enrich-root") + 1] == "custom/enrich"
     assert argv[argv.index("--incumbent-version") + 1] == "0.4.0"
+    assert receipt["environment"] == {
+        "HF_HUB_DISABLE_TELEMETRY": "1",
+        "HF_HUB_OFFLINE": "1",
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "PYTHONHASHSEED": pilot_module.os.environ.get("PYTHONHASHSEED", ""),
+        "TRANSFORMERS_OFFLINE": "1",
+    }
 
 
 def test_load_shard_rejects_item_or_stack_drift(tmp_path: Path) -> None:
