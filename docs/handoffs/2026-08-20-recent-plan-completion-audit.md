@@ -96,6 +96,35 @@ branch: "docs/recent-plan-audit-2026-08-20"
   sentence-transformers dependencies. The clean U10 candidate worktree is provisioned at
   `.worktrees/fix/u10-comparison-provenance`. Only the live execution remains gated on U8.
 
+## Power-loss recovery update — 2026-08-22
+
+- The original single-process U8 rerun ended in a host power loss after more than 31 hours. It had
+  no item checkpoint and produced no publishable report. The source worktrees, pushed branches,
+  upstream merges, and unrelated main-checkout work all survived and were preserved.
+- Power-loss recovery is now implemented on `fix/u8-resumable-scoring`. Commit `933c6ef` adds a
+  fingerprint-bound, corruption-detecting, privacy-minimal item checkpoint, stable hash sharding,
+  finalize-only replay, atomic durable writes, and direct/resumed/sharded report-equivalence tests.
+  PR [#9](https://github.com/damienriehl/folio-resolve/pull/9) is open and mergeable. Review fixes
+  through `dad7f4c` make the clean-checkout command install the `folio` extra and make shard ETA
+  use a shard-local denominator.
+- The authoritative validation after the progress fix is `1054 passed, 2 skipped`; Ruff, both
+  mypy targets, and `git diff --check` pass. The PR watcher is active and has no unresolved
+  feedback; the repository config currently exposes no GitHub status checks.
+- The replacement U8 baseline began at 2026-08-22 23:17 America/Chicago as eight concurrent
+  shards sharing `.synthetic-checkpoints/baseline-v1`. The generation is intentionally pinned to
+  clean commit `933c6ef`; later PR commits do not change scoring semantics. If another interruption
+  occurs, resume/finalize this checkpoint from an exact clean `933c6ef` checkout rather than from
+  the moving PR head. Do not edit the accepted manifest or bypass its fingerprint check.
+- Durable item files are landing and memory remains bounded with no swap use. First-item samples
+  were roughly 6.7–9.2 minutes, implying an early four-to-five-hour eight-shard estimate; use the
+  item-file timestamps for this in-flight generation because `933c6ef` predates the shard-ETA
+  display correction.
+- The U10 live-gate preflight remains clean and ready behind U8. The durable consumer worktrees are
+  still exactly `a5bd0512` (mapper) and `bb576ac` (enrich); both environments resolve
+  `folio-python 0.3.6` and the released `folio-resolve 0.4.0`, and both deterministic runner seams
+  are present. Their normal import path opens the owner's standard ALEA log, so the real gate must
+  run with ordinary owner filesystem access rather than inside a read-only home sandbox.
+
 ## Plan-level verdicts
 
 | Plan | Verdict | Evidence | Remaining authority |
@@ -125,7 +154,7 @@ branch: "docs/recent-plan-audit-2026-08-20"
 | U5 corpus schema/builder | **Complete** | Corpus v1: 225 scoreable, 15 needs-review, 30 no-match |
 | U6 label-blind generation | **Complete** | Generation artifacts and corpus v1 landed |
 | U7 grader/close-call lane | **Partial** | Code is complete. The first consensus-audit sitting, confidence-floor calibration, and human ratification into corpus v2 wait on D1/D2 and owner adjudication. |
-| U8 synthetic scoring | **Partial; bounded rerun active** | Recovery/review code and the local bounded-cache containment are committed and pushed. The one-passage real path leaves affected upstream caches empty and peaks near 699 MiB. The complete deterministic run is active and must finish, validate, and commit `eval/reports/synthetic-baseline-v1.json`. |
+| U8 synthetic scoring | **Partial; resumable eight-shard rerun active** | The bounded-cache path and power-loss-safe checkpointing are committed and pushed in PR #9. The generation is pinned to `933c6ef`; it must finish, finalize, validate, and commit `eval/reports/synthetic-baseline-v1.json`. |
 | U9 guarded iteration loop | **Partial** | Code is complete; no real corpus-v1 improvement iteration is recorded yet. Pilot must run first. |
 | U10 deterministic comparison | **Partial; prerequisites merged and verified** | Local live-gate selection, reproducibility receipts, stage attribution, and fail-closed consumer contracts are implemented and pushed. Mapper #9 and enrich #38 are merged; both landed trees and active environments resolve the required common `folio-python 0.3.6`. Run the live gate, 30-item pilot, and final full comparison after U8 releases the shared runtime. |
 | U11 owner-run LLM lanes | **Partial / owner-run** | Flags and seams are merged. Run both shipped configurations with owner-held keys and record explicit skip markers where unavailable. |
@@ -138,8 +167,9 @@ Execute in dependency order. A later item is queued even when an earlier owner g
 from running in the same session.
 
 1. **Finish and validate the active U8 baseline.** The bounded-memory probe path, public-metadata
-   preflight, and D5 policy are implemented and pushed. Let the active 225-item plus no-match run
-   finish; then verify corpus/config hashes, zero non-public leak collisions, deterministic report
+   preflight, D5 policy, and power-loss-safe checkpointing are implemented and pushed. Let the
+   active 225-item plus 30 no-match, eight-shard run finish; then finalize from the exact `933c6ef`
+   fingerprint, verify corpus/config hashes, zero non-public leak collisions, deterministic report
    content, depth-probe metrics, and resource evidence before committing the report.
 2. **Complete — merge and verify both consumer prerequisites.** Mapper #9 and enrich #38 merged as
    `a5bd0512` and `bb576ac`. Their fetched default-branch trees match the reviewed heads; both
@@ -154,13 +184,11 @@ from running in the same session.
 4. **Run U10 live gate and 30-item pilot.** Use the pinned v0.4.0 incumbent lanes in the two
    sibling repos, leave both trees byte-identical to their starting status, and commit the pilot
    artifact or a clearly named pilot report if the final report path is reserved.
-5. **Add resumable/sharded scoring after U10 validates, before another full baseline.** Checkpoint
-   each surface-free post-adapter result atomically (IRI, post-gate score, counts, suppressions),
-   then replay checkpoints through the unchanged score/depth-probe/report/leak-check path. Require
-   byte-identical direct, resumed, and differently ordered sharded reports; fail closed on any
-   fingerprint or record corruption. Implement after U10 because that branch changes the same
-   `AdapterResult`/`DocumentAdapter.adapt` seam; starting earlier creates avoidable conflicts and
-   cannot recover the already-running process retroactively.
+5. **Complete — resumable/sharded scoring.** PR #9 checkpoints each surface-free post-adapter
+   result atomically, replays through the unchanged score/depth-probe/report/leak-check path, and
+   fails closed on fingerprint or record corruption. Direct, resumed, and differently ordered
+   sharded reports are covered for equality. This was advanced ahead of U10 after the host outage
+   proved that another non-resumable full baseline was the larger execution risk.
 6. **Interpret the pilot without changing settled policy.** Continue when the result is a clear
    go; route an in-band hold or material incumbent win to the Decision Sheet with exact metrics.
 7. **Run the first U9 shared-scope iteration.** Target synonym/definition-side matching and
@@ -274,6 +302,8 @@ Notes (optional):
   no-match slice.
 - Synthetic baseline/comparison/final-report receipts: still pending.
 
+Latest recovery-branch verification: `1054 passed, 2 skipped`; Ruff and both mypy targets pass.
+
 ## Shipping state
 
 - Audit branch: `docs/recent-plan-audit-2026-08-20`.
@@ -283,3 +313,5 @@ Notes (optional):
 - This handoff is committed alone on its focused documentation branch.
 - Commit `4ad694f` and subsequent audit-only updates are pushed on the focused branch; the branch
   is not merged.
+- U8 resumable-scoring PR #9 is open at head `dad7f4c`; it is mergeable, feedback-free at the last
+  snapshot, and intentionally not auto-merged by the target-posture watcher.
