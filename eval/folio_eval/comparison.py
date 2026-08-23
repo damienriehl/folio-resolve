@@ -17,6 +17,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from dataclasses import field as dataclass_field
 from pathlib import Path
+from string import Formatter
 from types import MappingProxyType
 
 from .answer_rule import AnswerRuleConfig, commit_from_ranked, rank_candidates
@@ -163,8 +164,19 @@ def load_public_comparison_metadata(path: Path) -> PublicComparisonMetadata:
             raise ComparisonError(
                 "comparison public metadata field requires exactly one value or value_template"
             )
-        if template is not None and str(template).count("{working_directory}") != 1:
-            raise ComparisonError("unsupported comparison public metadata template")
+        if template is not None:
+            try:
+                replacement_fields = [
+                    (field_name, format_spec, conversion)
+                    for _, field_name, format_spec, conversion in Formatter().parse(str(template))
+                    if field_name is not None
+                ]
+            except ValueError as exc:
+                raise ComparisonError(
+                    "unsupported comparison public metadata template"
+                ) from exc
+            if replacement_fields != [("working_directory", "", None)]:
+                raise ComparisonError("unsupported comparison public metadata template")
         if field_path in fields:
             raise ComparisonError(f"duplicate comparison public metadata path: {field_path!r}")
         fields[field_path] = (

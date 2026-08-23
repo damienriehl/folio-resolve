@@ -507,6 +507,17 @@ def test_versioned_public_metadata_exempts_only_exact_comparison_paths() -> None
         )
 
 
+def test_public_metadata_rejects_extra_template_replacement_fields(tmp_path: Path) -> None:
+    payload = json.loads(DEFAULT_COMPARISON_PUBLIC_METADATA_PATH.read_text(encoding="utf-8"))
+    template_field = next(field for field in payload["fields"] if "value_template" in field)
+    template_field["value_template"] += "{other}"
+    path = tmp_path / "public-metadata.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ComparisonError, match=r"unsupported.*template"):
+        load_public_comparison_metadata(path)
+
+
 def test_comparison_public_metadata_rejects_value_drift() -> None:
     salt = b"0123456789abcdef"
     payload = _comparison_public_metadata_payload()
