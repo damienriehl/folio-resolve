@@ -973,6 +973,7 @@ def _parser() -> argparse.ArgumentParser:
     comparison = sub.add_parser(
         "run_synthetic_comparison",
         help="compare local folio-resolve with pinned downstream incumbent lanes",
+        allow_abbrev=False,
     )
     comparison.add_argument("--corpus-manifest", type=Path, required=True)
     comparison.add_argument("--config", type=Path, required=True)

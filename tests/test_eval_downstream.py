@@ -96,6 +96,16 @@ def _comparison_argv(*extra: str) -> list[str]:
     ]
 
 
+def test_synthetic_comparison_cli_rejects_abbreviated_metadata_options() -> None:
+    abbreviated = _comparison_argv()
+    abbreviated[abbreviated.index("--config")] = "--conf"
+
+    with pytest.raises(SystemExit) as error:
+        _parser().parse_args(abbreviated)
+
+    assert error.value.code == 2
+
+
 @pytest.mark.parametrize("extra", [(), ("--limit", "30")])
 def test_scoreable_only_rejects_non_live_gate_limits(extra: tuple[str, ...]) -> None:
     with pytest.raises(SystemExit) as error:
