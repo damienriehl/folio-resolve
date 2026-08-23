@@ -122,6 +122,23 @@ def test_mutable_python_import_overrides_are_rejected_and_sanitized(
     assert "PYTHONPATH" not in pilot_module._runtime_environment()
 
 
+def test_python_optimization_is_rejected_and_bound(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("PYTHONOPTIMIZE", "1")
+    with pytest.raises(PilotCheckpointError, match="PYTHONOPTIMIZE"):
+        pilot_module._assert_clean_runtime_environment()
+    assert "PYTHONOPTIMIZE" not in pilot_module._runtime_environment()
+    assert '"python_optimize": sys.flags.optimize' in pilot_module._CONSUMER_ENVIRONMENT_PROBE
+    monkeypatch.setattr(
+        pilot_module,
+        "sys",
+        SimpleNamespace(flags=SimpleNamespace(optimize=1)),
+    )
+    with pytest.raises(PilotCheckpointError, match="optimization level 0"):
+        pilot_module._assert_unoptimized_runtime()
+
+
 def test_native_runtime_overrides_are_rejected_and_sanitized(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -423,6 +440,7 @@ def test_consumer_environment_fingerprint_uses_probe_digests(
         "interpreter_path_sha256": "a" * 64,
         "interpreter_sha256": "b" * 64,
         "python_version": "3.11",
+        "python_optimize": 0,
         "distribution_count": 10,
         "distributions_sha256": "c" * 64,
         "derived_cache_bytes": 500,

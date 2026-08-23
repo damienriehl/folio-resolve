@@ -88,6 +88,7 @@ _MUTABLE_RUNTIME_OVERRIDE_KEYS = (
     "OMP_PROC_BIND",
     "OPENBLAS_CORETYPE",
     "PYTHONHOME",
+    "PYTHONOPTIMIZE",
     "PYTHONPATH",
     "PYTORCH_PRETRAINED_BERT_CACHE",
     "PYTORCH_TRANSFORMERS_CACHE",
@@ -691,6 +692,7 @@ print(json.dumps({
     "interpreter_path_sha256": digest_bytes(str(interpreter).encode()),
     "interpreter_sha256": digest_file(interpreter),
     "python_version": sys.version,
+    "python_optimize": sys.flags.optimize,
     "cpu_backend_sha256": digest_bytes(cpu_backend_payload),
     "native_runtime_file_count": len(native_runtime_entries),
     "native_runtime_bytes": sum(entry[2] for entry in native_runtime_entries),
@@ -756,6 +758,11 @@ def _assert_clean_runtime_environment() -> None:
         raise PilotCheckpointError(
             "comparison pilot refuses mutable runtime overrides: " + ", ".join(overrides)
         )
+
+
+def _assert_unoptimized_runtime() -> None:
+    if sys.flags.optimize != 0:
+        raise PilotCheckpointError("comparison pilot requires Python optimization level 0")
 
 
 def _resolve_path_arguments(args: argparse.Namespace) -> None:
@@ -1045,6 +1052,8 @@ def _consumer_environment_fingerprint(
             raise PilotCheckpointError("consumer environment probe was malformed")
     if not isinstance(payload.get("python_version"), str) or not payload["python_version"]:
         raise PilotCheckpointError("consumer environment probe was malformed")
+    if payload.get("python_optimize") != 0:
+        raise PilotCheckpointError("consumer environment probe must use optimization level 0")
     if not isinstance(payload.get("model_device"), str):
         raise PilotCheckpointError("consumer environment probe was malformed")
     if not isinstance(payload.get("model_assets_present"), bool):
@@ -1233,6 +1242,7 @@ def _fingerprint(
         "ontology_cache_sha256": ontology_pin.sha256,
         "public_metadata_sha256": _sha256_file(public_metadata_path),
         "python_hash_seed": os.environ.get("PYTHONHASHSEED", ""),
+        "python_optimize": sys.flags.optimize,
         "python_version": platform.python_version(),
         "runtime_environment": {
             **_OFFLINE_RUNTIME_OVERRIDES,
@@ -1731,6 +1741,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     if os.environ.get("PYTHONHASHSEED") != "0":
         raise PilotCheckpointError("comparison pilot requires PYTHONHASHSEED=0")
+    _assert_unoptimized_runtime()
     _assert_clean_runtime_environment()
     _resolve_path_arguments(args)
     _assert_write_paths_are_safe(args)
