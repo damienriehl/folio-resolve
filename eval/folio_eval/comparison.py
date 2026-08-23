@@ -582,6 +582,7 @@ def run_consumer_stack(
     *,
     version: str = "0.4.0",
     timeout: float = DEFAULT_COMPARISON_TIMEOUT_S,
+    prepare: bool = True,
 ) -> StackRun:
     """Prepare and run one incumbent consumer through its own interpreter."""
     relative_runner = {
@@ -611,7 +612,8 @@ def run_consumer_stack(
             "deterministic",
         ]
         with clean_tree_guard(spec.repo_root):
-            prepare_incumbent(spec, version)
+            if prepare:
+                prepare_incumbent(spec, version)
             try:
                 completed = subprocess.run(
                     command,
@@ -1216,6 +1218,7 @@ def run_synthetic_comparison(
     include_nomatch: bool = True,
     item_ids: Sequence[str] | None = None,
     incumbent_version: str = "0.4.0",
+    prepare_incumbents: bool = True,
     comparison_invocation: Mapping[str, object] | Sequence[str] = (),
 ) -> dict[str, object]:
     """Execute the local candidate and every pinned consumer incumbent, then aggregate."""
@@ -1238,7 +1241,14 @@ def run_synthetic_comparison(
                 raise ComparisonError(
                     f"shared comparison items changed before {spec.name} execution"
                 )
-            runs.append(run_consumer_stack(spec, items_path, version=incumbent_version))
+            runs.append(
+                run_consumer_stack(
+                    spec,
+                    items_path,
+                    version=incumbent_version,
+                    prepare=prepare_incumbents,
+                )
+            )
             if _file_fingerprint(items_path, root=FOLIO_RESOLVE_ROOT) != items_fingerprint:
                 raise ComparisonError(
                     f"shared comparison items changed during {spec.name} execution"

@@ -893,7 +893,12 @@ def test_consumer_runner_translates_deterministic_lane_to_incumbent(
         )
         return subprocess.CompletedProcess(command, 0, "", "")
 
-    monkeypatch.setattr(comparison_module, "prepare_incumbent", lambda *_args: {})
+    prepared: list[ConsumerSpec] = []
+    monkeypatch.setattr(
+        comparison_module,
+        "prepare_incumbent",
+        lambda spec, *_args: prepared.append(spec) or {},
+    )
     monkeypatch.setattr(comparison_module, "clean_tree_guard", lambda _root: nullcontext())
     monkeypatch.setattr(
         comparison_module,
@@ -910,13 +915,14 @@ def test_consumer_runner_translates_deterministic_lane_to_incumbent(
     items_path = tmp_path / "items.jsonl"
     items_path.write_text(json.dumps({"item_id": "one"}) + "\n", encoding="utf-8")
 
-    run = run_consumer_stack(spec, items_path)
+    run = run_consumer_stack(spec, items_path, prepare=False)
 
     assert run.lane == "incumbent"
     assert run.invocation_working_directory == str(tmp_path.resolve())
     assert run.repository["git_sha"] == "a" * 40
     assert commands[0][0] == str(venv_python)
     assert commands[0][commands[0].index("--lane") + 1] == "deterministic"
+    assert prepared == []
 
 
 def test_consumer_rows_reject_bare_hashes_before_scoring() -> None:

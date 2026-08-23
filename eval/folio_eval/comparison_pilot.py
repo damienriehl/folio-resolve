@@ -393,6 +393,8 @@ except Exception:
 model_entries = []
 if model_root.is_dir():
     for path in sorted(model_root.rglob("*")):
+        if path.is_symlink() and path.is_dir():
+            raise RuntimeError("symlinked model-cache directory is not allowed")
         if not path.is_file():
             continue
         resolved = path.resolve()
@@ -917,6 +919,7 @@ def _run_shard(
         _command_path(args.enrich_root),
         "--incumbent-version",
         INCUMBENT_VERSION,
+        "--skip-incumbent-prepare",
         "--item-id",
         item_id,
     ]
@@ -1051,6 +1054,7 @@ def _finalization_invocation(
             _command_path(args.enrich_root),
             "--incumbent-version",
             INCUMBENT_VERSION,
+            "--skip-incumbent-prepare",
             "--limit",
             str(args.limit),
         ],

@@ -991,6 +991,11 @@ def _parser() -> argparse.ArgumentParser:
     comparison.add_argument("--enrich-root", type=Path, default=None)
     comparison.add_argument("--consumer", choices=["mapper", "enrich", "all"], default="all")
     comparison.add_argument("--incumbent-version", default="0.4.0")
+    comparison.add_argument(
+        "--skip-incumbent-prepare",
+        action="store_true",
+        help="verify and run already-prepared incumbents without reinstalling them",
+    )
     comparison.add_argument("--limit", type=int, default=None)
     comparison.add_argument(
         "--item-id",
@@ -1085,6 +1090,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             include_nomatch=not args.scoreable_only,
             item_ids=args.item_id,
             incumbent_version=args.incumbent_version,
+            prepare_incumbents=not args.skip_incumbent_prepare,
             comparison_invocation=_execution_receipt(
                 raw_argv,
                 supplied_argv=argv is not None,

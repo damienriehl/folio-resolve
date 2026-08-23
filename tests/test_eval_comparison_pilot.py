@@ -430,6 +430,34 @@ def test_environment_probe_rejects_symlinked_package_directory(tmp_path: Path) -
     assert "symlinked site-packages entry" in completed.stderr
 
 
+def test_environment_probe_rejects_symlinked_model_cache_directory(
+    tmp_path: Path,
+) -> None:
+    interpreter, site = _isolated_python_site(tmp_path)
+    hub = site / "huggingface_hub"
+    model_root = tmp_path / "cache" / "models--sentence-transformers--all-MiniLM-L6-v2"
+    external = tmp_path / "mutable-model-directory"
+    hub.mkdir()
+    model_root.mkdir(parents=True)
+    external.mkdir()
+    (hub / "__init__.py").write_text("", encoding="utf-8")
+    (hub / "constants.py").write_text(
+        f"HF_HUB_CACHE = {str(tmp_path / 'cache')!r}\n", encoding="utf-8"
+    )
+    (external / "config.json").write_text("{}\n", encoding="utf-8")
+    (model_root / "linked").symlink_to(external, target_is_directory=True)
+
+    completed = pilot_module.subprocess.run(
+        [interpreter, "-B", "-P", "-c", pilot_module._CONSUMER_ENVIRONMENT_PROBE],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode != 0
+    assert "symlinked model-cache directory" in completed.stderr
+
+
 def test_environment_probe_rejects_symlinked_editable_directory(tmp_path: Path) -> None:
     interpreter, site = _isolated_python_site(tmp_path)
     project = tmp_path / "project"
@@ -634,6 +662,7 @@ def test_finalization_invocation_records_supplied_input_paths(tmp_path: Path) ->
     assert argv[argv.index("--mapper-root") + 1] == "custom/mapper"
     assert argv[argv.index("--enrich-root") + 1] == "custom/enrich"
     assert argv[argv.index("--incumbent-version") + 1] == "0.4.0"
+    assert "--skip-incumbent-prepare" in argv
     assert receipt["environment"] == {
         "ACCELERATE_USE_CPU": "true",
         "CUDA_VISIBLE_DEVICES": "",
@@ -765,6 +794,7 @@ def test_run_shard_uses_one_explicit_item_and_suppresses_large_stdout(
 
     command = observed["command"]
     assert command[command.index("--item-id") + 1] == "one"
+    assert "--skip-incumbent-prepare" in command
     assert command[command.index("--corpus-manifest") + 1] == (
         "eval/synthetic/corpus_v1.manifest.json"
     )
