@@ -114,6 +114,12 @@ def test_consumer_environment_fingerprint_uses_probe_digests(
         "python_version": "3.11",
         "distribution_count": 10,
         "distributions_sha256": "c" * 64,
+        "installed_file_count": 50,
+        "installed_file_bytes": 1_000,
+        "installed_files_sha256": "e" * 64,
+        "editable_source_files": 7,
+        "editable_source_bytes": 700,
+        "editable_sources_sha256": "f" * 64,
         "model_asset_files": 5,
         "model_asset_bytes": 100,
         "model_assets_present": True,
@@ -138,6 +144,57 @@ def test_consumer_environment_fingerprint_uses_probe_digests(
     payload["model_assets_present"] = False
     with pytest.raises(PilotCheckpointError, match="model cache must be warmed"):
         _consumer_environment_fingerprint(interpreter, require_model_assets=True)
+
+
+def test_environment_probe_hashes_editable_source_bytes(tmp_path: Path) -> None:
+    site = tmp_path / "site"
+    dist_info = site / "demo-1.0.dist-info"
+    source_root = tmp_path / "project" / "src"
+    package = source_root / "demo"
+    dist_info.mkdir(parents=True)
+    package.mkdir(parents=True)
+    module = package / "__init__.py"
+    module.write_text("VALUE = 1\n", encoding="utf-8")
+    (site / "demo.pth").write_text(f"{source_root}\n", encoding="utf-8")
+    (dist_info / "METADATA").write_text(
+        "Metadata-Version: 2.1\nName: demo\nVersion: 1.0\n",
+        encoding="utf-8",
+    )
+    (dist_info / "direct_url.json").write_text(
+        json.dumps({"url": (tmp_path / "project").as_uri(), "dir_info": {"editable": True}}),
+        encoding="utf-8",
+    )
+    (dist_info / "RECORD").write_text(
+        "demo.pth,,\n"
+        "demo-1.0.dist-info/METADATA,,\n"
+        "demo-1.0.dist-info/RECORD,,\n"
+        "demo-1.0.dist-info/direct_url.json,,\n",
+        encoding="utf-8",
+    )
+
+    def probe() -> dict[str, object]:
+        environment = dict(pilot_module.os.environ)
+        environment["PYTHONPATH"] = str(site)
+        completed = pilot_module.subprocess.run(
+            [
+                pilot_module.sys.executable,
+                "-S",
+                "-c",
+                pilot_module._CONSUMER_ENVIRONMENT_PROBE,
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            env=environment,
+        )
+        return json.loads(completed.stdout)
+
+    before = probe()
+    module.write_text("VALUE = 2\n", encoding="utf-8")
+    after = probe()
+
+    assert before["editable_source_files"] == 1
+    assert before["editable_sources_sha256"] != after["editable_sources_sha256"]
 
 
 def test_fingerprint_prepares_both_incumbents_before_probing(
@@ -181,6 +238,7 @@ def test_fingerprint_prepares_both_incumbents_before_probing(
         corpus=_corpus(tmp_path),
         config_path=Path("config.json"),
         leak_manifest_path=Path("leaks.json"),
+        salt_file_path=Path("salt"),
         public_metadata_path=Path("public.json"),
         mapper_root=mapper.repo_root,
         enrich_root=enrich.repo_root,
@@ -197,6 +255,7 @@ def test_fingerprint_prepares_both_incumbents_before_probing(
     ]
     assert fingerprint["incumbent_version"] == "0.4.0"
     assert fingerprint["ontology_cache_sha256"] == "ontology"
+    assert fingerprint["salt_file_sha256"] == "a" * 64
 
 
 def test_finalization_invocation_records_supplied_input_paths(tmp_path: Path) -> None:

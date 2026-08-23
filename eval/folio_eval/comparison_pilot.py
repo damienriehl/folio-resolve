@@ -44,7 +44,9 @@ import importlib.metadata
 import json
 import re
 import sys
+import tomllib
 from pathlib import Path
+from urllib.parse import unquote, urlparse
 
 
 def digest_bytes(value):
@@ -57,20 +59,121 @@ def digest_file(path):
 
 
 distributions = []
+installed_entries = []
+editable_entries = []
+resolved_digests = {}
 for distribution in importlib.metadata.distributions():
     name = distribution.metadata.get("Name", "")
     canonical_name = re.sub(r"[-_.]+", "-", name).lower()
     record = (distribution.read_text("RECORD") or "").encode()
-    direct_url = (distribution.read_text("direct_url.json") or "").encode()
+    direct_url_text = distribution.read_text("direct_url.json") or ""
+    direct_url = direct_url_text.encode()
+    distribution_files = []
+    pth_paths = []
+    for relative in distribution.files or ():
+        path = Path(distribution.locate_file(relative))
+        if not path.is_file():
+            distribution_files.append([str(relative), "missing", 0])
+            continue
+        resolved = path.resolve()
+        cache_key = str(resolved)
+        if cache_key not in resolved_digests:
+            resolved_digests[cache_key] = digest_file(resolved)
+        entry = [str(relative), resolved_digests[cache_key], resolved.stat().st_size]
+        distribution_files.append(entry)
+        installed_entries.append([canonical_name, *entry])
+        if path.suffix == ".pth":
+            for line in path.read_text(encoding="utf-8").splitlines():
+                stripped = line.strip()
+                if stripped and not stripped.startswith(("#", "import ")):
+                    candidate = Path(stripped)
+                    if not candidate.is_absolute():
+                        candidate = path.parent / candidate
+                    if candidate.is_dir():
+                        pth_paths.append(candidate.resolve())
+
+    editable_sources = []
+    if direct_url_text:
+        direct_url_payload = json.loads(direct_url_text)
+        if direct_url_payload.get("dir_info", {}).get("editable") is True:
+            parsed = urlparse(direct_url_payload.get("url", ""))
+            editable_root = Path(unquote(parsed.path)).resolve()
+            source_roots = []
+            pyproject = editable_root / "pyproject.toml"
+            if pyproject.is_file():
+                project_config = tomllib.loads(pyproject.read_text(encoding="utf-8"))
+                hatch_packages = (
+                    project_config.get("tool", {})
+                    .get("hatch", {})
+                    .get("build", {})
+                    .get("targets", {})
+                    .get("wheel", {})
+                    .get("packages", [])
+                )
+                source_roots.extend(
+                    (editable_root / package).resolve()
+                    for package in hatch_packages
+                    if isinstance(package, str) and (editable_root / package).is_dir()
+                )
+            if not source_roots:
+                for candidate in pth_paths:
+                    try:
+                        candidate.relative_to(editable_root)
+                    except ValueError:
+                        continue
+                    if candidate != editable_root:
+                        source_roots.append(candidate)
+            if not source_roots and (editable_root / "src").is_dir():
+                source_roots.append((editable_root / "src").resolve())
+            if not source_roots:
+                package_names = {
+                    canonical_name.replace("-", "_"),
+                    canonical_name.split("-", 1)[0],
+                }
+                source_roots.extend(
+                    candidate.resolve()
+                    for package_name in package_names
+                    for candidate in (editable_root / package_name,)
+                    if candidate.is_dir()
+                )
+            for source_root in sorted(set(source_roots)):
+                for path in sorted(source_root.rglob("*")):
+                    if (
+                        not path.is_file()
+                        or "__pycache__" in path.parts
+                        or path.suffix in {".pyc", ".pyo"}
+                    ):
+                        continue
+                    resolved = path.resolve()
+                    cache_key = str(resolved)
+                    if cache_key not in resolved_digests:
+                        resolved_digests[cache_key] = digest_file(resolved)
+                    entry = [
+                        path.relative_to(editable_root).as_posix(),
+                        resolved_digests[cache_key],
+                        resolved.stat().st_size,
+                    ]
+                    editable_sources.append(entry)
+                    editable_entries.append([canonical_name, *entry])
     distributions.append([
         canonical_name,
         distribution.version,
         digest_bytes(record),
         digest_bytes(direct_url),
+        digest_bytes(json.dumps(distribution_files, separators=(",", ":")).encode()),
+        digest_bytes(json.dumps(editable_sources, separators=(",", ":")).encode()),
     ])
 distributions.sort()
+installed_entries.sort()
+editable_entries.sort()
 distribution_payload = json.dumps(
     distributions, ensure_ascii=True, separators=(",", ":")
+).encode()
+installed_payload = json.dumps(
+    installed_entries, ensure_ascii=True, separators=(",", ":")
+).encode()
+editable_payload = json.dumps(
+    editable_entries, ensure_ascii=True, separators=(",", ":")
 ).encode()
 
 try:
@@ -80,7 +183,6 @@ except Exception:
     model_root = Path("/__missing_huggingface_cache__")
 
 model_entries = []
-resolved_digests = {}
 if model_root.is_dir():
     for path in sorted(model_root.rglob("*")):
         if not path.is_file():
@@ -103,6 +205,12 @@ print(json.dumps({
     "python_version": sys.version,
     "distribution_count": len(distributions),
     "distributions_sha256": digest_bytes(distribution_payload),
+    "installed_file_count": len(installed_entries),
+    "installed_file_bytes": sum(entry[3] for entry in installed_entries),
+    "installed_files_sha256": digest_bytes(installed_payload),
+    "editable_source_files": len(editable_entries),
+    "editable_source_bytes": sum(entry[3] for entry in editable_entries),
+    "editable_sources_sha256": digest_bytes(editable_payload),
     "model_asset_files": len(model_entries),
     "model_asset_bytes": sum(entry[2] for entry in model_entries),
     "model_assets_present": bool(model_entries),
@@ -148,6 +256,8 @@ def _consumer_environment_fingerprint(
         "interpreter_path_sha256",
         "interpreter_sha256",
         "distributions_sha256",
+        "installed_files_sha256",
+        "editable_sources_sha256",
         "model_assets_sha256",
     }
     if (
@@ -161,7 +271,15 @@ def _consumer_environment_fingerprint(
         )
     ):
         raise PilotCheckpointError("consumer environment probe was malformed")
-    for key in ("distribution_count", "model_asset_files", "model_asset_bytes"):
+    for key in (
+        "distribution_count",
+        "installed_file_count",
+        "installed_file_bytes",
+        "editable_source_files",
+        "editable_source_bytes",
+        "model_asset_files",
+        "model_asset_bytes",
+    ):
         if not isinstance(payload.get(key), int) or payload[key] < 0:
             raise PilotCheckpointError("consumer environment probe was malformed")
     if not isinstance(payload.get("python_version"), str) or not payload["python_version"]:
@@ -201,6 +319,7 @@ def _fingerprint(
     corpus: LoadedCorpus,
     config_path: Path,
     leak_manifest_path: Path,
+    salt_file_path: Path,
     public_metadata_path: Path,
     mapper_root: Path,
     enrich_root: Path,
@@ -238,6 +357,7 @@ def _fingerprint(
         "public_metadata_sha256": _sha256_file(public_metadata_path),
         "python_hash_seed": os.environ.get("PYTHONHASHSEED", ""),
         "python_version": platform.python_version(),
+        "salt_file_sha256": _sha256_file(salt_file_path),
         "scoreable_limit": limit,
     }
 
@@ -629,6 +749,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         corpus=corpus,
         config_path=args.config,
         leak_manifest_path=args.leak_manifest,
+        salt_file_path=args.salt_file,
         public_metadata_path=args.public_metadata,
         mapper_root=args.mapper_root,
         enrich_root=args.enrich_root,
