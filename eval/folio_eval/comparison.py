@@ -58,6 +58,7 @@ class VersionSkewError(ComparisonError):
 
 
 DEFAULT_COMPARISON_TIMEOUT_S = 2 * 60 * 60
+FOLIO_IRI_ROOT = "https://folio.openlegalstandard.org/"
 
 MAPPER_DETERMINISTIC_CONFIG: Mapping[str, object] = {
     "threshold": 0.3,
@@ -494,6 +495,14 @@ def _assert_consumer_rows(run: StackRun, expected_ids: Sequence[str]) -> None:
             key: _assert_string_list(value, context=f"{run.stack} {item_id!r} {key}")
             for key, value in stage.items()
         }
+        if any(
+            not iri.startswith(FOLIO_IRI_ROOT)
+            for values in lists.values()
+            for iri in values
+        ) or any(not iri.startswith(FOLIO_IRI_ROOT) for iri in run.rows[item_id]):
+            raise StackContractError(
+                f"{run.stack} emitted a non-canonical FOLIO IRI for {item_id!r}"
+            )
         if run.stack == "folio-mapper":
             stage1 = lists["stage1_filter"]
             reranked = lists["embedding_rerank"]

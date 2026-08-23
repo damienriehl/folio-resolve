@@ -766,11 +766,11 @@ def test_consumer_runner_translates_deterministic_lane_to_incumbent(
             + json.dumps(
                 {
                     "item_id": "one",
-                    "iris": ["iri:a"],
+                    "iris": ["https://folio.openlegalstandard.org/Ra"],
                     "stages": {
-                        "stage1_filter": ["iri:a"],
-                        "embedding_rerank": ["iri:a"],
-                        "committed": ["iri:a"],
+                        "stage1_filter": ["https://folio.openlegalstandard.org/Ra"],
+                        "embedding_rerank": ["https://folio.openlegalstandard.org/Ra"],
+                        "committed": ["https://folio.openlegalstandard.org/Ra"],
                     },
                 }
             )
@@ -803,6 +803,27 @@ def test_consumer_runner_translates_deterministic_lane_to_incumbent(
     assert run.repository["git_sha"] == "a" * 40
     assert commands[0][0] == str(venv_python)
     assert commands[0][commands[0].index("--lane") + 1] == "deterministic"
+
+
+def test_consumer_rows_reject_bare_hashes_before_scoring() -> None:
+    run = StackRun(
+        stack="folio-mapper",
+        lane="incumbent",
+        folio_resolve_version="0.4.0",
+        folio_python_version="0.3.6",
+        config=dict(comparison_module.MAPPER_DETERMINISTIC_CONFIG),
+        rows={"one": frozenset({"Rbare"})},
+        stages={
+            "one": {
+                "stage1_filter": ["Rbare"],
+                "embedding_rerank": ["Rbare"],
+                "committed": ["Rbare"],
+            }
+        },
+    )
+
+    with pytest.raises(StackContractError, match="non-canonical FOLIO IRI"):
+        comparison_module._assert_consumer_rows(run, ["one"])
 
 
 def test_consumer_runner_translates_timeout_to_domain_error(
