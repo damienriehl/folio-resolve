@@ -16,6 +16,7 @@ from typing import Any
 
 from .answer_rule import load_config
 from .comparison import (
+    PublicComparisonMetadata,
     StackRun,
     _file_fingerprint,
     _git_repository_state,
@@ -1307,6 +1308,7 @@ def _finalize(
             for item_id in item_ids
         },
     }
+    public_metadata = _load_bound_public_metadata(args.public_metadata, fingerprint)
     _require_current_fingerprint(
         args, corpus, fingerprint, boundary="before final report publication"
     )
@@ -1316,8 +1318,21 @@ def _finalize(
         payload,
         leak_manifest,
         salt,
-        public_metadata=load_public_comparison_metadata(args.public_metadata),
+        public_metadata=public_metadata,
     )
+
+
+def _load_bound_public_metadata(
+    path: Path, fingerprint: Mapping[str, object]
+) -> PublicComparisonMetadata:
+    """Load one metadata snapshot and prove those exact bytes belong to the run."""
+    try:
+        content = path.read_bytes()
+    except OSError as exc:
+        raise PilotCheckpointError(f"comparison public metadata is unavailable: {path}") from exc
+    if sha256_bytes(content) != fingerprint.get("public_metadata_sha256"):
+        raise PilotCheckpointError("comparison public metadata drifted before finalization")
+    return load_public_comparison_metadata(path, content=content)
 
 
 def _parser() -> argparse.ArgumentParser:

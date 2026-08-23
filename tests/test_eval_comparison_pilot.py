@@ -995,7 +995,7 @@ def test_finalize_durably_creates_output_parent_before_publish(
     )
     monkeypatch.setattr(pilot_module, "_file_fingerprint", lambda *_args, **_kwargs: {})
     monkeypatch.setattr(pilot_module, "_sha256_file", lambda _path: "a" * 64)
-    monkeypatch.setattr(pilot_module, "load_public_comparison_metadata", lambda _path: object())
+    monkeypatch.setattr(pilot_module, "_load_bound_public_metadata", lambda *_args: object())
     monkeypatch.setattr(
         pilot_module,
         "_require_current_fingerprint",
@@ -1021,6 +1021,27 @@ def test_finalize_durably_creates_output_parent_before_publish(
         ("directory", output.parent),
         ("publish", output),
     ]
+
+
+def test_bound_public_metadata_uses_the_verified_byte_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "public.json"
+    original = b'{"version":1}\n'
+    path.write_bytes(original)
+    observed: list[bytes] = []
+
+    def load(_path: Path, *, content: bytes) -> object:
+        observed.append(content)
+        path.write_bytes(b'{"version":2}\n')
+        return object()
+
+    monkeypatch.setattr(pilot_module, "load_public_comparison_metadata", load)
+    fingerprint = {"public_metadata_sha256": pilot_module.sha256_bytes(original)}
+
+    pilot_module._load_bound_public_metadata(path, fingerprint)
+
+    assert observed == [original]
 
 
 def test_main_revalidates_fingerprint_before_and_after_each_shard(

@@ -132,9 +132,11 @@ class PublicComparisonMetadata:
     fields: Mapping[tuple[str, ...], tuple[str, str]]
 
 
-def load_public_comparison_metadata(path: Path) -> PublicComparisonMetadata:
+def load_public_comparison_metadata(
+    path: Path, *, content: bytes | None = None
+) -> PublicComparisonMetadata:
     """Load the independently reviewed comparison public-string contract."""
-    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload = json.loads(content if content is not None else path.read_bytes())
     if not isinstance(payload, dict) or payload.get("kind") != COMPARISON_PUBLIC_METADATA_KIND:
         raise ComparisonError(f"invalid comparison public metadata contract: {path}")
     if payload.get("version") != COMPARISON_PUBLIC_METADATA_VERSION:
