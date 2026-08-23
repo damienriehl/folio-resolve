@@ -620,3 +620,32 @@ def test_progress_is_ephemeral_and_reports_only_new_items(tmp_path: Path) -> Non
         progress=progress.append,
     )
     assert progress == []
+
+
+def test_sharded_progress_uses_the_shard_local_denominator(tmp_path: Path) -> None:
+    config = AnswerRuleConfig()
+    corpus = _corpus(config)
+    store = SyntheticCheckpointStore.create(
+        tmp_path / "checkpoint",
+        fingerprint=_fingerprint(config),
+        shard_count=2,
+        expected_item_count=3,
+        retained_limit=DEPTH_PROBE_MAX,
+    )
+    progress: list[dict[str, object]] = []
+
+    assert (
+        score_corpus_checkpointed(
+            corpus,
+            _ontology(),
+            config,
+            store=store,
+            shard_index=0,
+            progress=progress.append,
+        )
+        is None
+    )
+
+    assert [entry["completed"] for entry in progress] == [1, 2]
+    assert [entry["total"] for entry in progress] == [2, 2]
+    assert progress[-1]["eta_seconds"] == 0.0

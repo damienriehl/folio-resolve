@@ -507,12 +507,13 @@ def score_corpus_checkpointed(
         document_adapter = adapter
         started = time.perf_counter()
         new_items = 0
-        completed = store.completed_count()
+        completed = 0
         loaded: dict[tuple[SyntheticItemKind, str], CheckpointAdapterResult] = {}
         for kind, item_id, text in selected:
             existing = store.maybe_load_item(kind, item_id)
             if existing is not None:
                 loaded[(kind, item_id)] = existing
+                completed += 1
                 continue
             if document_adapter is None:
                 if adapter_factory is not None:
@@ -533,7 +534,7 @@ def score_corpus_checkpointed(
             completed += 1
             if progress is not None:
                 elapsed = time.perf_counter() - started
-                remaining = max(store.expected_item_count - completed, 0)
+                remaining = max(len(selected) - completed, 0)
                 progress(
                     {
                         "completed": completed,
@@ -541,7 +542,7 @@ def score_corpus_checkpointed(
                         "eta_seconds": round((elapsed / new_items) * remaining, 3),
                         "item_key": checkpoint_item_key(kind, item_id),
                         "shard_index": selected_index,
-                        "total": store.expected_item_count,
+                        "total": len(selected),
                     }
                 )
     if finalize_only:
