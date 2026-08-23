@@ -209,6 +209,10 @@ def test_consumer_environment_fingerprint_uses_probe_digests(
         "python_version": "3.11",
         "distribution_count": 10,
         "distributions_sha256": "c" * 64,
+        "derived_cache_bytes": 500,
+        "derived_cache_complete": True,
+        "derived_cache_files": 1,
+        "derived_cache_sha256": "7" * 64,
         "installed_file_count": 50,
         "installed_file_bytes": 1_000,
         "installed_files_sha256": "e" * 64,
@@ -255,6 +259,11 @@ def test_consumer_environment_fingerprint_uses_probe_digests(
     payload["model_assets_complete"] = False
     with pytest.raises(PilotCheckpointError, match="load completely offline"):
         _consumer_environment_fingerprint(interpreter, require_model_assets=True)
+
+    payload["model_assets_complete"] = True
+    payload["derived_cache_complete"] = False
+    with pytest.raises(PilotCheckpointError, match="derived CPU embedding cache"):
+        _consumer_environment_fingerprint(interpreter, require_mapper_cache=True)
 
 
 def test_environment_probe_hashes_editable_source_bytes(tmp_path: Path) -> None:
@@ -566,6 +575,11 @@ def test_incumbents_are_prepared_once_before_read_only_fingerprinting(
     )
     monkeypatch.setattr(
         pilot_module,
+        "_prepare_mapper_index",
+        lambda spec: events.append(f"prepare-index:{spec.name}"),
+    )
+    monkeypatch.setattr(
+        pilot_module,
         "_consumer_environment_fingerprint",
         lambda path, **_kwargs: events.append(f"probe:{path}") or {},
     )
@@ -594,6 +608,7 @@ def test_incumbents_are_prepared_once_before_read_only_fingerprinting(
     assert events == [
         "prepare:folio-mapper",
         "prepare:folio-enrich",
+        "prepare-index:folio-mapper",
         "pin:ontology",
         f"probe:{Path(pilot_module.sys.executable)}",
         f"probe:{mapper.venv_python}",
@@ -602,6 +617,35 @@ def test_incumbents_are_prepared_once_before_read_only_fingerprinting(
     assert fingerprint["incumbent_version"] == "0.4.0"
     assert fingerprint["ontology_cache_sha256"] == "ontology"
     assert fingerprint["salt_file_sha256"] == "a" * 64
+
+
+def test_mapper_index_preparation_forces_cpu_and_offline_runtime(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    observed: dict[str, object] = {}
+    mapper = SimpleNamespace(
+        repo_root=tmp_path / "mapper",
+        venv_python=tmp_path / "mapper" / "backend" / ".venv" / "bin" / "python",
+    )
+    cache_path = tmp_path / "all-MiniLM-L6-v2_cpu_ontology.pkl"
+    cache_path.write_bytes(b"cache")
+    synced: list[Path] = []
+
+    def run(command: list[str], **kwargs: object) -> SimpleNamespace:
+        observed["command"] = command
+        observed.update(kwargs)
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(pilot_module.subprocess, "run", run)
+    monkeypatch.setattr(pilot_module, "_mapper_cpu_cache_paths", lambda: (cache_path,))
+    monkeypatch.setattr(pilot_module, "_durably_sync_file", synced.append)
+    pilot_module._prepare_mapper_index(mapper)
+
+    command = observed["command"]
+    assert 'EmbeddingConfig(device="cpu")' in command[-1]
+    assert observed["cwd"] == str(mapper.repo_root / "backend")
+    assert observed["env"]["HF_HUB_OFFLINE"] == "1"
+    assert synced == [cache_path]
 
 
 def test_existing_checkpoint_skips_incumbent_preparation(
@@ -644,6 +688,22 @@ def test_environment_probe_ignores_inactive_base_package_trees(tmp_path: Path) -
     )
 
     assert json.loads(completed.stdout)["stdlib_file_count"] > 0
+
+
+def test_environment_probe_rejects_active_base_site_packages(tmp_path: Path) -> None:
+    runtime = tmp_path / "runtime"
+    venv.EnvBuilder(with_pip=False, system_site_packages=True).create(runtime)
+    interpreter = runtime / "bin" / "python"
+
+    completed = pilot_module.subprocess.run(
+        [interpreter, "-B", "-P", "-c", pilot_module._CONSUMER_ENVIRONMENT_PROBE],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode != 0
+    assert "active base site-packages root is not allowed" in completed.stderr
 
 
 def test_finalization_invocation_records_supplied_input_paths(tmp_path: Path) -> None:

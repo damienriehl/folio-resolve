@@ -895,10 +895,23 @@ def test_consumer_runner_translates_deterministic_lane_to_incumbent(
         return subprocess.CompletedProcess(command, 0, "", "")
 
     prepared: list[ConsumerSpec] = []
+    probed: list[ConsumerSpec] = []
     monkeypatch.setattr(
         comparison_module,
         "prepare_incumbent",
         lambda spec, *_args: prepared.append(spec) or {},
+    )
+    monkeypatch.setattr(
+        comparison_module,
+        "_probe_environment",
+        lambda spec: probed.append(spec)
+        or {
+            "folio_resolve_version": "0.4.0",
+            "folio_resolve_file": str(
+                tmp_path / ".venv" / "lib" / "site-packages" / "folio_resolve" / "__init__.py"
+            ),
+            "folio_python_version": "0.3.6",
+        },
     )
     monkeypatch.setattr(comparison_module, "clean_tree_guard", lambda _root: nullcontext())
     monkeypatch.setattr(
@@ -924,6 +937,40 @@ def test_consumer_runner_translates_deterministic_lane_to_incumbent(
     assert commands[0][0] == str(venv_python)
     assert commands[0][commands[0].index("--lane") + 1] == "deterministic"
     assert prepared == []
+    assert probed == [spec]
+
+
+def test_consumer_runner_rejects_editable_incumbent_when_preparation_is_skipped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spec = ConsumerSpec("folio-mapper", tmp_path, tmp_path / ".venv" / "bin" / "python")
+    items_path = tmp_path / "items.jsonl"
+    items_path.write_text(json.dumps({"item_id": "one"}) + "\n", encoding="utf-8")
+    monkeypatch.setattr(comparison_module, "clean_tree_guard", lambda _root: nullcontext())
+    monkeypatch.setattr(
+        comparison_module,
+        "_git_repository_state",
+        lambda _root: {"git_sha": "a" * 40, "initial_status_clean": True},
+    )
+    monkeypatch.setattr(
+        comparison_module,
+        "_probe_environment",
+        lambda _spec: {
+            "folio_resolve_version": "0.4.0",
+            "folio_resolve_file": str(tmp_path / "editable" / "folio_resolve" / "__init__.py"),
+            "folio_python_version": "0.3.6",
+        },
+    )
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("runner must not execute after an invalid incumbent probe")
+        ),
+    )
+
+    with pytest.raises(IncumbentInstallMismatch, match="not inside site-packages"):
+        run_consumer_stack(spec, items_path, prepare=False)
 
 
 def test_consumer_rows_reject_bare_hashes_before_scoring() -> None:

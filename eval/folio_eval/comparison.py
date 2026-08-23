@@ -615,6 +615,8 @@ def run_consumer_stack(
         with clean_tree_guard(spec.repo_root):
             if prepare:
                 prepare_incumbent(spec, version)
+            else:
+                assert_incumbent_probe(_probe_environment(spec), version)
             try:
                 completed = subprocess.run(
                     command,

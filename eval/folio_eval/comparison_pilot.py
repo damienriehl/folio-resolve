@@ -348,6 +348,11 @@ for entry in sys.path:
     if not entry:
         raise RuntimeError("unsafe empty import root is not allowed")
     path = Path(entry).resolve()
+    if (
+        path.name in {"site-packages", "dist-packages"}
+        and path not in site_roots
+    ):
+        raise RuntimeError("active base site-packages root is not allowed")
     allowed = (
         path in site_roots
         or path in stdlib_zips
@@ -421,6 +426,22 @@ if model_root.is_dir():
             resolved.stat().st_size,
         ])
 model_payload = json.dumps(model_entries, ensure_ascii=True, separators=(",", ":")).encode()
+derived_cache_entries = []
+derived_cache_root = Path.home() / ".folio" / "cache" / "embeddings"
+if os.environ.get("FOLIO_PROBE_REQUIRE_MAPPER_CACHE") == "1":
+    if derived_cache_root.is_symlink():
+        raise RuntimeError("symlinked mapper embedding-cache root is not allowed")
+    for path in sorted(derived_cache_root.glob("all-MiniLM-L6-v2_cpu_*.pkl")):
+        if path.is_symlink() or not path.is_file():
+            raise RuntimeError("symlinked mapper embedding-cache entry is not allowed")
+        derived_cache_entries.append([
+            path.name,
+            digest_file(path),
+            path.stat().st_size,
+        ])
+derived_cache_payload = json.dumps(
+    derived_cache_entries, ensure_ascii=True, separators=(",", ":")
+).encode()
 model_assets_complete = False
 model_embedding_dimension = 0
 model_device = ""
@@ -492,6 +513,10 @@ print(json.dumps({
     "editable_source_files": len(editable_entries),
     "editable_source_bytes": sum(entry[3] for entry in editable_entries),
     "editable_sources_sha256": digest_bytes(editable_payload),
+    "derived_cache_bytes": sum(entry[2] for entry in derived_cache_entries),
+    "derived_cache_complete": bool(derived_cache_entries),
+    "derived_cache_files": len(derived_cache_entries),
+    "derived_cache_sha256": digest_bytes(derived_cache_payload),
     "import_path_entries": len(effective_import_paths),
     "import_path_sha256": digest_bytes(import_path_payload),
     "meta_path_entries": len(meta_path),
@@ -571,12 +596,17 @@ def _item_key(item_id: str) -> str:
 
 
 def _consumer_environment_fingerprint(
-    venv_python: Path, *, require_model_assets: bool = False
+    venv_python: Path,
+    *,
+    require_mapper_cache: bool = False,
+    require_model_assets: bool = False,
 ) -> dict[str, object]:
     """Hash the actual consumer interpreter, distributions, and cached embedding model."""
     environment = _offline_runtime_environment()
     if require_model_assets:
         environment["FOLIO_PROBE_REQUIRE_MODEL_ASSETS"] = "1"
+    if require_mapper_cache:
+        environment["FOLIO_PROBE_REQUIRE_MAPPER_CACHE"] = "1"
     try:
         completed = subprocess.run(
             [str(venv_python), "-B", "-P", "-c", _CONSUMER_ENVIRONMENT_PROBE],
@@ -597,6 +627,7 @@ def _consumer_environment_fingerprint(
         "interpreter_path_sha256",
         "interpreter_sha256",
         "distributions_sha256",
+        "derived_cache_sha256",
         "installed_files_sha256",
         "site_files_sha256",
         "stdlib_files_sha256",
@@ -620,6 +651,8 @@ def _consumer_environment_fingerprint(
         raise PilotCheckpointError("consumer environment probe was malformed")
     for key in (
         "distribution_count",
+        "derived_cache_bytes",
+        "derived_cache_files",
         "installed_file_count",
         "installed_file_bytes",
         "site_file_count",
@@ -645,6 +678,8 @@ def _consumer_environment_fingerprint(
         raise PilotCheckpointError("consumer environment probe was malformed")
     if not isinstance(payload.get("model_assets_complete"), bool):
         raise PilotCheckpointError("consumer environment probe was malformed")
+    if not isinstance(payload.get("derived_cache_complete"), bool):
+        raise PilotCheckpointError("consumer environment probe was malformed")
     if require_model_assets and (
         payload.get("model_assets_present") is not True
         or payload.get("model_assets_complete") is not True
@@ -652,6 +687,10 @@ def _consumer_environment_fingerprint(
     ):
         raise PilotCheckpointError(
             "consumer embedding model cache must load completely offline before pilot initialization"
+        )
+    if require_mapper_cache and payload.get("derived_cache_complete") is not True:
+        raise PilotCheckpointError(
+            "mapper derived CPU embedding cache must be complete before pilot initialization"
         )
     payload["venv_path_sha256"] = sha256_bytes(str(venv_python.absolute()).encode())
     return payload
@@ -696,8 +735,48 @@ def _pilot_ids(corpus: LoadedCorpus, limit: int) -> tuple[str, ...]:
 
 def _prepare_incumbents(mapper_root: Path, enrich_root: Path) -> None:
     """Perform the one permitted consumer-environment mutation before fingerprinting."""
-    for consumer in (mapper_spec(mapper_root), enrich_spec(enrich_root)):
+    mapper = mapper_spec(mapper_root)
+    for consumer in (mapper, enrich_spec(enrich_root)):
         prepare_incumbent(consumer, INCUMBENT_VERSION)
+    _prepare_mapper_index(mapper)
+
+
+def _prepare_mapper_index(mapper: Any) -> None:
+    """Build the exact CPU-derived mapper cache before sealing the checkpoint."""
+    code = """
+from app.models.embedding_models import EmbeddingConfig
+from app.services.embedding.service import build_embedding_index, get_embedding_index
+build_embedding_index(EmbeddingConfig(device="cpu"))
+if get_embedding_index() is None:
+    raise RuntimeError("mapper CPU embedding index is unavailable after preparation")
+"""
+    completed = subprocess.run(
+        [str(mapper.venv_python), "-B", "-c", code],
+        cwd=str(mapper.repo_root / "backend"),
+        capture_output=True,
+        env=_offline_runtime_environment(),
+        text=True,
+        timeout=1800,
+    )
+    if completed.returncode:
+        raise PilotCheckpointError(
+            f"mapper CPU embedding index preparation failed (rc={completed.returncode}): "
+            f"{completed.stderr.strip()[-4000:]}"
+        )
+    for cache_path in _mapper_cpu_cache_paths():
+        _durably_sync_file(cache_path)
+
+
+def _mapper_cpu_cache_paths() -> tuple[Path, ...]:
+    root = Path.home() / ".folio" / "cache" / "embeddings"
+    if root.is_symlink():
+        raise PilotCheckpointError("symlinked mapper embedding-cache root is not allowed")
+    paths = tuple(sorted(root.glob("all-MiniLM-L6-v2_cpu_*.pkl")))
+    if not paths:
+        raise PilotCheckpointError("mapper CPU embedding index preparation produced no cache")
+    if any(path.is_symlink() or not path.is_file() for path in paths):
+        raise PilotCheckpointError("symlinked mapper embedding-cache entry is not allowed")
+    return paths
 
 
 def _prepare_incumbents_for_new_checkpoint(args: argparse.Namespace) -> None:
@@ -723,7 +802,9 @@ def _fingerprint(
     enrich = enrich_spec(enrich_root)
     candidate_environment = _consumer_environment_fingerprint(Path(sys.executable))
     mapper_environment = _consumer_environment_fingerprint(
-        mapper.venv_python, require_model_assets=True
+        mapper.venv_python,
+        require_mapper_cache=True,
+        require_model_assets=True,
     )
     enrich_environment = _consumer_environment_fingerprint(enrich.venv_python)
     return {
