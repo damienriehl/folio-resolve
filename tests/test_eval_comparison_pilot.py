@@ -156,6 +156,15 @@ def test_path_arguments_are_resolved_before_child_working_directory_changes(
             "enrich_root",
         )
     )
+    assert pilot_module._command_path(args.corpus_manifest) == str(
+        args.corpus_manifest
+    )
+
+
+def test_command_path_preserves_repository_relative_spelling() -> None:
+    path = pilot_module.FOLIO_RESOLVE_ROOT / "eval" / "synthetic" / "corpus.json"
+
+    assert pilot_module._command_path(path) == "eval/synthetic/corpus.json"
 
 
 def test_checkpoint_manifest_is_create_once_and_fingerprint_bound(tmp_path: Path) -> None:
@@ -334,26 +343,15 @@ def test_environment_probe_rejects_executable_pth_path_injection(tmp_path: Path)
     )
 
     assert completed.returncode != 0
-    assert "unowned effective import root" in completed.stderr
+    assert "unsupported executable .pth line" in completed.stderr
 
 
 def test_environment_probe_rejects_executable_pth_meta_path_hook(tmp_path: Path) -> None:
     interpreter, site = _isolated_python_site(tmp_path)
-    dist_info = site / "hook-1.0.dist-info"
-    dist_info.mkdir(parents=True)
-    (site / "hook.pth").write_text(
-        "import sys; sys.meta_path.insert(0, type('InjectedFinder', (), "
+    (site / "sitecustomize.py").write_text(
+        "import sys\n"
+        "sys.meta_path.insert(0, type('InjectedFinder', (), "
         "{'find_spec': lambda self, *args: None})())\n",
-        encoding="utf-8",
-    )
-    (dist_info / "METADATA").write_text(
-        "Metadata-Version: 2.1\nName: hook\nVersion: 1.0\n",
-        encoding="utf-8",
-    )
-    (dist_info / "RECORD").write_text(
-        "hook.pth,,\n"
-        "hook-1.0.dist-info/METADATA,,\n"
-        "hook-1.0.dist-info/RECORD,,\n",
         encoding="utf-8",
     )
 
@@ -592,6 +590,15 @@ def test_run_shard_uses_one_explicit_item_and_suppresses_large_stdout(
 
     command = observed["command"]
     assert command[command.index("--item-id") + 1] == "one"
+    assert command[command.index("--corpus-manifest") + 1] == (
+        "eval/synthetic/corpus_v1.manifest.json"
+    )
+    assert command[command.index("--config") + 1] == (
+        "eval/synthetic/answer_rule_config_synthetic_v1.json"
+    )
+    assert command[command.index("--leak-manifest") + 1] == (
+        "eval/synthetic/firm-surface-manifest-v1.json"
+    )
     assert observed["stdout"] is pilot_module.subprocess.DEVNULL
     assert observed["cwd"] == pilot_module.FOLIO_RESOLVE_ROOT
     assert "PYTHONPATH" not in observed["env"]

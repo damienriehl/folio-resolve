@@ -73,6 +73,11 @@ for distribution in importlib.metadata.distributions():
     direct_url = direct_url_text.encode()
     distribution_files = []
     pth_paths = []
+    allowed_executable_pth_lines = {
+        "import _cuda_bindings_redirector",
+        "import _virtualenv",
+        "import os; var = 'SETUPTOOLS_USE_DISTUTILS'; enabled = os.environ.get(var, 'local') == 'local'; enabled and __import__('_distutils_hack').add_shim();",
+    }
     for relative in distribution.files or ():
         path = Path(distribution.locate_file(relative))
         if not path.is_file():
@@ -88,7 +93,11 @@ for distribution in importlib.metadata.distributions():
         if path.suffix == ".pth":
             for line in path.read_text(encoding="utf-8").splitlines():
                 stripped = line.strip()
-                if stripped and not stripped.startswith(("#", "import ")):
+                if stripped.startswith(("import ", "import\t")):
+                    if stripped not in allowed_executable_pth_lines:
+                        raise RuntimeError("unsupported executable .pth line is not allowed")
+                    continue
+                if stripped and not stripped.startswith("#"):
                     candidate = Path(stripped)
                     if not candidate.is_absolute():
                         candidate = path.parent / candidate
@@ -428,6 +437,15 @@ def _resolve_path_arguments(args: argparse.Namespace) -> None:
         setattr(args, name, getattr(args, name).resolve())
 
 
+def _command_path(path: Path) -> str:
+    """Render repository inputs stably while retaining absolute external targets."""
+    resolved = path.resolve()
+    try:
+        return resolved.relative_to(FOLIO_RESOLVE_ROOT).as_posix()
+    except ValueError:
+        return str(resolved)
+
+
 def _sha256_file(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
@@ -742,25 +760,25 @@ def _run_shard(
         "eval/run_downstream.py",
         "run_synthetic_comparison",
         "--corpus-manifest",
-        str(args.corpus_manifest),
+        _command_path(args.corpus_manifest),
         "--config",
-        str(args.config),
+        _command_path(args.config),
         "--out",
-        str(report),
+        _command_path(report),
         "--items",
-        str(items),
+        _command_path(items),
         "--row-snapshot-dir",
-        str(stages),
+        _command_path(stages),
         "--leak-manifest",
-        str(args.leak_manifest),
+        _command_path(args.leak_manifest),
         "--salt-file",
-        str(args.salt_file),
+        _command_path(args.salt_file),
         "--public-metadata",
-        str(args.public_metadata),
+        _command_path(args.public_metadata),
         "--mapper-root",
-        str(args.mapper_root),
+        _command_path(args.mapper_root),
         "--enrich-root",
-        str(args.enrich_root),
+        _command_path(args.enrich_root),
         "--incumbent-version",
         INCUMBENT_VERSION,
         "--item-id",
@@ -876,25 +894,25 @@ def _finalization_invocation(
             "eval/run_downstream.py",
             "run_synthetic_comparison",
             "--corpus-manifest",
-            str(args.corpus_manifest),
+            _command_path(args.corpus_manifest),
             "--config",
-            str(args.config),
+            _command_path(args.config),
             "--out",
-            str(args.out),
+            _command_path(args.out),
             "--items",
-            str(combined_items),
+            _command_path(combined_items),
             "--row-snapshot-dir",
-            str(args.checkpoint_dir / "final-stages"),
+            _command_path(args.checkpoint_dir / "final-stages"),
             "--leak-manifest",
-            str(args.leak_manifest),
+            _command_path(args.leak_manifest),
             "--salt-file",
-            str(args.salt_file),
+            _command_path(args.salt_file),
             "--public-metadata",
-            str(args.public_metadata),
+            _command_path(args.public_metadata),
             "--mapper-root",
-            str(args.mapper_root),
+            _command_path(args.mapper_root),
             "--enrich-root",
-            str(args.enrich_root),
+            _command_path(args.enrich_root),
             "--incumbent-version",
             INCUMBENT_VERSION,
             "--limit",
