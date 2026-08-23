@@ -11,22 +11,22 @@
   "content_sha256": "a417085a506ed52033c7aeb43d0868f1b7e7201064b8e37f03637e920afaac4d",
   "corpus_version": 1,
   "depth_probe": {
-    "10": {
-      "depth": 10,
-      "mean_candidate_count": 10.0,
-      "mean_raw_candidate_recall_at_k": 0.043704,
-      "micro_f1": 0.007005
+    "1": {
+      "depth": 1,
+      "mean_candidate_count": 1.0,
+      "mean_raw_candidate_recall_at_k": 0.0,
+      "micro_f1": 0.0
     },
-    "200": {
-      "depth": 200,
-      "mean_candidate_count": 200.0,
-      "mean_raw_candidate_recall_at_k": 0.234815,
-      "micro_f1": 0.007005
+    "3": {
+      "depth": 3,
+      "mean_candidate_count": 3.0,
+      "mean_raw_candidate_recall_at_k": 0.0,
+      "micro_f1": 0.0
     },
-    "50": {
-      "depth": 50,
-      "mean_candidate_count": 50.0,
-      "mean_raw_candidate_recall_at_k": 0.07037,
+    "6": {
+      "depth": 6,
+      "mean_candidate_count": 6.0,
+      "mean_raw_candidate_recall_at_k": 0.013333,
       "micro_f1": 0.007005
     }
   },

@@ -51,7 +51,6 @@ REPORT_KIND = "synthetic_baseline"
 PUBLIC_METADATA_KIND = "synthetic-report-public-metadata"
 PUBLIC_METADATA_VERSION = 1
 DEPTH_PROBE_MAX = 200
-DEPTH_PROBE_DEPTHS = (10, 50, DEPTH_PROBE_MAX)
 DEFAULT_PUBLIC_METADATA_PATH = (
     Path(__file__).resolve().parents[1] / "synthetic" / "public_report_metadata_v1.json"
 )
@@ -579,9 +578,11 @@ def score_corpus_checkpointed(
 def depth_probe(
     run: ScoreRun,
     config: AnswerRuleConfig,
-    depths: Sequence[int] = DEPTH_PROBE_DEPTHS,
+    depths: Sequence[int] | None = None,
 ) -> dict[str, dict[str, float | int]]:
     """Probe candidate depths from rankings already retained by the scoring pass."""
+    if depths is None:
+        depths = tuple(dict.fromkeys((1, (config.top_k + 1) // 2, config.top_k)))
     if any(depth < 1 for depth in depths):
         raise ValueError("depths must be positive")
     if run.config != config:
