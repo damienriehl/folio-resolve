@@ -694,7 +694,12 @@ def test_consumer_runner_translates_deterministic_lane_to_incumbent(
         lambda _root: {"git_sha": "a" * 40, "initial_status_clean": True},
     )
     monkeypatch.setattr(subprocess, "run", fake_run)
-    spec = ConsumerSpec("folio-mapper", tmp_path, tmp_path / "python")
+    base_python = tmp_path / "base-python"
+    base_python.touch()
+    venv_python = tmp_path / ".venv" / "bin" / "python"
+    venv_python.parent.mkdir(parents=True)
+    venv_python.symlink_to(base_python)
+    spec = ConsumerSpec("folio-mapper", tmp_path, venv_python)
     items_path = tmp_path / "items.jsonl"
     items_path.write_text(json.dumps({"item_id": "one"}) + "\n", encoding="utf-8")
 
@@ -703,6 +708,7 @@ def test_consumer_runner_translates_deterministic_lane_to_incumbent(
     assert run.lane == "incumbent"
     assert run.invocation_working_directory == str(tmp_path.resolve())
     assert run.repository["git_sha"] == "a" * 40
+    assert commands[0][0] == str(venv_python)
     assert commands[0][commands[0].index("--lane") + 1] == "deterministic"
 
 

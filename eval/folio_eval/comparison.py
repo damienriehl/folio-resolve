@@ -460,7 +460,7 @@ def run_consumer_stack(
     with tempfile.TemporaryDirectory(prefix=f"{spec.name}-comparison-") as temporary:
         out_path = Path(temporary) / "stack.jsonl"
         command = [
-            str(spec.venv_python.resolve()),
+            str(spec.venv_python),
             str((spec.repo_root / relative_runner).resolve()),
             "--items",
             str(items_path.resolve()),
