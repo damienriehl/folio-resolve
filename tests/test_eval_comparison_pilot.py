@@ -90,6 +90,30 @@ def test_pilot_ids_are_fixed_scoreable_prefix_plus_all_nomatch(tmp_path: Path) -
     assert _pilot_ids(_corpus(tmp_path), 1) == ("one", "none")
 
 
+def test_durable_directory_creation_syncs_each_new_parent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    existing = tmp_path / "existing"
+    existing.mkdir()
+    target = existing / "items" / "opaque" / "stages"
+    synced: list[Path] = []
+    monkeypatch.setattr(pilot_module, "fsync_directory", synced.append)
+
+    pilot_module._durably_create_directory(target)
+
+    assert target.is_dir()
+    assert synced == [existing, existing / "items", existing / "items" / "opaque"]
+
+
+def test_mutable_python_import_overrides_are_rejected_and_sanitized(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("PYTHONPATH", "/mutable/source")
+    with pytest.raises(PilotCheckpointError, match="PYTHONPATH"):
+        pilot_module._assert_clean_import_environment()
+    assert "PYTHONPATH" not in pilot_module._runtime_environment()
+
+
 def test_checkpoint_manifest_is_create_once_and_fingerprint_bound(tmp_path: Path) -> None:
     path = tmp_path / "manifest.json"
     expected = _checkpoint_manifest(fingerprint={"git": "abc"}, item_ids=("one", "none"))
@@ -361,6 +385,12 @@ def test_run_shard_uses_one_explicit_item_and_suppresses_large_stdout(
         return SimpleNamespace(returncode=0)
 
     monkeypatch.setattr(pilot_module.subprocess, "run", fake_run)
+    monkeypatch.setenv("PYTHONPATH", "/mutable/source")
+    monkeypatch.setattr(
+        pilot_module,
+        "_durably_create_directory",
+        lambda path: events.append(f"directory:{path.name}"),
+    )
     monkeypatch.setattr(
         pilot_module,
         "_durably_sync_file",
@@ -388,7 +418,8 @@ def test_run_shard_uses_one_explicit_item_and_suppresses_large_stdout(
     assert command[command.index("--item-id") + 1] == "one"
     assert observed["stdout"] is pilot_module.subprocess.DEVNULL
     assert observed["cwd"] == pilot_module.FOLIO_RESOLVE_ROOT
-    assert events == ["durable", "loaded"]
+    assert "PYTHONPATH" not in observed["env"]
+    assert events == ["directory:stages", "durable", "loaded"]
 
 
 def test_main_can_initialize_checkpoint_without_starting_an_expensive_shard(
@@ -396,6 +427,7 @@ def test_main_can_initialize_checkpoint_without_starting_an_expensive_shard(
 ) -> None:
     monkeypatch.setenv("PYTHONHASHSEED", "0")
     monkeypatch.setattr(pilot_module, "load_corpus", lambda _path: _corpus(tmp_path))
+    monkeypatch.setattr(pilot_module, "_durably_create_directory", lambda _path: None)
     monkeypatch.setattr(pilot_module, "_fingerprint", lambda **_kwargs: {})
     monkeypatch.setattr(pilot_module, "_create_or_validate_manifest", lambda *_args: None)
     monkeypatch.setattr(

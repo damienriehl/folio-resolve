@@ -223,6 +223,23 @@ class PilotCheckpointError(RuntimeError):
     """A pilot shard or its fingerprint is missing, corrupt, or incompatible."""
 
 
+def _runtime_environment() -> dict[str, str]:
+    """Return the inherited environment without mutable Python import overrides."""
+    environment = dict(os.environ)
+    environment.pop("PYTHONPATH", None)
+    environment.pop("PYTHONHOME", None)
+    return environment
+
+
+def _assert_clean_import_environment() -> None:
+    overrides = [key for key in ("PYTHONPATH", "PYTHONHOME") if os.environ.get(key)]
+    if overrides:
+        raise PilotCheckpointError(
+            "comparison pilot refuses mutable Python import overrides: "
+            + ", ".join(overrides)
+        )
+
+
 def _sha256_file(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
@@ -239,6 +256,7 @@ def _consumer_environment_fingerprint(
         completed = subprocess.run(
             [str(venv_python), "-c", _CONSUMER_ENVIRONMENT_PROBE],
             capture_output=True,
+            env=_runtime_environment(),
             text=True,
             timeout=180,
         )
@@ -304,6 +322,27 @@ def _durably_sync_file(path: Path) -> None:
         fsync_directory(path.parent)
     except OSError as exc:
         raise PilotCheckpointError(f"could not durably publish pilot shard: {path}") from exc
+
+
+def _durably_create_directory(path: Path) -> None:
+    """Create a directory chain and persist every new ancestor entry."""
+    missing: list[Path] = []
+    cursor = path
+    while not cursor.exists():
+        missing.append(cursor)
+        if cursor == cursor.parent:
+            break
+        cursor = cursor.parent
+    if cursor.exists() and not cursor.is_dir():
+        raise PilotCheckpointError(f"pilot checkpoint ancestor is not a directory: {cursor}")
+    try:
+        for directory in reversed(missing):
+            directory.mkdir()
+            fsync_directory(directory.parent)
+    except OSError as exc:
+        raise PilotCheckpointError(
+            f"could not durably create pilot checkpoint directory: {path}"
+        ) from exc
 
 
 def _pilot_ids(corpus: LoadedCorpus, limit: int) -> tuple[str, ...]:
@@ -490,6 +529,7 @@ def _run_shard(
     if report.exists():
         _load_shard(report, item_id, fingerprint)
         return
+    _durably_create_directory(stages)
     command = [
         sys.executable,
         "eval/run_downstream.py",
@@ -523,6 +563,7 @@ def _run_shard(
         command,
         cwd=FOLIO_RESOLVE_ROOT,
         check=False,
+        env=_runtime_environment(),
         stdout=subprocess.DEVNULL,
     )
     if completed.returncode:
@@ -743,6 +784,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     if os.environ.get("PYTHONHASHSEED") != "0":
         raise PilotCheckpointError("comparison pilot requires PYTHONHASHSEED=0")
+    _assert_clean_import_environment()
     corpus = load_corpus(args.corpus_manifest)
     item_ids = _pilot_ids(corpus, args.limit)
     fingerprint = _fingerprint(
@@ -756,6 +798,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         limit=args.limit,
     )
     manifest = _checkpoint_manifest(fingerprint=fingerprint, item_ids=item_ids)
+    _durably_create_directory(args.checkpoint_dir)
     _create_or_validate_manifest(args.checkpoint_dir / "manifest.json", manifest)
     if not args.finalize_only:
         completed_before = sum(
