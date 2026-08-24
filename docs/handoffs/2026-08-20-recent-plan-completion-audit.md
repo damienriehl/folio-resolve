@@ -194,13 +194,13 @@ branch: "docs/recent-plan-audit-2026-08-20"
   It merged as `331c507c` from reviewed head `f9443d2`; saved-stage reconstruction passes without
   rerunning models. Final validation was `1128 passed, 2 skipped`, 74 focused tests, with Ruff,
   mypy, and diff checks clean.
-- The corrected v5 pilot checkpoint passed its one-item canary and is at 1/60 from exact reviewed
+- The corrected v5 pilot checkpoint passed its one-item canary and is at 2/60 from exact reviewed
   head `f9443d2`,
   with fingerprint `c450a2b04d1fb4e2fbeb1433ecea832f36ef02c02de407083895f63777efa4a8`
   and manifest SHA-256 `7e00bb154d8753a66d0370cac89a3325957bedce9a4d652a5fbbb58e31dc4994`.
   The successful receipt has SHA-256
   `35bf7d45f8a8fae625ca44a44d4e920724092d9bb0edb5df5773535eaab60a49`.
-  The remaining managed run has entered shard 2/60; if that process is absent after interruption,
+  The remaining managed run has entered shard 3/60; if that process is absent after interruption,
   rerun the exact v5 command and let the fingerprint and receipt checks resume it.
 
 ## Plan-level verdicts
@@ -234,7 +234,7 @@ branch: "docs/recent-plan-audit-2026-08-20"
 | U7 grader/close-call lane | **Partial** | Code is complete. The first consensus-audit sitting, confidence-floor calibration, and human ratification into corpus v2 wait on D1/D2 and owner adjudication. |
 | U8 synthetic scoring | **Complete** | All 255 checkpoints completed at scorer `933c6ef`; automatic and finalize-only reports were byte-identical. Corrected depth-probe report PR #10 merged as `4bd353d5`; accounting, determinism, leak, test, type, and lint gates pass. |
 | U9 guarded iteration loop | **Partial** | Code is complete; no real corpus-v1 improvement iteration is recorded yet. Pilot must run first. |
-| U10 deterministic comparison | **Partial; corrected pilot running** | Mapper #11/#12 and folio-resolve #11/#12/#13 are merged. The failed v4 shard has no receipt; v5 passed its end-to-end canary and is at 1/60 with shard 2 active. Finish and interpret the pilot before the final full comparison. |
+| U10 deterministic comparison | **Partial; corrected pilot running** | Mapper #11/#12 and folio-resolve #11/#12/#13 are merged. The failed v4 shard has no receipt; v5 passed its end-to-end canary and is at 2/60 with shard 3 active. Finish and interpret the pilot before the final full comparison. |
 | U11 owner-run LLM lanes | **Partial / owner-run** | Flags and seams are merged. Run both shipped configurations with owner-held keys and record explicit skip markers where unavailable. |
 | U12 parity + attribution | **Partial** | Static parity map is complete. Add controlled replay/ablation only where U10 reveals an incumbent win, subject to D4. |
 | U13 campaign report/verdict | **Not started** | Assemble after U9/U10/U12; final firm exam and adoption decision are owner gates. |
@@ -260,8 +260,8 @@ from running in the same session.
 4. **In progress — run the outage-safe U10 pilot.** Mapper #11/#12 and folio-resolve #11/#12/#13
    are merged. The v4 first shard failed closed after its stages because the committed public
    metadata path was absent from the exact allowlist; it has no receipt and remains preserved.
-   Corrected v5 passed its one-item canary from `f9443d2` and is at 1/60; the remaining managed run
-   has entered shard 2. Continue/resume the independent receipts and finalize at 60/60.
+   Corrected v5 passed its one-item canary from `f9443d2` and is at 2/60; the remaining managed run
+   has entered shard 3. Continue/resume the independent receipts and finalize at 60/60.
 5. **Complete — resumable/sharded scoring.** PR #9 checkpoints each surface-free post-adapter
    result atomically, replays through the unchanged score/depth-probe/report/leak-check path, and
    fails closed on fingerprint or record corruption. Direct, resumed, and differently ordered
@@ -410,6 +410,6 @@ saved-stage reconstruction all pass. The corrected v5 canary also published its 
   `1126 passed, 2 skipped`, with its focused, Ruff, mypy, and diff gates clean. The failed v4
   checkpoint is preserved with zero completion receipts and no final report.
 - Public-metadata contract PR #13 merged as `331c507c` from reviewed head `f9443d2`; full
-  verification is `1128 passed, 2 skipped`. Corrected v5 is fingerprint-bound at 1/60, with its
-  remaining managed run active at shard 2; its manifest digest is
+  verification is `1128 passed, 2 skipped`. Corrected v5 is fingerprint-bound at 2/60, with its
+  remaining managed run active at shard 3; its manifest digest is
   `7e00bb154d8753a66d0370cac89a3325957bedce9a4d652a5fbbb58e31dc4994`.
