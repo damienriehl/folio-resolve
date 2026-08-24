@@ -1,0 +1,33 @@
+{
+  "answer_rule_config_sha256": "ac413db665602cdde841a7e7590adc4eba02cded82266df5e763d7be7dd87c03",
+  "fields": [
+    {
+      "path": [
+        "kind"
+      ],
+      "value": "synthetic_baseline"
+    },
+    {
+      "path": [
+        "label"
+      ],
+      "value": "synthetic-baseline-v1"
+    },
+    {
+      "path": [
+        "answer_rule_config",
+        "rationale"
+      ],
+      "value": "synthetic lane v1: top_k sized to corpus gold density (uncalibrated)"
+    },
+    {
+      "path": [
+        "determinism_selftest",
+        "target"
+      ],
+      "value": "folio_eval.selftest:synthetic_scoring_payload"
+    }
+  ],
+  "kind": "synthetic-report-public-metadata",
+  "version": 1
+}

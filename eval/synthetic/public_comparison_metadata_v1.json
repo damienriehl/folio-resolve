@@ -1,0 +1,47 @@
+{
+  "answer_rule_config_sha256": "ac413db665602cdde841a7e7590adc4eba02cded82266df5e763d7be7dd87c03",
+  "fields": [
+    {
+      "path": ["kind"],
+      "value": "synthetic_comparison"
+    },
+    {
+      "path": ["provenance", "comparison_invocation", "argv", "2"],
+      "value": "run_synthetic_comparison"
+    },
+    {
+      "path": ["provenance", "comparison_invocation", "argv", "--corpus-manifest"],
+      "value": "eval/synthetic/corpus_v1.manifest.json"
+    },
+    {
+      "path": ["provenance", "comparison_invocation", "argv", "--config"],
+      "value": "eval/synthetic/answer_rule_config_synthetic_v1.json"
+    },
+    {
+      "path": ["provenance", "comparison_invocation", "argv", "--leak-manifest"],
+      "value": "eval/synthetic/firm-surface-manifest-v1.json"
+    },
+    {
+      "path": ["provenance", "comparison_invocation", "argv", "--public-metadata"],
+      "value": "eval/synthetic/public_comparison_metadata_v1.json"
+    },
+    {
+      "path": ["provenance", "config_selection", "answer_rule_config", "rationale"],
+      "value": "synthetic lane v1: top_k sized to corpus gold density (uncalibrated)"
+    },
+    {
+      "path": ["stacks", "folio-enrich:incumbent", "invocation", "argv", "1"],
+      "value_template": "{working_directory}/backend/eval/synthetic_runner.py"
+    },
+    {
+      "path": ["stacks", "folio-mapper:incumbent", "invocation", "argv", "1"],
+      "value_template": "{working_directory}/backend/scripts/synthetic_runner.py"
+    },
+    {
+      "path": ["stacks", "folio-resolve:candidate", "config", "rationale"],
+      "value": "synthetic lane v1: top_k sized to corpus gold density (uncalibrated)"
+    }
+  ],
+  "kind": "synthetic-comparison-public-metadata",
+  "version": 1
+}

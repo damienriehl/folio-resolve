@@ -8,10 +8,12 @@ import os
 import re
 import sys
 import tempfile
+import time
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
+from typing import Protocol
 
 from folio_resolve.blocklist import AliasBlocklist, load_seed_blocklist
 from folio_resolve.gates import PlaceNameGate, ShortLabelGate
@@ -29,17 +31,93 @@ from .answer_rule import (
     rank_candidates,
 )
 from .leakcheck import Manifest, load_manifest, scan_text
-from .score import EMPTY_HIERARCHY, ScoreRun, score_items
+from .score import EMPTY_HIERARCHY, MicroCounts, ScoreRun, score_items
 from .selftest import assert_ontology_pin, ensure_hash_seed, run_determinism_selftest
 from .splits import GoldItemRecord
 from .synthesize import LoadedCorpus, load_corpus
+from .synthetic_checkpoint import (
+    CheckpointAdapterResult,
+    CheckpointError,
+    SyntheticCheckpointStore,
+    build_checkpoint_fingerprint,
+    checkpoint_item_key,
+    fsync_directory,
+    shard_for_item,
+)
+from .synthetic_contract import SUPPRESSION_CATEGORIES, SyntheticItemKind
 
 PhraseExtractor = Callable[[str], Sequence[str]]
-SUPPRESSION_CATEGORIES = ("blocklist", "place_gate", "short_label_gate", "score_floor")
+REPORT_KIND = "synthetic_baseline"
+PUBLIC_METADATA_KIND = "synthetic-report-public-metadata"
+PUBLIC_METADATA_VERSION = 1
+DEPTH_PROBE_MAX = 200
+DEFAULT_PUBLIC_METADATA_PATH = (
+    Path(__file__).resolve().parents[1] / "synthetic" / "public_report_metadata_v1.json"
+)
+PUBLIC_METADATA_PATHS = frozenset(
+    {
+        ("kind",),
+        ("label",),
+        ("answer_rule_config", "rationale"),
+        ("determinism_selftest", "target"),
+    }
+)
 
 
 class SyntheticScoringError(RuntimeError):
     """Raised when a synthetic scoring contract or publication gate fails."""
+
+
+@dataclass(frozen=True, slots=True)
+class PublicReportMetadata:
+    """Versioned, path-bound public strings that the leak gate may exempt."""
+
+    source_path: Path
+    version: int
+    answer_rule_config_sha256: str
+    fields: Mapping[tuple[str, ...], str]
+
+
+def load_public_report_metadata(path: Path) -> PublicReportMetadata:
+    """Load the independently reviewed public-string publication contract."""
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict) or payload.get("kind") != PUBLIC_METADATA_KIND:
+        raise SyntheticScoringError(f"invalid public metadata contract: {path}")
+    if payload.get("version") != PUBLIC_METADATA_VERSION:
+        raise SyntheticScoringError(
+            f"unsupported public metadata version: {payload.get('version')!r}"
+        )
+    config_sha = payload.get("answer_rule_config_sha256")
+    if not isinstance(config_sha, str) or not re.fullmatch(r"[0-9a-f]{64}", config_sha):
+        raise SyntheticScoringError("public metadata config hash must be lowercase SHA-256")
+    raw_fields = payload.get("fields")
+    if not isinstance(raw_fields, list):
+        raise SyntheticScoringError("public metadata fields must be a list")
+    fields: dict[tuple[str, ...], str] = {}
+    for entry in raw_fields:
+        if not isinstance(entry, dict):
+            raise SyntheticScoringError("public metadata field must be an object")
+        raw_path = entry.get("path")
+        value = entry.get("value")
+        if (
+            not isinstance(raw_path, list)
+            or not raw_path
+            or not all(isinstance(part, str) and part for part in raw_path)
+            or not isinstance(value, str)
+        ):
+            raise SyntheticScoringError("malformed public metadata field")
+        field_path = tuple(raw_path)
+        if field_path in fields:
+            raise SyntheticScoringError(f"duplicate public metadata path: {field_path!r}")
+        fields[field_path] = value
+    if frozenset(fields) != PUBLIC_METADATA_PATHS:
+        raise SyntheticScoringError("public metadata paths do not match the v1 contract")
+    return PublicReportMetadata(
+        source_path=path,
+        version=PUBLIC_METADATA_VERSION,
+        answer_rule_config_sha256=config_sha,
+        fields=MappingProxyType(fields),
+    )
 
 
 def nounish_ngrams(text: str, *, max_tokens: int = 5) -> tuple[str, ...]:
@@ -59,10 +137,45 @@ def nounish_ngrams(text: str, *, max_tokens: int = 5) -> tuple[str, ...]:
 
 
 @dataclass(frozen=True, slots=True)
+class CandidateTrace:
+    """Deterministic lifecycle evidence for one deduplicated candidate IRI."""
+
+    iri: str
+    label: str
+    branch: str
+    extraction_path: str
+    surface_term: str
+    pre_gate_score: float
+    post_gate_score: float | None
+    gate_disposition: str
+    gated: bool
+    gate_reason: str
+
+
+@dataclass(frozen=True, slots=True)
 class AdapterResult:
     candidates: tuple[MatchCandidate, ...]
     raw_candidate_count: int
     suppression_counters: Mapping[str, int]
+    traces: tuple[CandidateTrace, ...] = ()
+
+    @property
+    def survivor_count(self) -> int:
+        return len(self.candidates)
+
+
+class AdapterOutcome(Protocol):
+    @property
+    def candidates(self) -> Sequence[CandidateLike]: ...
+
+    @property
+    def raw_candidate_count(self) -> int: ...
+
+    @property
+    def survivor_count(self) -> int: ...
+
+    @property
+    def suppression_counters(self) -> Mapping[str, int]: ...
 
 
 @dataclass
@@ -75,12 +188,9 @@ class DocumentAdapter:
     place_gate: PlaceNameGate = field(default_factory=PlaceNameGate)
     short_gate: ShortLabelGate = field(default_factory=ShortLabelGate)
     score_floor: float = 45.0
-    recall_top_n: int = 200
+    recall_top_n: int = DEPTH_PROBE_MAX
     _matcher: AhoCorasickMatcher = field(init=False, repr=False)
     _recall: MultiStrategyRecall = field(init=False, repr=False)
-    _cache: dict[tuple[str, tuple[str, ...] | None, int | None], AdapterResult] = field(
-        init=False, repr=False, default_factory=dict
-    )
 
     def __post_init__(self) -> None:
         if not isinstance(self.ontology, RecallOntology):
@@ -126,23 +236,7 @@ class DocumentAdapter:
                 )
         return raw
 
-    @staticmethod
-    def _copy_result(result: AdapterResult) -> AdapterResult:
-        return AdapterResult(
-            tuple(replace(candidate) for candidate in result.candidates),
-            result.raw_candidate_count,
-            MappingProxyType(dict(result.suppression_counters)),
-        )
-
-    def adapt(
-        self, passage: str, *, segments: Sequence[str] | None = None
-    ) -> AdapterResult:
-        segment_key = tuple(segments) if segments is not None else None
-        extractor_key = None if segments is not None else id(self.phrase_extractor)
-        cache_key = (passage, segment_key, extractor_key)
-        cached = self._cache.get(cache_key)
-        if cached is not None:
-            return self._copy_result(cached)
+    def adapt(self, passage: str, *, segments: Sequence[str] | None = None) -> AdapterResult:
         best: dict[str, MatchCandidate] = {}
         for candidate in self._raw_candidates(passage, segments=segments):
             current = best.get(candidate.iri)
@@ -157,10 +251,26 @@ class DocumentAdapter:
 
         counters = dict.fromkeys(SUPPRESSION_CATEGORIES, 0)
         survivors: list[MatchCandidate] = []
+        traces: list[CandidateTrace] = []
         for iri in sorted(best):
             candidate = best[iri]
+            pre_gate_score = candidate.score
             if self.blocklist.is_blocked(candidate.surface_term, candidate.iri):
                 counters["blocklist"] += 1
+                traces.append(
+                    CandidateTrace(
+                        iri=candidate.iri,
+                        label=candidate.label,
+                        branch=candidate.branch,
+                        extraction_path=candidate.extraction_path,
+                        surface_term=candidate.surface_term,
+                        pre_gate_score=pre_gate_score,
+                        post_gate_score=None,
+                        gate_disposition="blocklist",
+                        gated=False,
+                        gate_reason="alias_blocklist",
+                    )
+                )
                 continue
             place = self.place_gate.evaluate(
                 query=candidate.surface_term,
@@ -170,26 +280,83 @@ class DocumentAdapter:
             )
             if place.demoted and place.score < self.score_floor:
                 counters["place_gate"] += 1
+                traces.append(
+                    CandidateTrace(
+                        iri=candidate.iri,
+                        label=candidate.label,
+                        branch=candidate.branch,
+                        extraction_path=candidate.extraction_path,
+                        surface_term=candidate.surface_term,
+                        pre_gate_score=pre_gate_score,
+                        post_gate_score=place.score,
+                        gate_disposition="place_gate",
+                        gated=True,
+                        gate_reason=place.reason,
+                    )
+                )
                 continue
             short = self.short_gate.evaluate(
                 query=candidate.surface_term, label=candidate.label, score=place.score
             )
             if short.demoted and short.score < self.score_floor:
                 counters["short_label_gate"] += 1
+                traces.append(
+                    CandidateTrace(
+                        iri=candidate.iri,
+                        label=candidate.label,
+                        branch=candidate.branch,
+                        extraction_path=candidate.extraction_path,
+                        surface_term=candidate.surface_term,
+                        pre_gate_score=pre_gate_score,
+                        post_gate_score=short.score,
+                        gate_disposition="short_label_gate",
+                        gated=True,
+                        gate_reason=short.reason,
+                    )
+                )
                 continue
             if short.score < self.score_floor:
                 counters["score_floor"] += 1
+                traces.append(
+                    CandidateTrace(
+                        iri=candidate.iri,
+                        label=candidate.label,
+                        branch=candidate.branch,
+                        extraction_path=candidate.extraction_path,
+                        surface_term=candidate.surface_term,
+                        pre_gate_score=pre_gate_score,
+                        post_gate_score=short.score,
+                        gate_disposition="score_floor",
+                        gated=place.demoted or short.demoted,
+                        gate_reason="; ".join((place.reason, short.reason)),
+                    )
+                )
                 continue
             candidate.score = short.score
             candidate.gated = place.demoted or short.demoted
             candidate.gate_reason = "; ".join((place.reason, short.reason))
             survivors.append(candidate)
+            traces.append(
+                CandidateTrace(
+                    iri=candidate.iri,
+                    label=candidate.label,
+                    branch=candidate.branch,
+                    extraction_path=candidate.extraction_path,
+                    surface_term=candidate.surface_term,
+                    pre_gate_score=pre_gate_score,
+                    post_gate_score=candidate.score,
+                    gate_disposition="survived",
+                    gated=candidate.gated,
+                    gate_reason=candidate.gate_reason,
+                )
+            )
         survivors.sort(key=lambda candidate: (-candidate.score, candidate.iri))
-        result = AdapterResult(
-            tuple(survivors), len(best), MappingProxyType(dict(counters))
+        return AdapterResult(
+            tuple(survivors),
+            len(best),
+            MappingProxyType(dict(counters)),
+            tuple(traces),
         )
-        self._cache[cache_key] = self._copy_result(result)
-        return self._copy_result(result)
 
     def __call__(self, passage: str | GoldItemRecord) -> Sequence[CandidateLike]:
         text = passage if isinstance(passage, str) else passage.input_text
@@ -211,7 +378,7 @@ def _assert_config(corpus: LoadedCorpus, config: AnswerRuleConfig) -> None:
     expected = corpus.manifest.answer_rule_config_sha256
     if actual != expected:
         raise SyntheticScoringError(
-            "answer_rule_config_sha256 mismatch: " f"expected={expected} actual={actual}"
+            f"answer_rule_config_sha256 mismatch: expected={expected} actual={actual}"
         )
 
 
@@ -230,15 +397,35 @@ def score_corpus(
             "corpus manifest is not scoreable; pass allow_unscoreable=True for diagnostics"
         )
     document_adapter = adapter or DocumentAdapter(ontology)
+
+    def resolve(_kind: SyntheticItemKind, _item_id: str, text: str) -> AdapterOutcome:
+        return document_adapter.adapt(text)
+
+    return _score_from_adapter_results(
+        corpus,
+        config,
+        resolve,
+        allow_unscoreable=allow_unscoreable,
+    )
+
+
+def _score_from_adapter_results(
+    corpus: LoadedCorpus,
+    config: AnswerRuleConfig,
+    resolve: Callable[[SyntheticItemKind, str, str], AdapterOutcome],
+    *,
+    allow_unscoreable: bool,
+) -> SyntheticScoreResult:
+    """Run the unchanged scorer over live or validated checkpoint adapter results."""
     counters = dict.fromkeys(SUPPRESSION_CATEGORIES, 0)
     raw_count = 0
     survivor_count = 0
 
     def predict(item: GoldItemRecord) -> Sequence[CandidateLike]:
         nonlocal raw_count, survivor_count
-        result = document_adapter.adapt(item.input_text)
+        result = resolve("scoreable", item.item_id, item.input_text)
         raw_count += result.raw_candidate_count
-        survivor_count += len(result.candidates)
+        survivor_count += result.survivor_count
         for category, count in result.suppression_counters.items():
             counters[category] += count
         return result.candidates
@@ -249,13 +436,13 @@ def score_corpus(
         config=config,
         hierarchy=EMPTY_HIERARCHY,
         slice_name="synthetic",
-        keep_ranked=max(200, config.top_k),
+        keep_ranked=max(DEPTH_PROBE_MAX, config.top_k),
     )
     false_positives = 0
     for item in sorted(corpus.nomatch_items, key=lambda row: row.item_id):
-        adapted = document_adapter.adapt(item.text)
+        adapted = resolve("nomatch", item.item_id, item.text)
         raw_count += adapted.raw_candidate_count
-        survivor_count += len(adapted.candidates)
+        survivor_count += adapted.survivor_count
         for category, count in adapted.suppression_counters.items():
             counters[category] += count
         committed = commit_from_ranked(rank_candidates(adapted.candidates, config), config)
@@ -271,47 +458,158 @@ def score_corpus(
     )
 
 
-def depth_probe(
+def score_corpus_checkpointed(
     corpus: LoadedCorpus,
-    ontology: RecallOntology,
+    ontology: RecallOntology | None,
     config: AnswerRuleConfig,
-    depths: Sequence[int] = (10, 50, 200),
     *,
+    store: SyntheticCheckpointStore,
+    shard_index: int | None = None,
+    finalize_only: bool = False,
     adapter: DocumentAdapter | None = None,
-) -> dict[str, dict[str, float | int]]:
-    """Compare committed F1 and pre-answer-rule gold recall under candidate depth caps."""
+    adapter_factory: Callable[[], DocumentAdapter] | None = None,
+    allow_unscoreable: bool = False,
+    progress: Callable[[dict[str, object]], None] | None = None,
+) -> SyntheticScoreResult | None:
+    """Checkpoint expensive adapter results and finalize through the unchanged scorer.
+
+    A non-final shard returns ``None`` until every expected item is durable. Finalization reads
+    and validates all item files before it constructs a report-worthy score result.
+    """
     _assert_config(corpus, config)
+    if not corpus.manifest.scoreable and not allow_unscoreable:
+        raise SyntheticScoringError(
+            "corpus manifest is not scoreable; pass allow_unscoreable=True for diagnostics"
+        )
+    retained_limit = max(DEPTH_PROBE_MAX, config.top_k)
+    scoreable_records = corpus.gold_item_records()
+    work: list[tuple[SyntheticItemKind, str, str]] = [
+        ("scoreable", record.item_id, record.input_text) for record in scoreable_records
+    ] + [("nomatch", item.item_id, item.text) for item in corpus.nomatch_items]
+    work.sort(key=lambda row: checkpoint_item_key(row[0], row[1]))
+    if store.expected_item_count != len(work):
+        raise CheckpointError("checkpoint expected item count does not match the corpus")
+    if store.retained_limit != retained_limit:
+        raise CheckpointError("checkpoint retained limit does not match the scorer")
+    if finalize_only:
+        selected: list[tuple[SyntheticItemKind, str, str]] = []
+    else:
+        selected_index = 0 if shard_index is None else shard_index
+        if not 0 <= selected_index < store.shard_count:
+            raise CheckpointError("shard_index must be within the configured shard count")
+        selected = [
+            row
+            for row in work
+            if shard_for_item(checkpoint_item_key(row[0], row[1]), store.shard_count)
+            == selected_index
+        ]
+        document_adapter = adapter
+        started = time.perf_counter()
+        new_items = 0
+        completed = 0
+        loaded: dict[tuple[SyntheticItemKind, str], CheckpointAdapterResult] = {}
+        for kind, item_id, text in selected:
+            existing = store.maybe_load_item(kind, item_id)
+            if existing is not None:
+                loaded[(kind, item_id)] = existing
+                completed += 1
+                continue
+            if document_adapter is None:
+                if adapter_factory is not None:
+                    document_adapter = adapter_factory()
+                elif ontology is not None:
+                    document_adapter = DocumentAdapter(ontology)
+                else:
+                    raise CheckpointError("missing adapter factory for incomplete checkpoint")
+            adapted = document_adapter.adapt(text)
+            loaded[(kind, item_id)] = store.write_item(
+                kind,
+                item_id,
+                candidates=adapted.candidates,
+                raw_candidate_count=adapted.raw_candidate_count,
+                suppression_counters=adapted.suppression_counters,
+            )
+            new_items += 1
+            completed += 1
+            if progress is not None:
+                elapsed = time.perf_counter() - started
+                remaining = max(len(selected) - completed, 0)
+                progress(
+                    {
+                        "completed": completed,
+                        "elapsed_seconds": round(elapsed, 3),
+                        "eta_seconds": round((elapsed / new_items) * remaining, 3),
+                        "item_key": checkpoint_item_key(kind, item_id),
+                        "shard_index": selected_index,
+                        "total": len(selected),
+                    }
+                )
+    if finalize_only:
+        loaded = {}
+
+    expected_paths = {store.item_path(kind, item_id) for kind, item_id, _text in work}
+    observed_paths = set(store.item_paths())
+    unexpected = observed_paths - expected_paths
+    if unexpected:
+        raise CheckpointError("checkpoint contains unexpected item files")
+    if expected_paths - observed_paths:
+        if finalize_only:
+            raise CheckpointError(
+                f"checkpoint incomplete: {len(expected_paths - observed_paths)} items missing"
+            )
+        return None
+
+    cached: dict[tuple[SyntheticItemKind, str], CheckpointAdapterResult] = {
+        (kind, item_id): loaded.get((kind, item_id)) or store.load_item(kind, item_id)
+        for kind, item_id, _text in work
+    }
+
+    def resolve(kind: SyntheticItemKind, item_id: str, _text: str) -> AdapterOutcome:
+        return cached[(kind, item_id)]
+
+    return _score_from_adapter_results(
+        corpus,
+        config,
+        resolve,
+        allow_unscoreable=allow_unscoreable,
+    )
+
+
+def depth_probe(
+    run: ScoreRun,
+    config: AnswerRuleConfig,
+    depths: Sequence[int] | None = None,
+) -> dict[str, dict[str, float | int]]:
+    """Probe candidate depths from rankings already retained by the scoring pass."""
+    if depths is None:
+        depths = tuple(dict.fromkeys((1, (config.top_k + 1) // 2, config.top_k)))
     if any(depth < 1 for depth in depths):
         raise ValueError("depths must be positive")
-    document_adapter = adapter or DocumentAdapter(ontology, recall_top_n=max(depths, default=1))
-    if document_adapter.recall_top_n < max(depths, default=1):
-        raise ValueError("adapter recall_top_n must cover every requested depth")
-    records = corpus.gold_item_records()
-    cached = {
-        item.item_id: document_adapter.adapt(item.input_text).candidates for item in records
-    }
+    if run.config != config:
+        raise ValueError("score run config does not match depth-probe config")
+    if any(depth > run.ranked_limit for depth in depths):
+        raise ValueError(
+            f"depth probe is limited to the retained top {run.ranked_limit} candidates"
+        )
     output: dict[str, dict[str, float | int]] = {}
     for depth in depths:
-
-        def _predict_at_depth(item: GoldItemRecord, cap: int = depth) -> tuple[CandidateLike, ...]:
-            return tuple(cached[item.item_id][:cap])
-
-        run = score_items(
-            records,
-            _predict_at_depth,
-            config=config,
-            slice_name=f"synthetic-depth-{depth}",
-            keep_ranked=depth,
-        )
-        recalls = [
-            len(set(candidate.iri for candidate in cached[item.item_id][:depth]) & item.gold_iris)
-            / len(item.gold_iris)
-            for item in records
-        ]
-        candidate_counts = [min(depth, len(cached[item.item_id])) for item in records]
+        counts = MicroCounts()
+        recalls: list[float] = []
+        candidate_counts: list[int] = []
+        for score in run.item_scores:
+            ranked = score.ranked[:depth]
+            committed = commit_from_ranked(ranked, config)
+            gold = set(score.gold_iris)
+            predicted = {candidate.iri for candidate in committed}
+            ranked_iris = {candidate.iri for candidate in ranked}
+            counts.tp += len(predicted & gold)
+            counts.fp += len(predicted - gold)
+            counts.fn += len(gold - predicted)
+            recalls.append(len(ranked_iris & gold) / len(gold))
+            candidate_counts.append(len(ranked))
         output[str(depth)] = {
             "depth": depth,
-            "micro_f1": round(run.overall.f1, 6),
+            "micro_f1": round(counts.f1, 6),
             "mean_raw_candidate_recall_at_k": round(sum(recalls) / len(recalls), 6)
             if recalls
             else 0.0,
@@ -320,6 +618,21 @@ def depth_probe(
             else 0.0,
         }
     return output
+
+
+def _publication_fields(
+    config: AnswerRuleConfig,
+    label: str,
+    determinism_selftest: Mapping[str, object],
+) -> dict[str, object]:
+    """Return the report fields covered by the early publication preflight."""
+    return {
+        "kind": REPORT_KIND,
+        "label": label,
+        "answer_rule_config_sha256": config.content_sha256(),
+        "answer_rule_config": config.to_json(),
+        "determinism_selftest": dict(determinism_selftest),
+    }
 
 
 def build_synthetic_report(
@@ -334,52 +647,99 @@ def build_synthetic_report(
 ) -> dict[str, object]:
     """Assemble the aggregate-only committed report shape for the synthetic lane."""
     return {
-        "kind": "synthetic_baseline",
-        "label": label,
+        **_publication_fields(config, label, determinism_selftest),
         "corpus_version": corpus.manifest.version,
         "content_sha256": corpus.manifest.content_sha256,
-        "answer_rule_config_sha256": config.content_sha256(),
-        "answer_rule_config": config.to_json(),
         "ontology_cache_sha256": ontology_pin,
         "overall": result.run.overall.to_json(),
-        "slices": {
-            key: counts.to_json() for key, counts in sorted(result.run.by_stratum.items())
-        },
+        "slices": {key: counts.to_json() for key, counts in sorted(result.run.by_stratum.items())},
         "nomatch_fp_rate": round(result.nomatch_fp_rate, 6),
         "suppression_counters": dict(sorted(result.suppression_counters.items())),
         "raw_candidate_count": result.raw_candidate_count,
         "survivor_count": result.survivor_count,
         "unscoreable_override": result.unscoreable_override,
         "depth_probe": dict(sorted(depth_probe_result.items())),
-        "determinism_selftest": dict(determinism_selftest),
     }
 
 
-def write_report(path: Path, report: Mapping[str, object], leak_manifest: Manifest, salt: bytes) -> Path:
+def _value_at_path(report: Mapping[str, object], path: tuple[str, ...]) -> object:
+    value: object = report
+    for part in path:
+        if not isinstance(value, Mapping) or part not in value:
+            raise SyntheticScoringError(f"public metadata path missing from report: {path!r}")
+        value = value[part]
+    return value
+
+
+def preflight_report_publication(
+    report: Mapping[str, object],
+    leak_manifest: Manifest,
+    salt: bytes,
+    *,
+    public_metadata: PublicReportMetadata | None = None,
+) -> None:
+    """Fail closed on report strings, except exact values at reviewed public paths."""
+    public_fields: Mapping[tuple[str, ...], str] = {}
+    if public_metadata is not None:
+        report_config_sha = report.get("answer_rule_config_sha256")
+        if report_config_sha != public_metadata.answer_rule_config_sha256:
+            raise SyntheticScoringError("public metadata answer-rule config hash mismatch")
+        for field_path, expected in public_metadata.fields.items():
+            if _value_at_path(report, field_path) != expected:
+                raise SyntheticScoringError(
+                    f"public metadata value mismatch at path: {field_path!r}"
+                )
+        public_fields = public_metadata.fields
+
+    def collisions(value: object, path: tuple[str, ...] = ()) -> int:
+        if isinstance(value, str):
+            if public_fields.get(path) == value:
+                return 0
+            return scan_text(value, leak_manifest, salt)
+        if isinstance(value, Mapping):
+            total = 0
+            for key, nested in value.items():
+                if isinstance(key, str):
+                    total += scan_text(key, leak_manifest, salt)
+                    nested_path = (*path, key)
+                else:
+                    nested_path = path
+                total += collisions(nested, nested_path)
+            return total
+        if isinstance(value, (list, tuple, set, frozenset)):
+            return sum(collisions(nested, path) for nested in value)
+        return 0
+
+    collision_count = collisions(report)
+    if collision_count:
+        raise SyntheticScoringError(f"leak check failed: collisions={collision_count}")
+
+
+def write_report(
+    path: Path,
+    report: Mapping[str, object],
+    leak_manifest: Manifest,
+    salt: bytes,
+    *,
+    public_metadata: PublicReportMetadata | None = None,
+) -> Path:
     """Leak-check the complete serialization, then atomically publish it."""
     serialized = json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
-    def strings(value: object) -> list[str]:
-        if isinstance(value, str):
-            return [value]
-        if isinstance(value, Mapping):
-            return [
-                text
-                for key, nested in value.items()
-                for text in (*strings(key), *strings(nested))
-            ]
-        if isinstance(value, (list, tuple, set, frozenset)):
-            return [text for nested in value for text in strings(nested)]
-        return []
-
-    collisions = sum(scan_text(text, leak_manifest, salt) for text in strings(report))
-    if collisions:
-        raise SyntheticScoringError(f"leak check failed: collisions={collisions}")
+    preflight_report_publication(
+        report,
+        leak_manifest,
+        salt,
+        public_metadata=public_metadata,
+    )
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, temporary = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             handle.write(serialized)
+            handle.flush()
+            os.fsync(handle.fileno())
         os.replace(temporary, path)
+        fsync_directory(path.parent)
     finally:
         if os.path.exists(temporary):
             os.unlink(temporary)
@@ -393,7 +753,12 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - I/O or
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--leak-manifest", type=Path, required=True)
     parser.add_argument("--salt-file", type=Path, required=True)
-    parser.add_argument("--label", default="synthetic-baseline")
+    parser.add_argument("--public-metadata", type=Path, default=DEFAULT_PUBLIC_METADATA_PATH)
+    parser.add_argument("--label", default="synthetic-baseline-v1")
+    parser.add_argument("--checkpoint-dir", type=Path)
+    parser.add_argument("--shard-count", type=int, default=1)
+    parser.add_argument("--shard-index", type=int, default=0)
+    parser.add_argument("--finalize-only", action="store_true")
     args = parser.parse_args(argv)
     ensure_hash_seed()
     corpus = load_corpus(args.corpus_manifest)
@@ -401,12 +766,56 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - I/O or
     selftest = run_determinism_selftest()
     config = load_config(args.config)
     _assert_config(corpus, config)
+    leak_manifest = load_manifest(args.leak_manifest)
+    salt = args.salt_file.read_bytes()
+    public_metadata = load_public_report_metadata(args.public_metadata)
+    preflight_report_publication(
+        _publication_fields(config, args.label, selftest.to_json()),
+        leak_manifest,
+        salt,
+        public_metadata=public_metadata,
+    )
     from folio import FOLIO
 
-    ontology = FolioPythonProvider(_folio=FOLIO())
-    adapter = DocumentAdapter(ontology)
-    result = score_corpus(corpus, ontology, config, adapter=adapter)
-    probe = depth_probe(corpus, ontology, config, adapter=adapter)
+    result: SyntheticScoreResult | None
+    if args.checkpoint_dir is None:
+        if args.shard_count != 1 or args.shard_index != 0 or args.finalize_only:
+            parser.error("sharding and finalization require --checkpoint-dir")
+        result = score_corpus(corpus, FolioPythonProvider(_folio=FOLIO()), config)
+    else:
+        repo_root = Path(__file__).resolve().parents[2]
+        fingerprint = build_checkpoint_fingerprint(corpus, config, repo_root=repo_root)
+        store = SyntheticCheckpointStore.create(
+            args.checkpoint_dir,
+            fingerprint=fingerprint,
+            shard_count=args.shard_count,
+            expected_item_count=len(corpus.gold_item_records()) + len(corpus.nomatch_items),
+            retained_limit=max(DEPTH_PROBE_MAX, config.top_k),
+        )
+        result = score_corpus_checkpointed(
+            corpus,
+            None,
+            config,
+            store=store,
+            shard_index=args.shard_index,
+            finalize_only=args.finalize_only,
+            adapter_factory=lambda: DocumentAdapter(FolioPythonProvider(_folio=FOLIO())),
+            progress=lambda payload: print(json.dumps(payload, sort_keys=True), file=sys.stderr),
+        )
+        if result is None:
+            print(
+                json.dumps(
+                    {
+                        "checkpoint_dir": str(args.checkpoint_dir),
+                        "completed": store.completed_count(),
+                        "status": "checkpointed",
+                        "total": store.expected_item_count,
+                    },
+                    sort_keys=True,
+                )
+            )
+            return 0
+    probe = depth_probe(result.run, config)
     report = build_synthetic_report(
         result,
         corpus=corpus,
@@ -416,7 +825,13 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - I/O or
         depth_probe_result=probe,
         determinism_selftest=selftest.to_json(),
     )
-    write_report(args.out, report, load_manifest(args.leak_manifest), args.salt_file.read_bytes())
+    write_report(
+        args.out,
+        report,
+        leak_manifest,
+        salt,
+        public_metadata=public_metadata,
+    )
     print(json.dumps({"out": str(args.out), "overall": report["overall"]}, sort_keys=True))
     return 0
 

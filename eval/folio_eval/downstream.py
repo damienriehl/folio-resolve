@@ -945,7 +945,7 @@ def _cmd_diff(args: argparse.Namespace) -> int:  # pragma: no cover -- real-run 
     return 1 if verdict.has_blocking else 0
 
 
-def main(argv: Sequence[str] | None = None) -> int:
+def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python -m folio_eval.downstream",
         description="Downstream consumer validation: snapshot at baseline, diff at check-ins (KTD10).",
@@ -973,6 +973,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     comparison = sub.add_parser(
         "run_synthetic_comparison",
         help="compare local folio-resolve with pinned downstream incumbent lanes",
+        allow_abbrev=False,
     )
     comparison.add_argument("--corpus-manifest", type=Path, required=True)
     comparison.add_argument("--config", type=Path, required=True)
@@ -981,28 +982,102 @@ def main(argv: Sequence[str] | None = None) -> int:
     comparison.add_argument("--row-snapshot-dir", type=Path, required=True)
     comparison.add_argument("--leak-manifest", type=Path, required=True)
     comparison.add_argument("--salt-file", type=Path, required=True)
+    comparison.add_argument(
+        "--public-metadata",
+        type=Path,
+        default=_EVAL_ROOT / "synthetic" / "public_comparison_metadata_v1.json",
+    )
     comparison.add_argument("--mapper-root", type=Path, default=None)
     comparison.add_argument("--enrich-root", type=Path, default=None)
     comparison.add_argument("--consumer", choices=["mapper", "enrich", "all"], default="all")
     comparison.add_argument("--incumbent-version", default="0.4.0")
+    comparison.add_argument(
+        "--skip-incumbent-prepare",
+        action="store_true",
+        help="verify and run already-prepared incumbents without reinstalling them",
+    )
     comparison.add_argument("--limit", type=int, default=None)
+    comparison.add_argument(
+        "--item-id",
+        action="append",
+        default=None,
+        help="run only an explicit item ID; repeat for a deterministic shard",
+    )
+    comparison.add_argument(
+        "--scoreable-only",
+        action="store_true",
+        help=(
+            "omit no-match rows; use with --limit 1 for the U10 one-item live gate "
+            "(pilot/final runs retain no-match rows by default)"
+        ),
+    )
+    return parser
 
-    args = parser.parse_args(argv)
+
+def _execution_receipt(
+    raw_argv: Sequence[str],
+    *,
+    supplied_argv: bool,
+    resolved_defaults: Mapping[str, str] | None = None,
+) -> dict[str, object]:
+    """Record the actual process argv, or a canonical replay for programmatic calls."""
+    if supplied_argv:
+        argv = [
+            str(Path(sys.executable).resolve()),
+            str((_EVAL_ROOT / "run_downstream.py").resolve()),
+            *raw_argv,
+        ]
+        kind = "canonical_replay"
+    else:
+        argv = [str(Path(sys.executable).resolve()), *sys.argv]
+        kind = "executed_process"
+    for option, value in (resolved_defaults or {}).items():
+        if not any(argument == option or argument.startswith(f"{option}=") for argument in argv):
+            argv.extend((option, value))
+    return {
+        "kind": kind,
+        "argv": argv,
+        "working_directory": str(Path.cwd().resolve()),
+        "environment": {"PYTHONHASHSEED": os.environ.get("PYTHONHASHSEED", "")},
+    }
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    raw_argv = tuple(sys.argv[1:] if argv is None else argv)
+    parser = _parser()
+
+    args = parser.parse_args(raw_argv)
     if args.command == "snapshot":
         return _cmd_snapshot(args)
     if args.command == "run_synthetic_comparison":
+        if args.scoreable_only and args.limit != 1:
+            parser.error("--scoreable-only requires --limit 1 for the U10 live gate")
+        if args.item_id and args.limit is not None:
+            parser.error("--item-id and --limit are mutually exclusive")
+        if args.item_id and args.scoreable_only:
+            parser.error("--item-id shards include their selected scoreable/no-match kind")
+        if os.environ.get("PYTHONHASHSEED") != "0":
+            parser.error("run_synthetic_comparison requires PYTHONHASHSEED=0")
         from folio import FOLIO
 
         from folio_resolve.ontology import FolioPythonProvider
 
         from .answer_rule import load_config
-        from .comparison import run_synthetic_comparison, write_comparison
+        from .comparison import (
+            DEFAULT_COMPARISON_PUBLIC_METADATA_PATH,
+            load_public_comparison_metadata,
+            run_synthetic_comparison,
+            write_comparison,
+        )
         from .leakcheck import load_manifest
         from .synthesize import load_corpus
         from .synthetic_score import DocumentAdapter
 
         corpus = load_corpus(args.corpus_manifest)
         config = load_config(args.config)
+        leak_manifest = load_manifest(args.leak_manifest)
+        public_metadata = load_public_comparison_metadata(args.public_metadata)
+        salt = args.salt_file.read_bytes()
         adapter = DocumentAdapter(FolioPythonProvider(_folio=FOLIO()))
         specs = []
         if args.consumer in {"mapper", "all"}:
@@ -1016,16 +1091,29 @@ def main(argv: Sequence[str] | None = None) -> int:
             consumers=specs,
             items_path=args.items,
             row_snapshot_dir=args.row_snapshot_dir,
-            leak_manifest=load_manifest(args.leak_manifest),
-            salt=args.salt_file.read_bytes(),
+            leak_manifest=leak_manifest,
+            salt=salt,
             limit=args.limit,
+            include_nomatch=not args.scoreable_only,
+            item_ids=args.item_id,
             incumbent_version=args.incumbent_version,
+            prepare_incumbents=not args.skip_incumbent_prepare,
+            comparison_invocation=_execution_receipt(
+                raw_argv,
+                supplied_argv=argv is not None,
+                resolved_defaults={
+                    "--public-metadata": DEFAULT_COMPARISON_PUBLIC_METADATA_PATH.relative_to(
+                        FOLIO_RESOLVE_ROOT
+                    ).as_posix()
+                },
+            ),
         )
         write_comparison(
             args.out,
             payload,
-            leak_manifest=load_manifest(args.leak_manifest),
-            salt=args.salt_file.read_bytes(),
+            leak_manifest=leak_manifest,
+            salt=salt,
+            public_metadata=public_metadata,
         )
         print(canonical_json(payload))
         return 0

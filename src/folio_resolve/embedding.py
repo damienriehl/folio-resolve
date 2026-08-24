@@ -141,7 +141,12 @@ class LocalEmbeddingProvider:
         self._model = SentenceTransformer(self._model_name)
 
     def dimension(self) -> int:
-        return int(self._model.get_sentence_embedding_dimension())
+        dimension = self._model.get_sentence_embedding_dimension()
+        if dimension is None:
+            raise RuntimeError(
+                f"sentence-transformers model {self._model_name!r} does not report an embedding dimension"
+            )
+        return dimension
 
     def embed(self, text: str) -> list[float]:
         return [float(x) for x in self._model.encode(text, normalize_embeddings=True)]
