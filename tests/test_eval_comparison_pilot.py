@@ -1060,7 +1060,7 @@ def test_environment_probe_rejects_bytecode_with_changed_nested_qualname(
     assert "bytecode cache does not match its source" in completed.stderr
 
 
-def test_environment_probe_preserves_bytecode_constant_aliases(
+def test_environment_probe_fingerprints_bytecode_constant_alias_variation(
     tmp_path: Path,
 ) -> None:
     interpreter, site = _isolated_python_site(tmp_path)
@@ -1072,6 +1072,7 @@ def test_environment_probe_preserves_bytecode_constant_aliases(
         "    return 123456789012345678901234567890\n",
         encoding="utf-8",
     )
+    before = _run_consumer_probe(interpreter)
     cache_path = Path(importlib.util.cache_from_source(str(source)))
     cache_path.parent.mkdir()
     py_compile.compile(str(source), cfile=str(cache_path), doraise=True)
@@ -1101,13 +1102,54 @@ def test_environment_probe_preserves_bytecode_constant_aliases(
     )
     cache_path.write_bytes(cache_bytes[:16] + marshal.dumps(forged_code))
 
-    completed = _execute_consumer_probe(interpreter, check=False)
+    after = _run_consumer_probe(interpreter)
 
-    assert completed.returncode != 0
-    assert "bytecode cache does not match its source" in completed.stderr
+    assert after["site_file_count"] == before["site_file_count"] + 1
+    assert after["site_files_sha256"] != before["site_files_sha256"]
 
 
-def test_environment_probe_allows_frozenset_container_alias_variation(
+def test_environment_probe_fingerprints_bytecode_metadata_alias_variation(
+    tmp_path: Path,
+) -> None:
+    interpreter, site = _isolated_python_site(tmp_path)
+    source = site / "cacheable.py"
+    source.write_text(
+        "def first():\n"
+        "    return 1\n"
+        "def second():\n"
+        "    return 1\n",
+        encoding="utf-8",
+    )
+    before = _run_consumer_probe(interpreter)
+    cache_path = Path(importlib.util.cache_from_source(str(source)))
+    cache_path.parent.mkdir()
+    py_compile.compile(str(source), cfile=str(cache_path), doraise=True)
+    cache_bytes = cache_path.read_bytes()
+    cached_code = marshal.loads(cache_bytes[16:])
+    first_code, second_code = (
+        value for value in cached_code.co_consts if hasattr(value, "co_linetable")
+    )
+    shared = first_code.co_linetable
+    assert second_code.co_linetable is shared
+    distinct_equal = bytes(bytearray(shared))
+    assert distinct_equal == shared
+    assert distinct_equal is not shared
+    forged_second = second_code.replace(co_linetable=distinct_equal)
+    forged_code = cached_code.replace(
+        co_consts=tuple(
+            forged_second if value is second_code else value
+            for value in cached_code.co_consts
+        )
+    )
+    cache_path.write_bytes(cache_bytes[:16] + marshal.dumps(forged_code))
+
+    after = _run_consumer_probe(interpreter)
+
+    assert after["site_file_count"] == before["site_file_count"] + 1
+    assert after["site_files_sha256"] != before["site_files_sha256"]
+
+
+def test_environment_probe_fingerprints_frozenset_container_alias_variation(
     tmp_path: Path,
 ) -> None:
     interpreter, site = _isolated_python_site(tmp_path)
@@ -1153,7 +1195,8 @@ def test_environment_probe_allows_frozenset_container_alias_variation(
 
     after = _run_consumer_probe(interpreter)
 
-    assert after == before
+    assert after["site_file_count"] == before["site_file_count"] + 1
+    assert after["site_files_sha256"] != before["site_files_sha256"]
 
 
 @pytest.mark.parametrize(
