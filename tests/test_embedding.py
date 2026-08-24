@@ -253,3 +253,29 @@ def test_the_sentence_transformers_import_is_deferred_to_construction() -> None:
 
     assert "sentence_transformers" not in sys.modules
     assert hasattr(mod, "LocalEmbeddingProvider")
+
+
+def test_local_embedding_provider_fails_clearly_when_dimension_is_unknown(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import sys
+    from types import SimpleNamespace
+
+    class ModelWithoutDimension:
+        def __init__(self, _model_name: str) -> None:
+            pass
+
+        def get_sentence_embedding_dimension(self) -> None:
+            return None
+
+    monkeypatch.setitem(
+        sys.modules,
+        "sentence_transformers",
+        SimpleNamespace(SentenceTransformer=ModelWithoutDimension),
+    )
+
+    from folio_resolve.embedding import LocalEmbeddingProvider
+
+    provider = LocalEmbeddingProvider()
+    with pytest.raises(RuntimeError, match="does not report an embedding dimension"):
+        provider.dimension()

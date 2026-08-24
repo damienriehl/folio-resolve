@@ -991,7 +991,18 @@ def _parser() -> argparse.ArgumentParser:
     comparison.add_argument("--enrich-root", type=Path, default=None)
     comparison.add_argument("--consumer", choices=["mapper", "enrich", "all"], default="all")
     comparison.add_argument("--incumbent-version", default="0.4.0")
+    comparison.add_argument(
+        "--skip-incumbent-prepare",
+        action="store_true",
+        help="verify and run already-prepared incumbents without reinstalling them",
+    )
     comparison.add_argument("--limit", type=int, default=None)
+    comparison.add_argument(
+        "--item-id",
+        action="append",
+        default=None,
+        help="run only an explicit item ID; repeat for a deterministic shard",
+    )
     comparison.add_argument(
         "--scoreable-only",
         action="store_true",
@@ -1035,6 +1046,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "run_synthetic_comparison":
         if args.scoreable_only and args.limit != 1:
             parser.error("--scoreable-only requires --limit 1 for the U10 live gate")
+        if args.item_id and args.limit is not None:
+            parser.error("--item-id and --limit are mutually exclusive")
+        if args.item_id and args.scoreable_only:
+            parser.error("--item-id shards include their selected scoreable/no-match kind")
         if os.environ.get("PYTHONHASHSEED") != "0":
             parser.error("run_synthetic_comparison requires PYTHONHASHSEED=0")
         from folio import FOLIO
@@ -1073,7 +1088,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             salt=salt,
             limit=args.limit,
             include_nomatch=not args.scoreable_only,
+            item_ids=args.item_id,
             incumbent_version=args.incumbent_version,
+            prepare_incumbents=not args.skip_incumbent_prepare,
             comparison_invocation=_execution_receipt(
                 raw_argv,
                 supplied_argv=argv is not None,

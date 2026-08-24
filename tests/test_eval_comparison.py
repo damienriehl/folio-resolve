@@ -182,6 +182,35 @@ def test_items_file_emits_shared_segments_once(tmp_path: Path) -> None:
     assert calls == ["Alpha beta", "Gamma", "Nothing here"]
 
 
+def test_items_file_supports_explicit_resumable_shards(tmp_path: Path) -> None:
+    out = emit_items_file(
+        _corpus(tmp_path),
+        tmp_path / "items.jsonl",
+        item_ids=("two", "none"),
+    )
+    rows = [json.loads(line) for line in out.read_text().splitlines()]
+
+    assert [row["item_id"] for row in rows] == ["two", "none"]
+
+
+@pytest.mark.parametrize("item_ids", [("missing",), ("one", "one")])
+def test_explicit_shard_rejects_unknown_or_duplicate_ids(
+    tmp_path: Path, item_ids: tuple[str, ...]
+) -> None:
+    with pytest.raises(ValueError):
+        emit_items_file(_corpus(tmp_path), tmp_path / "items.jsonl", item_ids=item_ids)
+
+
+def test_explicit_shard_and_limit_are_mutually_exclusive(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        emit_items_file(
+            _corpus(tmp_path),
+            tmp_path / "items.jsonl",
+            limit=1,
+            item_ids=("one",),
+        )
+
+
 def test_live_gate_can_emit_one_scoreable_item_without_nomatch_rows(tmp_path: Path) -> None:
     out = emit_items_file(
         _corpus(tmp_path),
@@ -264,6 +293,40 @@ def test_git_repository_state_records_clean_sha(
         "initial_status_sha256": sha256(b"").hexdigest(),
         "initial_status_format": "git status --porcelain",
     }
+
+
+def test_git_repository_state_allows_only_named_untracked_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess(
+            ["git", "rev-parse", "HEAD"], 0, "a" * 40 + "\n", ""
+        ),
+    )
+    monkeypatch.setattr(
+        comparison_module,
+        "git_status_porcelain",
+        lambda _root: "?? eval/reports/report.json\n",
+    )
+
+    observed = comparison_module._git_repository_state(
+        tmp_path,
+        allowed_untracked_paths=(tmp_path / "eval" / "reports" / "report.json",),
+    )
+
+    assert observed["initial_status_clean"] is True
+    monkeypatch.setattr(
+        comparison_module,
+        "git_status_porcelain",
+        lambda _root: " M eval/reports/report.json\n",
+    )
+    with pytest.raises(ComparisonError, match="must be clean"):
+        comparison_module._git_repository_state(
+            tmp_path,
+            allowed_untracked_paths=(tmp_path / "eval" / "reports" / "report.json",),
+        )
 
 
 def test_materialized_items_fingerprint_matches_exact_bytes(tmp_path: Path) -> None:
@@ -376,6 +439,56 @@ def test_write_comparison_leakchecks_every_string(tmp_path: Path) -> None:
             leak_manifest=manifest,
             salt=salt,
         )
+
+
+def test_atomic_comparison_write_is_durable_before_and_after_publish(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    events: list[str] = []
+    real_fsync = comparison_module.os.fsync
+    real_replace = comparison_module.os.replace
+
+    def tracked_fsync(descriptor: int) -> None:
+        events.append("fsync")
+        real_fsync(descriptor)
+
+    def tracked_replace(source: str, destination: Path) -> None:
+        events.append("replace")
+        real_replace(source, destination)
+
+    monkeypatch.setattr(comparison_module.os, "fsync", tracked_fsync)
+    monkeypatch.setattr(comparison_module.os, "replace", tracked_replace)
+
+    path = comparison_module._atomic_write_text(tmp_path / "report.json", "{}\n")
+
+    assert path.read_text(encoding="utf-8") == "{}\n"
+    assert events == ["fsync", "replace", "fsync"]
+
+
+def test_atomic_comparison_write_can_stage_temporary_file_outside_destination(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    recovery_dir = tmp_path / "ignored-recovery"
+    sources: list[Path] = []
+    real_replace = comparison_module.os.replace
+
+    def tracked_replace(source: str, destination: Path) -> None:
+        sources.append(Path(source))
+        real_replace(source, destination)
+
+    monkeypatch.setattr(comparison_module.os, "replace", tracked_replace)
+
+    path = comparison_module._atomic_write_text(
+        tmp_path / "tracked" / "report.json",
+        "{}\n",
+        temporary_dir=recovery_dir,
+        temporary_prefix=".report.json.",
+    )
+
+    assert path.read_text(encoding="utf-8") == "{}\n"
+    assert len(sources) == 1
+    assert sources[0].parent == recovery_dir
+    assert sources[0].name.startswith(".report.json.")
 
 
 def _comparison_public_metadata_payload() -> dict[str, object]:
@@ -764,6 +877,7 @@ def test_mapper_fallback_config_is_rejected() -> None:
             "commit_top_n": 10,
             "keyword_weight": 0.6,
             "embedding_weight": 0.4,
+            "embedding_device": "cpu",
             "embedding_rerank": "unavailable",
             "llm_on": False,
         },
@@ -840,7 +954,25 @@ def test_consumer_runner_translates_deterministic_lane_to_incumbent(
         )
         return subprocess.CompletedProcess(command, 0, "", "")
 
-    monkeypatch.setattr(comparison_module, "prepare_incumbent", lambda *_args: {})
+    prepared: list[ConsumerSpec] = []
+    probed: list[ConsumerSpec] = []
+    monkeypatch.setattr(
+        comparison_module,
+        "prepare_incumbent",
+        lambda spec, *_args: prepared.append(spec) or {},
+    )
+    monkeypatch.setattr(
+        comparison_module,
+        "_probe_environment",
+        lambda spec: probed.append(spec)
+        or {
+            "folio_resolve_version": "0.4.0",
+            "folio_resolve_file": str(
+                tmp_path / ".venv" / "lib" / "site-packages" / "folio_resolve" / "__init__.py"
+            ),
+            "folio_python_version": "0.3.6",
+        },
+    )
     monkeypatch.setattr(comparison_module, "clean_tree_guard", lambda _root: nullcontext())
     monkeypatch.setattr(
         comparison_module,
@@ -857,13 +989,48 @@ def test_consumer_runner_translates_deterministic_lane_to_incumbent(
     items_path = tmp_path / "items.jsonl"
     items_path.write_text(json.dumps({"item_id": "one"}) + "\n", encoding="utf-8")
 
-    run = run_consumer_stack(spec, items_path)
+    run = run_consumer_stack(spec, items_path, prepare=False)
 
     assert run.lane == "incumbent"
     assert run.invocation_working_directory == str(tmp_path.resolve())
     assert run.repository["git_sha"] == "a" * 40
     assert commands[0][0] == str(venv_python)
     assert commands[0][commands[0].index("--lane") + 1] == "deterministic"
+    assert prepared == []
+    assert probed == [spec]
+
+
+def test_consumer_runner_rejects_editable_incumbent_when_preparation_is_skipped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spec = ConsumerSpec("folio-mapper", tmp_path, tmp_path / ".venv" / "bin" / "python")
+    items_path = tmp_path / "items.jsonl"
+    items_path.write_text(json.dumps({"item_id": "one"}) + "\n", encoding="utf-8")
+    monkeypatch.setattr(comparison_module, "clean_tree_guard", lambda _root: nullcontext())
+    monkeypatch.setattr(
+        comparison_module,
+        "_git_repository_state",
+        lambda _root: {"git_sha": "a" * 40, "initial_status_clean": True},
+    )
+    monkeypatch.setattr(
+        comparison_module,
+        "_probe_environment",
+        lambda _spec: {
+            "folio_resolve_version": "0.4.0",
+            "folio_resolve_file": str(tmp_path / "editable" / "folio_resolve" / "__init__.py"),
+            "folio_python_version": "0.3.6",
+        },
+    )
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("runner must not execute after an invalid incumbent probe")
+        ),
+    )
+
+    with pytest.raises(IncumbentInstallMismatch, match="not inside site-packages"):
+        run_consumer_stack(spec, items_path, prepare=False)
 
 
 def test_consumer_rows_reject_bare_hashes_before_scoring() -> None:
