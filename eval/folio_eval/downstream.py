@@ -1015,7 +1015,10 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def _execution_receipt(
-    raw_argv: Sequence[str], *, supplied_argv: bool
+    raw_argv: Sequence[str],
+    *,
+    supplied_argv: bool,
+    resolved_defaults: Mapping[str, str] | None = None,
 ) -> dict[str, object]:
     """Record the actual process argv, or a canonical replay for programmatic calls."""
     if supplied_argv:
@@ -1028,6 +1031,9 @@ def _execution_receipt(
     else:
         argv = [str(Path(sys.executable).resolve()), *sys.argv]
         kind = "executed_process"
+    for option, value in (resolved_defaults or {}).items():
+        if not any(argument == option or argument.startswith(f"{option}=") for argument in argv):
+            argv.extend((option, value))
     return {
         "kind": kind,
         "argv": argv,
@@ -1058,6 +1064,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         from .answer_rule import load_config
         from .comparison import (
+            DEFAULT_COMPARISON_PUBLIC_METADATA_PATH,
             load_public_comparison_metadata,
             run_synthetic_comparison,
             write_comparison,
@@ -1094,6 +1101,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             comparison_invocation=_execution_receipt(
                 raw_argv,
                 supplied_argv=argv is not None,
+                resolved_defaults={
+                    "--public-metadata": DEFAULT_COMPARISON_PUBLIC_METADATA_PATH.relative_to(
+                        FOLIO_RESOLVE_ROOT
+                    ).as_posix()
+                },
             ),
         )
         write_comparison(

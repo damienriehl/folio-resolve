@@ -492,7 +492,7 @@ def test_atomic_comparison_write_can_stage_temporary_file_outside_destination(
 
 
 def _comparison_public_metadata_payload() -> dict[str, object]:
-    argv = ["safe"] * 15
+    argv = ["safe"] * 17
     argv[2] = "run_synthetic_comparison"
     argv[3] = "--corpus-manifest"
     argv[4] = "eval/synthetic/corpus_v1.manifest.json"
@@ -500,6 +500,8 @@ def _comparison_public_metadata_payload() -> dict[str, object]:
     argv[6] = "eval/synthetic/answer_rule_config_synthetic_v1.json"
     argv[13] = "--leak-manifest"
     argv[14] = "eval/synthetic/firm-surface-manifest-v1.json"
+    argv[15] = "--public-metadata"
+    argv[16] = "eval/synthetic/public_comparison_metadata_v1.json"
     rationale = "synthetic lane v1: top_k sized to corpus gold density (uncalibrated)"
     return {
         "kind": "synthetic_comparison",
@@ -539,6 +541,7 @@ def test_versioned_public_metadata_exempts_only_exact_comparison_paths() -> None
         "eval/synthetic/corpus_v1.manifest.json",
         "eval/synthetic/answer_rule_config_synthetic_v1.json",
         "eval/synthetic/firm-surface-manifest-v1.json",
+        "eval/synthetic/public_comparison_metadata_v1.json",
         "synthetic lane v1: top_k sized to corpus gold density (uncalibrated)",
         "/repos/enrich/backend/eval/synthetic_runner.py",
         "/repos/mapper/backend/scripts/synthetic_runner.py",
@@ -562,6 +565,8 @@ def test_versioned_public_metadata_exempts_only_exact_comparison_paths() -> None
         "eval/synthetic/answer_rule_config_synthetic_v1.json",
         "--corpus-manifest",
         "eval/synthetic/corpus_v1.manifest.json",
+        "--public-metadata",
+        "eval/synthetic/public_comparison_metadata_v1.json",
     ]
     preflight_comparison_publication(reordered, manifest, salt, public_metadata=metadata)
 
@@ -573,6 +578,7 @@ def test_versioned_public_metadata_exempts_only_exact_comparison_paths() -> None
         "--corpus-manifest=eval/synthetic/corpus_v1.manifest.json",
         "--config=eval/synthetic/answer_rule_config_synthetic_v1.json",
         "--leak-manifest=eval/synthetic/firm-surface-manifest-v1.json",
+        "--public-metadata=eval/synthetic/public_comparison_metadata_v1.json",
         "--limit",
         "1",
     ]

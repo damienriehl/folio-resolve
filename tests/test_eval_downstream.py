@@ -145,6 +145,39 @@ def test_execution_receipt_records_resolved_process_and_determinism(
     assert receipt["environment"] == {"PYTHONHASHSEED": "0"}
 
 
+@pytest.mark.parametrize(
+    "raw_argv",
+    [
+        ("run_synthetic_comparison",),
+        (
+            "run_synthetic_comparison",
+            "--public-metadata=eval/synthetic/public_comparison_metadata_v1.json",
+        ),
+    ],
+)
+def test_execution_receipt_records_a_missing_resolved_default_once(
+    raw_argv: tuple[str, ...], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sys, "executable", "/tmp/venv/bin/python")
+    default = "eval/synthetic/public_comparison_metadata_v1.json"
+
+    receipt = _execution_receipt(
+        raw_argv,
+        supplied_argv=True,
+        resolved_defaults={"--public-metadata": default},
+    )
+
+    argv = receipt["argv"]
+    assert isinstance(argv, list)
+    occurrences = sum(
+        argument == "--public-metadata" or argument.startswith("--public-metadata=")
+        for argument in argv
+    )
+    assert occurrences == 1
+    if len(raw_argv) == 1:
+        assert argv[-2:] == ["--public-metadata", default]
+
+
 def test_assert_within_root_passes_for_a_path_inside_the_checkout(tmp_path: Path) -> None:
     root = tmp_path / "folio-resolve"
     inside = root / "src" / "folio_resolve" / "__init__.py"
