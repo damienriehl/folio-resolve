@@ -1145,6 +1145,48 @@ def test_environment_probe_fingerprints_bytecode_constant_alias_variation(
     assert after["site_files_sha256"] != before["site_files_sha256"]
 
 
+def test_environment_probe_fingerprints_bytecode_string_interning_variation(
+    tmp_path: Path,
+) -> None:
+    interpreter, site = _isolated_python_site(tmp_path)
+    source = site / "cacheable.py"
+    source.write_text("VALUE = 'not interned value!'\n", encoding="utf-8")
+    before = _run_consumer_probe(interpreter)
+    cache_path = Path(importlib.util.cache_from_source(str(source)))
+    cache_path.parent.mkdir()
+    py_compile.compile(str(source), cfile=str(cache_path), doraise=True)
+    cache_bytes = cache_path.read_bytes()
+    cached_code = marshal.loads(cache_bytes[16:])
+    original = next(
+        value for value in cached_code.co_consts if value == "not interned value!"
+    )
+    noninterned_payload = marshal.dumps(original)
+    interned = pilot_module.sys.intern(original)
+    assert interned is original
+    interned_payload = marshal.dumps(interned)
+    assert interned_payload != noninterned_payload
+    marshal_ref_flag = 0x80
+    noninterned_encoding = (
+        bytes([noninterned_payload[0] & ~marshal_ref_flag])
+        + noninterned_payload[1:]
+    )
+    interned_encoding = (
+        bytes([interned_payload[0] & ~marshal_ref_flag]) + interned_payload[1:]
+    )
+    payload_offset = cache_bytes.index(noninterned_encoding, 16)
+    forged_cache = (
+        cache_bytes[:payload_offset]
+        + interned_encoding
+        + cache_bytes[payload_offset + len(noninterned_encoding) :]
+    )
+    cache_path.write_bytes(forged_cache)
+
+    after = _run_consumer_probe(interpreter)
+
+    assert after["site_file_count"] == before["site_file_count"] + 1
+    assert after["site_files_sha256"] != before["site_files_sha256"]
+
+
 def test_environment_probe_fingerprints_bytecode_metadata_alias_variation(
     tmp_path: Path,
 ) -> None:

@@ -261,32 +261,6 @@ def code_value_signature(code):
     return tuple(getattr(code, field) for field in code_fields) + (constants,)
 
 
-def alias_signature(value, references):
-    reference_id = id(value)
-    if reference_id in references:
-        return ("reference", references[reference_id])
-    reference = len(references)
-    references[reference_id] = reference
-
-    if isinstance(value, types.CodeType):
-        children = (
-            tuple(
-                alias_signature(getattr(value, field), references)
-                for field in code_fields
-            ),
-            tuple(alias_signature(item, references) for item in value.co_consts),
-        )
-    elif isinstance(value, (tuple, frozenset)):
-        children = tuple(alias_signature(item, references) for item in value)
-    else:
-        children = ()
-    return ("object", reference, type(value).__qualname__, children)
-
-
-def code_alias_signature(code):
-    return alias_signature(code, {})
-
-
 def is_regenerable_bytecode_cache(path):
     if path.suffix not in {".pyc", ".pyo"}:
         return False
@@ -371,8 +345,8 @@ def is_regenerable_bytecode_cache(path):
     source_code = marshal.loads(marshal.dumps(source_code))
     if code_value_signature(cached_code) != code_value_signature(source_code):
         raise RuntimeError("bytecode cache does not match its source")
-    if code_alias_signature(cached_code) != code_alias_signature(source_code):
-        # Preserve alias-only divergence by keeping the cache fingerprint-bound.
+    if marshal.dumps(cached_code) != marshal.dumps(source_code):
+        # Keep representation-only divergence fingerprint-bound.
         return False
     return True
 
