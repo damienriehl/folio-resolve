@@ -217,7 +217,8 @@ branch: "docs/recent-plan-audit-2026-08-20"
   Fail-closed preflight identified three stale generated caches left by earlier branch/runtime
   transitions; only those exact regenerable files were removed. Candidate, mapper, and enrich
   environment probes then passed. The one-item canary completed end-to-end and published exactly
-  one receipt with all fail-closed gates intact; the full resumable run is active from 1/60.
+  one receipt with all fail-closed gates intact. The full resumable run then advanced to 4/60,
+  crossing the exact three-receipt boundary where v5 failed; shard 5 is active.
 
 ## Plan-level verdicts
 
@@ -250,7 +251,7 @@ branch: "docs/recent-plan-audit-2026-08-20"
 | U7 grader/close-call lane | **Partial** | Code is complete. The first consensus-audit sitting, confidence-floor calibration, and human ratification into corpus v2 wait on D1/D2 and owner adjudication. |
 | U8 synthetic scoring | **Complete** | All 255 checkpoints completed at scorer `933c6ef`; automatic and finalize-only reports were byte-identical. Corrected depth-probe report PR #10 merged as `4bd353d5`; accounting, determinism, leak, test, type, and lint gates pass. |
 | U9 guarded iteration loop | **Partial** | Code is complete; no real corpus-v1 improvement iteration is recorded yet. Pilot must run first. |
-| U10 deterministic comparison | **Partial; v6 full run active** | Mapper #11/#12 and folio-resolve #11–#14 are merged. The failed v4 shard has no receipt; v5 preserved 3/60 receipts before new standard-library caches invalidated the fourth shard. Fresh v6 passed its canary and the resumable run is active from 1/60. Prove progress beyond three receipts, then finish and interpret the pilot before the final full comparison. |
+| U10 deterministic comparison | **Partial; v6 full run active** | Mapper #11/#12 and folio-resolve #11–#14 are merged. The failed v4 shard has no receipt; v5 preserved 3/60 receipts before new standard-library caches invalidated the fourth shard. Fresh v6 passed its canary and advanced to 4/60, proving the local repair beyond the prior failure boundary. Finish and interpret the pilot before the final full comparison. |
 | U11 owner-run LLM lanes | **Partial / owner-run** | Flags and seams are merged. Run both shipped configurations with owner-held keys and record explicit skip markers where unavailable. |
 | U12 parity + attribution | **Partial** | Static parity map is complete. Add controlled replay/ablation only where U10 reveals an incumbent win, subject to D4. |
 | U13 campaign report/verdict | **Not started** | Assemble after U9/U10/U12; final firm exam and adoption decision are owner gates. |
@@ -278,9 +279,9 @@ from running in the same session.
    metadata path was absent from the exact allowlist; it has no receipt and remains preserved.
    Corrected v5 passed its canary and preserved three receipts; the next shard's computation
    completed but 17 newly generated standard-library bytecode caches correctly blocked receipt
-   publication. PR #14 is merged; fresh v6 passed its one-item canary, and the full resumable run is
-   active from 1/60. Verify that receipts advance beyond the prior three-receipt boundary, then
-   continue/resume the independent receipts through finalization at 60/60.
+   publication. PR #14 is merged; fresh v6 passed its one-item canary and advanced to 4/60, beyond
+   the prior failure boundary. Continue/resume the independent receipts through finalization at
+   60/60.
 5. **Complete — resumable/sharded scoring.** PR #9 checkpoints each surface-free post-adapter
    result atomically, replays through the unchanged score/depth-probe/report/leak-check path, and
    fails closed on fingerprint or record corruption. Direct, resumed, and differently ordered
@@ -438,7 +439,7 @@ preserves three completion receipts; its fourth item did not publish a receipt a
 - Runtime-fingerprint PR #14 merged as `f946613`; executable head `6574cdd` received a clean
   exact-head automated review. Fresh v6 uses fingerprint
   `800667da699a1fe6e845b954a8a20795e9fd3156570675d251a372b828edd35c`; its one-item canary passed,
-  and the full resumable run is active from 1/60.
+  and the full resumable run advanced to 4/60 without reproducing v5's post-shard runtime drift.
 - Durable cache-reassessment handoff PR #15 merged as `04905da`. It records that upstream
   folio-python PR #20 is merged but remains absent from the latest `v0.4.0` release, so local
   containment stays until a containing release passes the memory and determinism checklist.
