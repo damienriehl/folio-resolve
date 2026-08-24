@@ -78,6 +78,43 @@ def _run_consumer_probe(interpreter: Path) -> dict[str, object]:
     return json.loads(completed.stdout)
 
 
+def test_comparison_pilot_launcher_disables_bytecode_before_import(
+    tmp_path: Path,
+) -> None:
+    launcher_source = (
+        Path(pilot_module.__file__).resolve().parents[1] / "run_comparison_pilot.py"
+    )
+    launcher = tmp_path / "run_comparison_pilot.py"
+    launcher.write_bytes(launcher_source.read_bytes())
+    package = tmp_path / "folio_eval"
+    package.mkdir()
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    (package / "comparison_pilot.py").write_text(
+        "import os\n"
+        "import sys\n"
+        "def main():\n"
+        "    assert os.environ['PYTHONDONTWRITEBYTECODE'] == '1'\n"
+        "    assert sys.dont_write_bytecode is True\n"
+        "    return 0\n",
+        encoding="utf-8",
+    )
+    environment = os.environ.copy()
+    environment.pop("PYTHONDONTWRITEBYTECODE", None)
+    environment.pop("PYTHONPYCACHEPREFIX", None)
+
+    completed = pilot_module.subprocess.run(
+        [pilot_module.sys.executable, str(launcher)],
+        check=False,
+        capture_output=True,
+        cwd=tmp_path,
+        env=environment,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert not (package / "__pycache__").exists()
+
+
 def _stack(stack: str, lane: str, item_id: str) -> dict[str, object]:
     return {
         "stack": stack,
