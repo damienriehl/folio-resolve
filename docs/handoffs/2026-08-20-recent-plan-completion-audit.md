@@ -178,12 +178,37 @@ branch: "docs/recent-plan-audit-2026-08-20"
   `1b7f98f0a75467866686d0f5b398039fe1c23e2dabea59f6a64dee9d9eac6539`; no shard started before
   the corrected gate passed.
 
+## Execution update — 2026-08-24
+
+- Outage-safe pilot PR [#12](https://github.com/damienriehl/folio-resolve/pull/12) merged as
+  `a78f8fe9` after exact-head review of `f0c0fe1d`; final validation was `1126 passed, 2 skipped`,
+  with the 94 focused tests, Ruff, mypy, and diff checks clean. Mapper receipt-hardening PR
+  [#12](https://github.com/alea-institute/folio-mapper/pull/12) likewise merged as `626412bb`.
+- The first authoritative v4 shard completed all three leak-clean stage snapshots, then failed
+  closed before publishing its item receipt or final report. Privacy-safe structural diagnosis
+  localized the only collision to the committed public-comparison metadata path recorded in the
+  invocation receipt. The v4 checkpoint remains preserved as failed evidence and must not be
+  resumed or treated as completed.
+- Focused PR [#13](https://github.com/damienriehl/folio-resolve/pull/13) added the missing exact,
+  contract-bound public path and ensured direct CLI callers record the resolved committed default.
+  It merged as `331c507c` from reviewed head `f9443d2`; saved-stage reconstruction passes without
+  rerunning models. Final validation was `1128 passed, 2 skipped`, 74 focused tests, with Ruff,
+  mypy, and diff checks clean.
+- The corrected v5 pilot checkpoint passed its one-item canary and is at 1/60 from exact reviewed
+  head `f9443d2`,
+  with fingerprint `c450a2b04d1fb4e2fbeb1433ecea832f36ef02c02de407083895f63777efa4a8`
+  and manifest SHA-256 `7e00bb154d8753a66d0370cac89a3325957bedce9a4d652a5fbbb58e31dc4994`.
+  The successful receipt has SHA-256
+  `35bf7d45f8a8fae625ca44a44d4e920724092d9bb0edb5df5773535eaab60a49`.
+  The remaining managed run has entered shard 2/60; if that process is absent after interruption,
+  rerun the exact v5 command and let the fingerprint and receipt checks resume it.
+
 ## Plan-level verdicts
 
 | Plan | Verdict | Evidence | Remaining authority |
 |---|---|---|---|
 | Post-Hardening Integration (2026-08-06) | **Complete** — U1–U5 | folio-resolve PRs #2/#4 merged; mootloop PRs #31 then #30 merged; v0.4.0 release published; all three v0.4.0 consumer-pin PRs merged; post-release handoff records full verification | None. Do not reopen this release from stale handoffs. |
-| Synthetic Benchmark F1 Campaign (2026-08-16) | **Partial** — U8 complete; deterministic comparison and guarded iteration tail open | folio-resolve PRs #8/#9/#10 and consumer runners merged; U1–U6 and U8 code/report complete; U3 gold v7/calibration complete; corpus v1 committed; U10 one-item plumbing/leak gate passed and manual inspection correctly blocked a non-canonical mapper result | Autonomous queue below, evidence-bound decisions, and later owner-run metric gates |
+| Synthetic Benchmark F1 Campaign (2026-08-16) | **Partial** — U8 complete; deterministic comparison and guarded iteration tail open | folio-resolve PRs #8–#13 and consumer runners merged; U1–U6 and U8 code/report complete; U3 gold v7/calibration complete; corpus v1 committed; U10 corrected checkpoint initialized after two fail-closed pilot defects were repaired | Autonomous queue below, evidence-bound decisions, and later owner-run metric gates |
 | F1 Improvement Loop (2026-07-27 carryover) | **Implemented/superseded, with live gates carried forward** | U1–U10 implementation and measured v0.4.0 iteration/release evidence landed; Gate 1b folded through gold v7; its gated synthetic and close-out work was restructured into the 2026-08-16 campaign | Follow the newer campaign plan; do not implement old U11/U12 as a parallel design |
 
 ## Unit audit — 2026-08-06 plan
@@ -209,7 +234,7 @@ branch: "docs/recent-plan-audit-2026-08-20"
 | U7 grader/close-call lane | **Partial** | Code is complete. The first consensus-audit sitting, confidence-floor calibration, and human ratification into corpus v2 wait on D1/D2 and owner adjudication. |
 | U8 synthetic scoring | **Complete** | All 255 checkpoints completed at scorer `933c6ef`; automatic and finalize-only reports were byte-identical. Corrected depth-probe report PR #10 merged as `4bd353d5`; accounting, determinism, leak, test, type, and lint gates pass. |
 | U9 guarded iteration loop | **Partial** | Code is complete; no real corpus-v1 improvement iteration is recorded yet. Pilot must run first. |
-| U10 deterministic comparison | **Partial; corrected live gate passed, pilot queued** | Mapper #11 and folio-resolve #11 merged as `35c9d307` / `659ca93`. Corrected report `1548b6d4...` is leak-clean with zero non-canonical scored/stage IRIs. Outage-safe PR #12 is in review and its exact 60-item checkpoint is initialized at 0/60. Run the pilot before the final full comparison. |
+| U10 deterministic comparison | **Partial; corrected pilot running** | Mapper #11/#12 and folio-resolve #11/#12/#13 are merged. The failed v4 shard has no receipt; v5 passed its end-to-end canary and is at 1/60 with shard 2 active. Finish and interpret the pilot before the final full comparison. |
 | U11 owner-run LLM lanes | **Partial / owner-run** | Flags and seams are merged. Run both shipped configurations with owner-held keys and record explicit skip markers where unavailable. |
 | U12 parity + attribution | **Partial** | Static parity map is complete. Add controlled replay/ablation only where U10 reveals an incumbent win, subject to D4. |
 | U13 campaign report/verdict | **Not started** | Assemble after U9/U10/U12; final firm exam and adoption decision are owner gates. |
@@ -232,10 +257,11 @@ from running in the same session.
    duplicate U10 PR. Preserve the true one-scoreable-item gate, exact process receipts, input
    fingerprints, full stage snapshots, gold/no-match sets, and candidate lifecycle attribution
    when running the live gate and pilot.
-4. **In progress — run the outage-safe U10 pilot.** Mapper #11 and folio-resolve #11 are merged;
-   the corrected one-item gate confirms canonical mapper output and leak-clean receipts. PR #12 is
-   under fresh review at `2435df2`; its real fingerprint-bound checkpoint is initialized at 0/60.
-   Settle and merge the PR, then launch/resume the 60 independent shards and finalize their report.
+4. **In progress — run the outage-safe U10 pilot.** Mapper #11/#12 and folio-resolve #11/#12/#13
+   are merged. The v4 first shard failed closed after its stages because the committed public
+   metadata path was absent from the exact allowlist; it has no receipt and remains preserved.
+   Corrected v5 passed its one-item canary from `f9443d2` and is at 1/60; the remaining managed run
+   has entered shard 2. Continue/resume the independent receipts and finalize at 60/60.
 5. **Complete — resumable/sharded scoring.** PR #9 checkpoints each surface-free post-adapter
    result atomically, replays through the unchanged score/depth-probe/report/leak-check path, and
    fails closed on fingerprint or record corruption. Direct, resumed, and differently ordered
@@ -355,8 +381,9 @@ Notes (optional):
   the bare-hash/full-IRI unit mismatch; the corrected leak-clean live receipt is complete. Pilot and
   final comparison receipts remain pending.
 
-Latest pilot-PR verification: `1075 passed, 2 skipped`; Ruff, both mypy targets, and diff
-checks pass.
+Latest pilot verification: PR #12 passed `1126 passed, 2 skipped`; PR #13 passed
+`1128 passed, 2 skipped`. The 74 focused PR #13 tests, Ruff, both mypy targets, diff checks, and
+saved-stage reconstruction all pass. The corrected v5 canary also published its completion receipt.
 
 ## Shipping state
 
@@ -379,8 +406,10 @@ checks pass.
   merged as `35c9d307`; focused runner tests are `9 passed`, full backend is `529 passed, 10
   skipped`, lock and diff checks pass. A clean Python 3.11 runtime at that exact merge commit imports
   `folio-python 0.3.6`.
-- Final outage-safe pilot branch `feat/u10-resumable-pilot-final` is pushed in PR #12 at `2435df2`;
-  full verification is `1075 passed, 2 skipped`, Ruff and both mypy targets clean. Review fixes add
-  durable fsync publication, exact consumer-environment/model binding, and aggregate invocation
-  provenance. Manifest SHA-256 is `ae5d61a4d35e11de07613eb15c4536afe657903d75542932d00523f2fb9bfeb8`;
-  it contains 60 expected items and zero completed shards.
+- Outage-safe pilot PR #12 merged as `a78f8fe9` from reviewed head `f0c0fe1d`; full verification is
+  `1126 passed, 2 skipped`, with its focused, Ruff, mypy, and diff gates clean. The failed v4
+  checkpoint is preserved with zero completion receipts and no final report.
+- Public-metadata contract PR #13 merged as `331c507c` from reviewed head `f9443d2`; full
+  verification is `1128 passed, 2 skipped`. Corrected v5 is fingerprint-bound at 1/60, with its
+  remaining managed run active at shard 2; its manifest digest is
+  `7e00bb154d8753a66d0370cac89a3325957bedce9a4d652a5fbbb58e31dc4994`.
