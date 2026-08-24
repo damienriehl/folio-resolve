@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
+import importlib.util
 import json
+import marshal
+import os
+import py_compile
+import struct
 import venv
 from copy import deepcopy
 from pathlib import Path
@@ -57,6 +62,20 @@ def _isolated_python_site(tmp_path: Path) -> tuple[Path, Path]:
     venv.EnvBuilder(with_pip=False).create(runtime)
     version = f"python{pilot_module.sys.version_info.major}.{pilot_module.sys.version_info.minor}"
     return runtime / "bin" / "python", runtime / "lib" / version / "site-packages"
+
+
+def _execute_consumer_probe(interpreter: Path, *, check: bool):
+    return pilot_module.subprocess.run(
+        [interpreter, "-B", "-P", "-c", pilot_module._CONSUMER_ENVIRONMENT_PROBE],
+        check=check,
+        capture_output=True,
+        text=True,
+    )
+
+
+def _run_consumer_probe(interpreter: Path) -> dict[str, object]:
+    completed = _execute_consumer_probe(interpreter, check=True)
+    return json.loads(completed.stdout)
 
 
 def _stack(stack: str, lane: str, item_id: str) -> dict[str, object]:
@@ -627,12 +646,7 @@ def test_environment_probe_rejects_unowned_pth_import_root(tmp_path: Path) -> No
         "demo.pth,,\ndemo-1.0.dist-info/METADATA,,\ndemo-1.0.dist-info/RECORD,,\n",
         encoding="utf-8",
     )
-    completed = pilot_module.subprocess.run(
-        [interpreter, "-B", "-P", "-c", pilot_module._CONSUMER_ENVIRONMENT_PROBE],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
+    completed = _execute_consumer_probe(interpreter, check=False)
 
     assert completed.returncode != 0
     assert "unowned .pth import root" in completed.stderr
@@ -658,12 +672,7 @@ def test_environment_probe_rejects_executable_pth_path_injection(tmp_path: Path)
         encoding="utf-8",
     )
 
-    completed = pilot_module.subprocess.run(
-        [interpreter, "-B", "-P", "-c", pilot_module._CONSUMER_ENVIRONMENT_PROBE],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
+    completed = _execute_consumer_probe(interpreter, check=False)
 
     assert completed.returncode != 0
     assert "unsupported executable .pth line" in completed.stderr
@@ -679,12 +688,7 @@ def test_environment_probe_rejects_executable_pth_meta_path_hook(tmp_path: Path)
         encoding="utf-8",
     )
 
-    completed = pilot_module.subprocess.run(
-        [interpreter, "-B", "-P", "-c", pilot_module._CONSUMER_ENVIRONMENT_PROBE],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
+    completed = _execute_consumer_probe(interpreter, check=False)
 
     assert completed.returncode != 0
     assert "unsupported meta-path finder" in completed.stderr
@@ -694,12 +698,7 @@ def test_environment_probe_rejects_sitecustomize(tmp_path: Path) -> None:
     interpreter, site = _isolated_python_site(tmp_path)
     (site / "sitecustomize.py").write_text("MARKER = True\n", encoding="utf-8")
 
-    completed = pilot_module.subprocess.run(
-        [interpreter, "-B", "-P", "-c", pilot_module._CONSUMER_ENVIRONMENT_PROBE],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
+    completed = _execute_consumer_probe(interpreter, check=False)
 
     assert completed.returncode != 0
     assert "startup customization module" in completed.stderr
@@ -723,12 +722,7 @@ def test_environment_probe_discovers_self_hiding_sitecustomize_before_execution(
         encoding="utf-8",
     )
 
-    evasion = pilot_module.subprocess.run(
-        [interpreter, "-B", "-P", "-c", pilot_module._CONSUMER_ENVIRONMENT_PROBE],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
+    evasion = _execute_consumer_probe(interpreter, check=False)
 
     assert evasion.returncode == 0, evasion.stderr
     assert marker.is_file(), "the regression must prove the post-startup probe can be evaded"
@@ -770,12 +764,7 @@ def test_environment_probe_rejects_unowned_executable_pth(tmp_path: Path) -> Non
     interpreter, site = _isolated_python_site(tmp_path)
     (site / "unowned.pth").write_text("import sys; sys.audit('unowned-hook')\n", encoding="utf-8")
 
-    completed = pilot_module.subprocess.run(
-        [interpreter, "-B", "-P", "-c", pilot_module._CONSUMER_ENVIRONMENT_PROBE],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
+    completed = _execute_consumer_probe(interpreter, check=False)
 
     assert completed.returncode != 0
     assert "unsupported executable .pth line" in completed.stderr
@@ -788,12 +777,7 @@ def test_environment_probe_rejects_symlinked_package_directory(tmp_path: Path) -
     (external_package / "__init__.py").write_text("VALUE = 1\n", encoding="utf-8")
     (site / "linked_package").symlink_to(external_package, target_is_directory=True)
 
-    completed = pilot_module.subprocess.run(
-        [interpreter, "-B", "-P", "-c", pilot_module._CONSUMER_ENVIRONMENT_PROBE],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
+    completed = _execute_consumer_probe(interpreter, check=False)
 
     assert completed.returncode != 0
     assert "symlinked site-packages entry" in completed.stderr
@@ -816,12 +800,7 @@ def test_environment_probe_rejects_symlinked_model_cache_directory(
     (external / "config.json").write_text("{}\n", encoding="utf-8")
     (model_root / "linked").symlink_to(external, target_is_directory=True)
 
-    completed = pilot_module.subprocess.run(
-        [interpreter, "-B", "-P", "-c", pilot_module._CONSUMER_ENVIRONMENT_PROBE],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
+    completed = _execute_consumer_probe(interpreter, check=False)
 
     assert completed.returncode != 0
     assert "symlinked model-cache directory" in completed.stderr
@@ -864,12 +843,7 @@ def test_environment_probe_rejects_symlinked_editable_directory(tmp_path: Path) 
         encoding="utf-8",
     )
 
-    completed = pilot_module.subprocess.run(
-        [interpreter, "-B", "-P", "-c", pilot_module._CONSUMER_ENVIRONMENT_PROBE],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
+    completed = _execute_consumer_probe(interpreter, check=False)
 
     assert completed.returncode != 0
     assert "symlinked editable source entry" in completed.stderr
@@ -880,33 +854,342 @@ def test_environment_probe_hashes_unowned_site_package_files(tmp_path: Path) -> 
     module = site / "manually_copied.py"
     module.write_text("VALUE = 1\n", encoding="utf-8")
 
-    def probe() -> dict[str, object]:
-        completed = pilot_module.subprocess.run(
-            [interpreter, "-B", "-P", "-c", pilot_module._CONSUMER_ENVIRONMENT_PROBE],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-        return json.loads(completed.stdout)
-
-    before = probe()
+    before = _run_consumer_probe(interpreter)
     module.write_text("VALUE = 2\n", encoding="utf-8")
-    after = probe()
+    after = _run_consumer_probe(interpreter)
 
     assert before["site_file_count"] == after["site_file_count"]
     assert before["site_files_sha256"] != after["site_files_sha256"]
 
 
+def test_environment_probe_ignores_regenerable_bytecode_cache(tmp_path: Path) -> None:
+    interpreter, site = _isolated_python_site(tmp_path)
+    source = site / "cacheable.py"
+    source.write_text("VALUE = 1\n", encoding="utf-8")
+
+    before = _run_consumer_probe(interpreter)
+    cache_path = Path(importlib.util.cache_from_source(str(source)))
+    cache_path.parent.mkdir()
+    py_compile.compile(str(source), cfile=str(cache_path), doraise=True)
+    after = _run_consumer_probe(interpreter)
+
+    assert after["site_file_count"] == before["site_file_count"]
+    assert after["site_file_bytes"] == before["site_file_bytes"]
+    assert after["site_files_sha256"] == before["site_files_sha256"]
+
+
+@pytest.mark.parametrize(
+    ("optimization", "invalidation_mode"),
+    [
+        pytest.param(0, py_compile.PycInvalidationMode.CHECKED_HASH, id="checked-hash"),
+        pytest.param(1, py_compile.PycInvalidationMode.TIMESTAMP, id="optimized-1"),
+        pytest.param(2, py_compile.PycInvalidationMode.TIMESTAMP, id="optimized-2"),
+    ],
+)
+def test_environment_probe_ignores_supported_bytecode_cache_variants(
+    tmp_path: Path,
+    optimization: int,
+    invalidation_mode: py_compile.PycInvalidationMode,
+) -> None:
+    interpreter, site = _isolated_python_site(tmp_path)
+    source = site / "cacheable.py"
+    source.write_text('"docstring"\nVALUE = 1\n', encoding="utf-8")
+
+    before = _run_consumer_probe(interpreter)
+    cache_path = Path(
+        importlib.util.cache_from_source(
+            str(source),
+            optimization="" if optimization == 0 else str(optimization),
+        )
+    )
+    cache_path.parent.mkdir()
+    py_compile.compile(
+        str(source),
+        cfile=str(cache_path),
+        doraise=True,
+        optimize=optimization,
+        invalidation_mode=invalidation_mode,
+    )
+    after = _run_consumer_probe(interpreter)
+
+    assert after == before
+
+
+@pytest.mark.parametrize("tool_suffix", ["tool", "pytest-9.1.1"])
+def test_environment_probe_hashes_tool_specific_bytecode_cache(
+    tmp_path: Path,
+    tool_suffix: str,
+) -> None:
+    interpreter, site = _isolated_python_site(tmp_path)
+    source = site / "cacheable.py"
+    source.write_text("VALUE = 1\n", encoding="utf-8")
+
+    before = _run_consumer_probe(interpreter)
+    cache_path = (
+        site
+        / "__pycache__"
+        / f"cacheable.{pilot_module.sys.implementation.cache_tag}-{tool_suffix}.pyc"
+    )
+    cache_path.parent.mkdir()
+    cache_path.write_bytes(b"tool-specific-cache")
+    after = _run_consumer_probe(interpreter)
+
+    assert after["site_file_count"] == before["site_file_count"] + 1
+    assert after["site_files_sha256"] != before["site_files_sha256"]
+
+
+def test_environment_probe_rejects_sourceless_bytecode_cache(tmp_path: Path) -> None:
+    interpreter, site = _isolated_python_site(tmp_path)
+    source = site / "cacheable.py"
+    source.write_text("VALUE = 1\n", encoding="utf-8")
+    cache_path = Path(importlib.util.cache_from_source(str(source)))
+    cache_path.parent.mkdir()
+    py_compile.compile(str(source), cfile=str(cache_path), doraise=True)
+    source.unlink()
+
+    completed = _execute_consumer_probe(interpreter, check=False)
+
+    assert completed.returncode != 0
+    assert "sourceless bytecode cache is not allowed" in completed.stderr
+
+
+def test_environment_probe_rejects_malformed_bytecode_cache_contents(
+    tmp_path: Path,
+) -> None:
+    interpreter, site = _isolated_python_site(tmp_path)
+    source = site / "cacheable.py"
+    source.write_text("VALUE = 1\n", encoding="utf-8")
+    cache_path = Path(importlib.util.cache_from_source(str(source)))
+    cache_path.parent.mkdir()
+    cache_path.write_bytes(b"not-a-bytecode-cache")
+
+    completed = _execute_consumer_probe(interpreter, check=False)
+
+    assert completed.returncode != 0
+    assert "malformed bytecode cache is not allowed" in completed.stderr
+
+
+def test_environment_probe_rejects_malformed_bytecode_cache_name(
+    tmp_path: Path,
+) -> None:
+    interpreter, site = _isolated_python_site(tmp_path)
+    source = site / "cacheable.py"
+    source.write_text("VALUE = 1\n", encoding="utf-8")
+    cache_path = site / "__pycache__" / "cacheable.pyc"
+    cache_path.parent.mkdir()
+    py_compile.compile(str(source), cfile=str(cache_path), doraise=True)
+
+    completed = _execute_consumer_probe(interpreter, check=False)
+
+    assert completed.returncode != 0
+    assert "malformed bytecode cache is not allowed" in completed.stderr
+
+
+def test_environment_probe_rejects_divergent_source_backed_bytecode(
+    tmp_path: Path,
+) -> None:
+    interpreter, site = _isolated_python_site(tmp_path)
+    source = site / "cacheable.py"
+    source.write_text("VALUE = 1\n", encoding="utf-8")
+    alternate = tmp_path / "alternate.py"
+    alternate.write_text("VALUE = 2\n", encoding="utf-8")
+    source_stat = source.stat()
+    os.utime(alternate, ns=(source_stat.st_atime_ns, source_stat.st_mtime_ns))
+    cache_path = Path(importlib.util.cache_from_source(str(source)))
+    cache_path.parent.mkdir()
+    py_compile.compile(
+        str(alternate),
+        cfile=str(cache_path),
+        dfile=str(source),
+        doraise=True,
+    )
+
+    completed = _execute_consumer_probe(interpreter, check=False)
+
+    assert completed.returncode != 0
+    assert "bytecode cache does not match its source" in completed.stderr
+
+
+def test_environment_probe_rejects_bytecode_with_changed_filename(
+    tmp_path: Path,
+) -> None:
+    interpreter, site = _isolated_python_site(tmp_path)
+    source = site / "cacheable.py"
+    source.write_text("VALUE = 1\n", encoding="utf-8")
+    cache_path = Path(importlib.util.cache_from_source(str(source)))
+    cache_path.parent.mkdir()
+    py_compile.compile(str(source), cfile=str(cache_path), doraise=True)
+    cache_bytes = cache_path.read_bytes()
+    cached_code = marshal.loads(cache_bytes[16:])
+    cache_path.write_bytes(
+        cache_bytes[:16] + marshal.dumps(cached_code.replace(co_filename="forged.py"))
+    )
+
+    completed = _execute_consumer_probe(interpreter, check=False)
+
+    assert completed.returncode != 0
+    assert "bytecode cache does not match its source" in completed.stderr
+
+
+def test_environment_probe_rejects_bytecode_with_changed_nested_qualname(
+    tmp_path: Path,
+) -> None:
+    interpreter, site = _isolated_python_site(tmp_path)
+    source = site / "cacheable.py"
+    source.write_text("def nested():\n    return nested.__qualname__\n", encoding="utf-8")
+    cache_path = Path(importlib.util.cache_from_source(str(source)))
+    cache_path.parent.mkdir()
+    py_compile.compile(str(source), cfile=str(cache_path), doraise=True)
+    cache_bytes = cache_path.read_bytes()
+    cached_code = marshal.loads(cache_bytes[16:])
+    nested_code = next(
+        value for value in cached_code.co_consts if hasattr(value, "co_qualname")
+    )
+    forged_constants = tuple(
+        value.replace(co_qualname="evil") if value is nested_code else value
+        for value in cached_code.co_consts
+    )
+    cache_path.write_bytes(
+        cache_bytes[:16]
+        + marshal.dumps(cached_code.replace(co_consts=forged_constants))
+    )
+
+    completed = _execute_consumer_probe(interpreter, check=False)
+
+    assert completed.returncode != 0
+    assert "bytecode cache does not match its source" in completed.stderr
+
+
+@pytest.mark.parametrize(
+    ("source_text", "constant_type", "replacement"),
+    [
+        pytest.param("VALUE = True\n", bool, 1, id="bool-to-int"),
+        pytest.param("VALUE = -0.0\n", float, 0.0, id="negative-zero"),
+        pytest.param(
+            "VALUE = 1e309 - 1e309\n",
+            float,
+            struct.unpack("!d", bytes.fromhex("7ff8000000000042"))[0],
+            id="nan-payload",
+        ),
+    ],
+)
+def test_environment_probe_compares_bytecode_constants_by_type_and_value(
+    tmp_path: Path,
+    source_text: str,
+    constant_type: type[object],
+    replacement: object,
+) -> None:
+    interpreter, site = _isolated_python_site(tmp_path)
+    source = site / "cacheable.py"
+    source.write_text(source_text, encoding="utf-8")
+    cache_path = Path(importlib.util.cache_from_source(str(source)))
+    cache_path.parent.mkdir()
+    py_compile.compile(str(source), cfile=str(cache_path), doraise=True)
+    cache_bytes = cache_path.read_bytes()
+    cached_code = marshal.loads(cache_bytes[16:])
+    forged_constants = tuple(
+        replacement if type(value) is constant_type else value
+        for value in cached_code.co_consts
+    )
+    cache_path.write_bytes(
+        cache_bytes[:16]
+        + marshal.dumps(cached_code.replace(co_consts=forged_constants))
+    )
+
+    completed = _execute_consumer_probe(interpreter, check=False)
+
+    assert completed.returncode != 0
+    assert "bytecode cache does not match its source" in completed.stderr
+
+
+def test_environment_probe_preserves_frozenset_constant_iteration_order(
+    tmp_path: Path,
+) -> None:
+    interpreter, site = _isolated_python_site(tmp_path)
+    source = site / "cacheable.py"
+    source.write_text(
+        "VALUE = tuple({-1, -2, 0, 1, 2, 3})\n",
+        encoding="utf-8",
+    )
+    cache_path = Path(importlib.util.cache_from_source(str(source)))
+    cache_path.parent.mkdir()
+    py_compile.compile(str(source), cfile=str(cache_path), doraise=True)
+    cache_bytes = cache_path.read_bytes()
+    cached_code = marshal.loads(cache_bytes[16:])
+    original = next(
+        value for value in cached_code.co_consts if isinstance(value, frozenset)
+    )
+    serialized = bytearray(marshal.dumps(original))
+    serialized[0] &= 0x7F
+    header = serialized[:5]
+    members = [serialized[index : index + 5] for index in range(5, len(serialized), 5)]
+    forged_serialized = header + b"".join([*members[:-2], members[-1], members[-2]])
+    payload_offset = cache_bytes.index(serialized)
+    forged_cache = (
+        cache_bytes[:payload_offset]
+        + forged_serialized
+        + cache_bytes[payload_offset + len(serialized) :]
+    )
+    forged_code = marshal.loads(forged_cache[16:])
+    forged = next(
+        value for value in forged_code.co_consts if isinstance(value, frozenset)
+    )
+    assert forged == original
+    assert tuple(forged) != tuple(original)
+    cache_path.write_bytes(forged_cache)
+
+    completed = _execute_consumer_probe(interpreter, check=False)
+
+    assert completed.returncode != 0
+    assert "bytecode cache does not match its source" in completed.stderr
+
+
+def test_environment_probe_rejects_legacy_bytecode_cache(tmp_path: Path) -> None:
+    interpreter, site = _isolated_python_site(tmp_path)
+    source = site / "legacy.py"
+    source.write_text("VALUE = 1\n", encoding="utf-8")
+    cache_path = site / "legacy.pyc"
+    py_compile.compile(str(source), cfile=str(cache_path), doraise=True)
+    source.unlink()
+
+    completed = _execute_consumer_probe(interpreter, check=False)
+
+    assert completed.returncode != 0
+    assert "legacy bytecode cache is not allowed" in completed.stderr
+
+
+def test_environment_probe_ignores_record_listed_regenerable_cache(
+    tmp_path: Path,
+) -> None:
+    interpreter, site = _isolated_python_site(tmp_path)
+    source = site / "cacheable.py"
+    source.write_text("VALUE = 1\n", encoding="utf-8")
+    cache_path = Path(importlib.util.cache_from_source(str(source)))
+    dist_info = site / "demo-1.0.dist-info"
+    dist_info.mkdir()
+    (dist_info / "METADATA").write_text(
+        "Metadata-Version: 2.1\nName: demo\nVersion: 1.0\n",
+        encoding="utf-8",
+    )
+    (dist_info / "RECORD").write_text(
+        "cacheable.py,,\n"
+        f"{cache_path.relative_to(site).as_posix()},,\n"
+        "demo-1.0.dist-info/METADATA,,\n"
+        "demo-1.0.dist-info/RECORD,,\n",
+        encoding="utf-8",
+    )
+
+    before = _run_consumer_probe(interpreter)
+    cache_path.parent.mkdir()
+    py_compile.compile(str(source), cfile=str(cache_path), doraise=True)
+    after = _run_consumer_probe(interpreter)
+
+    assert after == before
+
+
 def test_environment_probe_hashes_standard_library(tmp_path: Path) -> None:
     interpreter, _site = _isolated_python_site(tmp_path)
-
-    completed = pilot_module.subprocess.run(
-        [interpreter, "-B", "-P", "-c", pilot_module._CONSUMER_ENVIRONMENT_PROBE],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    payload = json.loads(completed.stdout)
+    payload = _run_consumer_probe(interpreter)
 
     assert payload["stdlib_file_count"] > 0
     assert payload["stdlib_file_bytes"] > 0
@@ -1091,12 +1374,7 @@ def test_environment_probe_ignores_inactive_base_package_trees(tmp_path: Path) -
     (external / "module.py").write_text("VALUE = 1\n", encoding="utf-8")
     (inactive / "linked").symlink_to(external, target_is_directory=True)
 
-    completed = pilot_module.subprocess.run(
-        [interpreter, "-B", "-P", "-c", pilot_module._CONSUMER_ENVIRONMENT_PROBE],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
+    completed = _execute_consumer_probe(interpreter, check=True)
 
     assert json.loads(completed.stdout)["stdlib_file_count"] > 0
 
@@ -1106,12 +1384,7 @@ def test_environment_probe_rejects_active_base_site_packages(tmp_path: Path) -> 
     venv.EnvBuilder(with_pip=False, system_site_packages=True).create(runtime)
     interpreter = runtime / "bin" / "python"
 
-    completed = pilot_module.subprocess.run(
-        [interpreter, "-B", "-P", "-c", pilot_module._CONSUMER_ENVIRONMENT_PROBE],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
+    completed = _execute_consumer_probe(interpreter, check=False)
 
     assert completed.returncode != 0
     assert "active base site-packages root is not allowed" in completed.stderr

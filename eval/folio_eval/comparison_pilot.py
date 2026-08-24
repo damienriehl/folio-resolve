@@ -170,13 +170,17 @@ _CONSUMER_ENVIRONMENT_PROBE = r"""
 import hashlib
 import importlib.metadata
 import importlib.util
+import io
 import json
+import marshal
 import os
 import platform
 import re
+import struct
 import sys
 import sysconfig
 import tomllib
+import types
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
@@ -192,6 +196,156 @@ def digest_bytes(value):
 def digest_file(path):
     with path.open("rb") as handle:
         return hashlib.file_digest(handle, "sha256").hexdigest()
+
+
+def stat_identity(stat):
+    return (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns)
+
+
+code_fields = (
+    "co_argcount",
+    "co_posonlyargcount",
+    "co_kwonlyargcount",
+    "co_nlocals",
+    "co_stacksize",
+    "co_flags",
+    "co_code",
+    "co_names",
+    "co_varnames",
+    "co_filename",
+    "co_name",
+    "co_qualname",
+    "co_firstlineno",
+    "co_linetable",
+    "co_exceptiontable",
+    "co_freevars",
+    "co_cellvars",
+)
+
+
+def constant_signature(value):
+    if isinstance(value, types.CodeType):
+        return ("code", code_signature(value))
+    if isinstance(value, tuple):
+        return ("tuple", tuple(constant_signature(item) for item in value))
+    if isinstance(value, frozenset):
+        return (
+            "frozenset",
+            tuple(constant_signature(item) for item in value),
+        )
+    if value is None:
+        return ("none",)
+    if value is Ellipsis:
+        return ("ellipsis",)
+    if isinstance(value, bool):
+        return ("bool", value)
+    if isinstance(value, int):
+        return ("int", value)
+    if isinstance(value, float):
+        return ("float", struct.pack("!d", value))
+    if isinstance(value, complex):
+        return (
+            "complex",
+            struct.pack("!d", value.real),
+            struct.pack("!d", value.imag),
+        )
+    if isinstance(value, str):
+        return ("str", value)
+    if isinstance(value, bytes):
+        return ("bytes", value)
+    return (type(value).__qualname__, marshal.dumps(value))
+
+
+def code_signature(code):
+    constants = tuple(constant_signature(value) for value in code.co_consts)
+    return tuple(getattr(code, field) for field in code_fields) + (constants,)
+
+
+def is_regenerable_bytecode_cache(path):
+    if path.suffix not in {".pyc", ".pyo"}:
+        return False
+    if not path.is_file():
+        return True
+    if path.is_symlink():
+        raise RuntimeError("symlinked bytecode cache is not allowed")
+    if path.suffix == ".pyo" or "__pycache__" not in path.parts:
+        raise RuntimeError("legacy bytecode cache is not allowed")
+    cache_tag = sys.implementation.cache_tag
+    tool_cache_pattern = rf".+\.{re.escape(cache_tag)}-[^.]+(?:\.[^.]+)*\.pyc"
+    if re.fullmatch(tool_cache_pattern, path.name):
+        return False
+    try:
+        source = Path(importlib.util.source_from_cache(str(path)))
+    except ValueError as exc:
+        raise RuntimeError("malformed bytecode cache is not allowed") from exc
+    if not source.is_file():
+        raise RuntimeError("sourceless bytecode cache is not allowed")
+    if source.is_symlink():
+        raise RuntimeError("symlinked bytecode source is not allowed")
+
+    default_name = f"{source.stem}.{cache_tag}.pyc"
+    optimized_name = re.fullmatch(
+        rf"{re.escape(source.stem)}\.{re.escape(cache_tag)}\.opt-([0-9]+)\.pyc",
+        path.name,
+    )
+    if path.name == default_name:
+        optimization = 0
+    elif optimized_name and optimized_name.group(1) in {"1", "2"}:
+        optimization = int(optimized_name.group(1))
+    elif optimized_name:
+        return False
+    else:
+        raise RuntimeError("malformed bytecode cache is not allowed")
+
+    source_before = source.stat()
+    source_bytes = source.read_bytes()
+    source_after = source.stat()
+    if stat_identity(source_before) != stat_identity(source_after):
+        raise RuntimeError("bytecode source changed during validation")
+
+    cache_before = path.stat()
+    cache_bytes = path.read_bytes()
+    cache_after = path.stat()
+    if stat_identity(cache_before) != stat_identity(cache_after):
+        raise RuntimeError("bytecode cache changed during validation")
+    if len(cache_bytes) < 16 or cache_bytes[:4] != importlib.util.MAGIC_NUMBER:
+        raise RuntimeError("malformed bytecode cache is not allowed")
+    flags = int.from_bytes(cache_bytes[4:8], "little")
+    if flags & ~0b11:
+        raise RuntimeError("malformed bytecode cache is not allowed")
+    if flags & 0b1:
+        if cache_bytes[8:16] != importlib.util.source_hash(source_bytes):
+            raise RuntimeError("stale bytecode cache is not allowed")
+    else:
+        cached_mtime = int.from_bytes(cache_bytes[8:12], "little")
+        cached_size = int.from_bytes(cache_bytes[12:16], "little")
+        if cached_mtime != int(source_after.st_mtime) & 0xFFFFFFFF or cached_size != len(
+            source_bytes
+        ) & 0xFFFFFFFF:
+            raise RuntimeError("stale bytecode cache is not allowed")
+
+    payload = io.BytesIO(cache_bytes[16:])
+    try:
+        cached_code = marshal.load(payload)
+    except (EOFError, TypeError, ValueError) as exc:
+        raise RuntimeError("malformed bytecode cache is not allowed") from exc
+    if payload.read(1) or not isinstance(cached_code, types.CodeType):
+        raise RuntimeError("malformed bytecode cache is not allowed")
+    try:
+        source_code = compile(
+            source_bytes,
+            str(source),
+            "exec",
+            dont_inherit=True,
+            optimize=optimization,
+        )
+    except (SyntaxError, ValueError) as exc:
+        raise RuntimeError("bytecode source cannot be compiled") from exc
+
+    source_code = marshal.loads(marshal.dumps(source_code))
+    if code_signature(cached_code) != code_signature(source_code):
+        raise RuntimeError("bytecode cache does not match its source")
+    return True
 
 
 allowed_executable_pth_lines = {
@@ -233,6 +387,8 @@ for distribution in importlib.metadata.distributions():
     pth_paths = []
     for relative in distribution.files or ():
         path = Path(distribution.locate_file(relative))
+        if is_regenerable_bytecode_cache(path):
+            continue
         if not path.is_file():
             distribution_files.append([str(relative), "missing", 0])
             continue
@@ -253,7 +409,6 @@ for distribution in importlib.metadata.distributions():
         ".pytest_cache",
         ".ruff_cache",
         ".venv",
-        "__pycache__",
         "node_modules",
     }
     if direct_url_text:
@@ -305,10 +460,9 @@ for distribution in importlib.metadata.distributions():
                         continue
                     if path.is_symlink():
                         raise RuntimeError("symlinked editable source entry is not allowed")
-                    if (
-                        not path.is_file()
-                        or path.suffix in {".pyc", ".pyo"}
-                    ):
+                    if not path.is_file():
+                        continue
+                    if is_regenerable_bytecode_cache(path):
                         continue
                     resolved = path.resolve()
                     cache_key = str(resolved)
@@ -372,6 +526,8 @@ for stdlib_root in sorted(stdlib_roots):
             raise RuntimeError("symlinked standard-library entry is not allowed")
         if not path.is_file():
             continue
+        if is_regenerable_bytecode_cache(path):
+            continue
         resolved = path.resolve()
         cache_key = str(resolved)
         if cache_key not in resolved_digests:
@@ -411,6 +567,8 @@ for site_root in sorted(site_roots):
         if path.is_symlink():
             raise RuntimeError("symlinked site-packages entry is not allowed")
         if not path.is_file():
+            continue
+        if is_regenerable_bytecode_cache(path):
             continue
         resolved = path.resolve()
         cache_key = str(resolved)
