@@ -22,6 +22,10 @@
       "value": "eval/synthetic/firm-surface-manifest-v1.json"
     },
     {
+      "path": ["provenance", "comparison_invocation", "argv", "--public-metadata"],
+      "value": "eval/synthetic/public_comparison_metadata_v1.json"
+    },
+    {
       "path": ["provenance", "config_selection", "answer_rule_config", "rationale"],
       "value": "synthetic lane v1: top_k sized to corpus gold density (uncalibrated)"
     },
