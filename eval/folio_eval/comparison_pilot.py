@@ -223,42 +223,59 @@ code_fields = (
 )
 
 
-def constant_signature(value):
-    if isinstance(value, types.CodeType):
-        return ("code", code_signature(value))
-    if isinstance(value, tuple):
-        return ("tuple", tuple(constant_signature(item) for item in value))
+def constant_signature(value, references):
+    # Compiler-generated set-literal constants can vary in cross-code aliasing
+    # between compatible compiler builds, so compare their ordered values only.
     if isinstance(value, frozenset):
         return (
             "frozenset",
-            tuple(constant_signature(item) for item in value),
+            tuple(constant_signature(item, references) for item in value),
         )
-    if value is None:
-        return ("none",)
-    if value is Ellipsis:
-        return ("ellipsis",)
-    if isinstance(value, bool):
-        return ("bool", value)
-    if isinstance(value, int):
-        return ("int", value)
-    if isinstance(value, float):
-        return ("float", struct.pack("!d", value))
-    if isinstance(value, complex):
-        return (
+
+    reference_id = id(value)
+    if reference_id in references:
+        return ("reference", references[reference_id])
+    reference = len(references)
+    references[reference_id] = reference
+
+    if isinstance(value, types.CodeType):
+        signature = (
+            "code",
+            tuple(getattr(value, field) for field in code_fields),
+            tuple(constant_signature(item, references) for item in value.co_consts),
+        )
+    elif isinstance(value, tuple):
+        signature = (
+            "tuple",
+            tuple(constant_signature(item, references) for item in value),
+        )
+    elif value is None:
+        signature = ("none",)
+    elif value is Ellipsis:
+        signature = ("ellipsis",)
+    elif isinstance(value, bool):
+        signature = ("bool", value)
+    elif isinstance(value, int):
+        signature = ("int", value)
+    elif isinstance(value, float):
+        signature = ("float", struct.pack("!d", value))
+    elif isinstance(value, complex):
+        signature = (
             "complex",
             struct.pack("!d", value.real),
             struct.pack("!d", value.imag),
         )
-    if isinstance(value, str):
-        return ("str", value)
-    if isinstance(value, bytes):
-        return ("bytes", value)
-    return (type(value).__qualname__, marshal.dumps(value))
+    elif isinstance(value, str):
+        signature = ("str", value)
+    elif isinstance(value, bytes):
+        signature = ("bytes", value)
+    else:
+        signature = (type(value).__qualname__, marshal.dumps(value))
+    return ("object", reference, signature)
 
 
 def code_signature(code):
-    constants = tuple(constant_signature(value) for value in code.co_consts)
-    return tuple(getattr(code, field) for field in code_fields) + (constants,)
+    return constant_signature(code, {})
 
 
 def is_regenerable_bytecode_cache(path):

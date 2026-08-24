@@ -1060,6 +1060,102 @@ def test_environment_probe_rejects_bytecode_with_changed_nested_qualname(
     assert "bytecode cache does not match its source" in completed.stderr
 
 
+def test_environment_probe_preserves_bytecode_constant_aliases(
+    tmp_path: Path,
+) -> None:
+    interpreter, site = _isolated_python_site(tmp_path)
+    source = site / "cacheable.py"
+    source.write_text(
+        "def first():\n"
+        "    return 123456789012345678901234567890\n"
+        "def second():\n"
+        "    return 123456789012345678901234567890\n",
+        encoding="utf-8",
+    )
+    cache_path = Path(importlib.util.cache_from_source(str(source)))
+    cache_path.parent.mkdir()
+    py_compile.compile(str(source), cfile=str(cache_path), doraise=True)
+    cache_bytes = cache_path.read_bytes()
+    cached_code = marshal.loads(cache_bytes[16:])
+    first_code, second_code = (
+        value for value in cached_code.co_consts if hasattr(value, "co_consts")
+    )
+    shared = next(value for value in first_code.co_consts if isinstance(value, int))
+    assert next(
+        value for value in second_code.co_consts if isinstance(value, int)
+    ) is shared
+    distinct_equal = int(str(shared))
+    assert distinct_equal == shared
+    assert distinct_equal is not shared
+    forged_second = second_code.replace(
+        co_consts=tuple(
+            distinct_equal if value is shared else value
+            for value in second_code.co_consts
+        )
+    )
+    forged_code = cached_code.replace(
+        co_consts=tuple(
+            forged_second if value is second_code else value
+            for value in cached_code.co_consts
+        )
+    )
+    cache_path.write_bytes(cache_bytes[:16] + marshal.dumps(forged_code))
+
+    completed = _execute_consumer_probe(interpreter, check=False)
+
+    assert completed.returncode != 0
+    assert "bytecode cache does not match its source" in completed.stderr
+
+
+def test_environment_probe_allows_frozenset_container_alias_variation(
+    tmp_path: Path,
+) -> None:
+    interpreter, site = _isolated_python_site(tmp_path)
+    source = site / "cacheable.py"
+    source.write_text(
+        "def first(value):\n"
+        "    return value in {'pdf', 'hocr'}\n"
+        "def second(value):\n"
+        "    return value in {'pdf', 'hocr'}\n",
+        encoding="utf-8",
+    )
+    before = _run_consumer_probe(interpreter)
+    cache_path = Path(importlib.util.cache_from_source(str(source)))
+    cache_path.parent.mkdir()
+    py_compile.compile(str(source), cfile=str(cache_path), doraise=True)
+    cache_bytes = cache_path.read_bytes()
+    cached_code = marshal.loads(cache_bytes[16:])
+    first_code, second_code = (
+        value for value in cached_code.co_consts if hasattr(value, "co_consts")
+    )
+    shared = next(
+        value for value in first_code.co_consts if isinstance(value, frozenset)
+    )
+    assert next(
+        value for value in second_code.co_consts if isinstance(value, frozenset)
+    ) is shared
+    distinct_equal = frozenset(tuple(shared))
+    assert distinct_equal == shared
+    assert distinct_equal is not shared
+    forged_second = second_code.replace(
+        co_consts=tuple(
+            distinct_equal if value is shared else value
+            for value in second_code.co_consts
+        )
+    )
+    forged_code = cached_code.replace(
+        co_consts=tuple(
+            forged_second if value is second_code else value
+            for value in cached_code.co_consts
+        )
+    )
+    cache_path.write_bytes(cache_bytes[:16] + marshal.dumps(forged_code))
+
+    after = _run_consumer_probe(interpreter)
+
+    assert after == before
+
+
 @pytest.mark.parametrize(
     ("source_text", "constant_type", "replacement"),
     [
