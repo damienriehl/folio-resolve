@@ -29,7 +29,7 @@ from .downstream import (
     git_status_porcelain,
 )
 from .intake import sha256_bytes, sha256_text
-from .leakcheck import Manifest, scan_text
+from .leakcheck import Manifest, scan_json_value, scan_text
 from .report import DEFAULT_BOOTSTRAP_RESAMPLES, DEFAULT_BOOTSTRAP_SEED, bootstrap_ci
 from .score import MicroCounts
 from .synthesize import LoadedCorpus, SyntheticItem
@@ -315,23 +315,24 @@ def emit_items_file(
     No-match rows are retained by default so pilot/final false-positive rates remain meaningful.
     A live gate may explicitly omit them to exercise exactly one scoreable item end-to-end.
     """
-    lines: list[str] = []
+    payloads: list[dict[str, object]] = []
     for item in _comparison_items(
         corpus, limit, include_nomatch=include_nomatch, item_ids=item_ids
     ):
-        payload = {
+        payload: dict[str, object] = {
             "item_id": item.item_id,
             "text": item.text,
             "segments": list(extractor(item.text)),
         }
-        lines.append(json.dumps(payload, ensure_ascii=False, sort_keys=True))
-    text = "\n".join(lines) + ("\n" if lines else "")
+        payloads.append(payload)
     if leak_manifest is not None:
         if salt is None:
             raise ComparisonError("salt is required with a leak manifest")
-        collisions = scan_text(text, leak_manifest, salt)
+        collisions = scan_json_value(payloads, leak_manifest, salt)
         if collisions:
             raise ComparisonError(f"items leak check failed: collisions={collisions}")
+    lines = [json.dumps(payload, ensure_ascii=False, sort_keys=True) for payload in payloads]
+    text = "\n".join(lines) + ("\n" if lines else "")
     return _atomic_write_text(out_path, text)
 
 

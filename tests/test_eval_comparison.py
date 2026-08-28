@@ -234,6 +234,23 @@ def test_items_and_stage_snapshots_are_leak_gated(tmp_path: Path) -> None:
         write_stage_snapshots([run], tmp_path / "stages", leak_manifest=manifest, salt=salt)
 
 
+def test_items_leak_gate_does_not_join_distinct_json_values(tmp_path: Path) -> None:
+    salt = b"0123456789abcdef"
+    manifest = build_manifest(["alpha beta"], salt=salt, gold_version="g", gold_content_sha256="h")
+
+    out = emit_items_file(
+        _corpus(tmp_path),
+        tmp_path / "items.jsonl",
+        item_ids=("two",),
+        extractor=lambda _text: ("ordinary alpha", "beta ordinary"),
+        leak_manifest=manifest,
+        salt=salt,
+    )
+
+    [row] = [json.loads(line) for line in out.read_text().splitlines()]
+    assert row["segments"] == ["ordinary alpha", "beta ordinary"]
+
+
 def test_duplicate_snapshots_rejected_before_write(tmp_path: Path) -> None:
     run = _run("folio-resolve", "candidate", {"one": set()})
     with pytest.raises(StackContractError, match="duplicate"):
