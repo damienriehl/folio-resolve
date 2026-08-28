@@ -291,14 +291,18 @@ def build_manifest(
     return manifest
 
 
-def scan_text(text: str, manifest: Manifest, salt: bytes) -> int:
-    """Count distinct matching normalized token n-grams in one text value."""
+def _validated_digest_set(manifest: Manifest, salt: bytes) -> frozenset[str]:
     manifest.validate()
     if not salt:
         raise LeakcheckError("salt must not be empty")
     if hashlib.sha256(salt).hexdigest() != manifest.salt_fingerprint:
         raise LeakcheckError("salt does not match surface manifest")
-    return _scan_text(text, manifest, salt, frozenset(manifest.digests))
+    return frozenset(manifest.digests)
+
+
+def scan_text(text: str, manifest: Manifest, salt: bytes) -> int:
+    """Count distinct matching normalized token n-grams in one text value."""
+    return _scan_text(text, manifest, salt, _validated_digest_set(manifest, salt))
 
 
 def _scan_text(
@@ -322,11 +326,28 @@ def _string_values(value: object) -> Iterable[str]:
         yield value
     elif isinstance(value, Mapping):
         for key, nested in value.items():
-            yield from _string_values(key)
+            if not isinstance(key, str):
+                raise LeakcheckError("JSON object keys must be strings")
+            yield key
             yield from _string_values(nested)
     elif isinstance(value, list):
         for nested in value:
             yield from _string_values(nested)
+    elif value is not None and not isinstance(value, (bool, int, float)):
+        raise LeakcheckError(f"unsupported JSON value type: {type(value).__name__}")
+
+
+def _scan_json_value(
+    value: object, manifest: Manifest, salt: bytes, digest_set: frozenset[str]
+) -> int:
+    return sum(
+        _scan_text(text, manifest, salt, digest_set) for text in _string_values(value)
+    )
+
+
+def scan_json_value(value: object, manifest: Manifest, salt: bytes) -> int:
+    """Scan each string in a structured JSON value without joining field boundaries."""
+    return _scan_json_value(value, manifest, salt, _validated_digest_set(manifest, salt))
 
 
 def public_surface_allowlist(
@@ -377,12 +398,7 @@ def public_surface_allowlist(
 
 def scan_file(path: Path, manifest: Manifest, salt: bytes) -> FileReport:
     """Scan a JSONL object's string values or an entire plain-text/Markdown file."""
-    manifest.validate()
-    if not salt:
-        raise LeakcheckError("salt must not be empty")
-    if hashlib.sha256(salt).hexdigest() != manifest.salt_fingerprint:
-        raise LeakcheckError("salt does not match surface manifest")
-    digest_set = frozenset(manifest.digests)
+    digest_set = _validated_digest_set(manifest, salt)
     collisions = 0
     item_ids: set[str] = set()
     if path.suffix.casefold() == ".jsonl":
@@ -393,10 +409,7 @@ def scan_file(path: Path, manifest: Manifest, salt: bytes) -> FileReport:
                 payload = json.loads(line)
                 if not isinstance(payload, dict):
                     raise LeakcheckError(f"JSONL line {line_number} is not an object: {path}")
-                item_collisions = sum(
-                    _scan_text(value, manifest, salt, digest_set)
-                    for value in _string_values(payload)
-                )
+                item_collisions = _scan_json_value(payload, manifest, salt, digest_set)
                 collisions += item_collisions
                 item_id = payload.get("item_id")
                 if item_collisions and isinstance(item_id, str):

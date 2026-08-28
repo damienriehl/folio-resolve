@@ -25,6 +25,7 @@ from folio_eval.leakcheck import (
     main,
     public_surface_allowlist,
     scan_file,
+    scan_json_value,
     scan_text,
 )
 from folio_eval.normalize import normalize_label
@@ -118,6 +119,16 @@ def test_mapping_keys_are_scanned(tmp_path: Path) -> None:
     path = tmp_path / "keys.jsonl"
     path.write_text(json.dumps({FAKE_SURFACE: "clean"}) + "\n", encoding="utf-8")
     assert scan_file(path, manifest_for(FAKE_SURFACE), SALT).collision_count == 1
+
+
+def test_structured_json_mapping_keys_are_scanned() -> None:
+    assert scan_json_value({FAKE_SURFACE: "clean"}, manifest_for(FAKE_SURFACE), SALT) == 1
+
+
+@pytest.mark.parametrize("value", [(FAKE_SURFACE,), {1: FAKE_SURFACE}])
+def test_structured_json_rejects_python_only_shapes(value: object) -> None:
+    with pytest.raises(LeakcheckError, match="JSON"):
+        scan_json_value(value, manifest_for(FAKE_SURFACE), SALT)
 
 
 def test_salt_mismatch_fails_before_clean_scan() -> None:
