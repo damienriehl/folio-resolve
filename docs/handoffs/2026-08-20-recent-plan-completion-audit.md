@@ -7,7 +7,7 @@ keywords: ["plan-audit", "ce-plan", "ce-work", "f1-campaign", "decision-sheet", 
 cwd: "/home/damienriehl/Coding Projects/folio-resolve"
 resume_focus: "Continue the autonomous queue from the first unfinished item; do not reopen completed release work or settled q1-q4 decisions."
 repository: "damienriehl/folio-resolve"
-branch: "docs/recent-plan-audit-2026-08-20"
+branch: "docs/u10-v7-recovery-2026-08-28"
 ---
 
 # Recent-plan completion audit, residual queue, and Decision Sheet
@@ -220,12 +220,37 @@ branch: "docs/recent-plan-audit-2026-08-20"
   one receipt with all fail-closed gates intact. The full resumable run then advanced to 4/60,
   crossing the exact three-receipt boundary where v5 failed; shard 5 is active.
 
+## Execution update — 2026-08-28
+
+- v6 ultimately advanced to 23/60. The twenty-fourth shard failed closed while constructing and
+  leak-checking its serialized items JSONL, before its items file or any consumer run was published.
+  The whole serialized JSONL file was scanned as one string, so two otherwise clean tokens on
+  opposite sides of a JSON serialization boundary formed a protected n-gram that existed in no
+  source value. Privacy-safe structural probes confirmed every item ID, passage, segment, key, and
+  other string value passed independently; the sole collision was introduced by serialization
+  itself.
+- The v6 evidence remains intact and must not be resumed after the source change: 23 verified
+  completion receipts, 24 item directories, 23 reports, 23 item files, and no final receipt or
+  published comparison report.
+- Focused PR [#18](https://github.com/damienriehl/folio-resolve/pull/18) fixes that representation
+  mismatch by scanning each structured JSON string independently before serialization and by
+  rejecting Python-only shapes that JSON would silently coerce. Mapping keys remain scanned. The
+  reviewed change merged as `8e133bf`; 71 focused comparison/leak tests, `1155 passed, 2 skipped`,
+  Ruff, changed-module mypy, and diff checks pass. Full-repository mypy still has only the unrelated
+  pre-existing `src/folio_resolve/embedding.py:149` `no-any-return` finding.
+- Fresh v7 initialized from exact merged main with the intended `eval/run_comparison_pilot.py`
+  wrapper, zero receipts, and no final report. The wrapper supplies package discovery without the
+  forbidden mutable `PYTHONPATH` override. Ordinary owner filesystem access remains required so the
+  consumer environments can create their normal ALEA log and mapper CPU index artifacts. Its
+  one-shard canary and zero-work replay both passed with exactly one durable receipt; the remaining
+  59 shards and finalization are active. v6 remains untouched.
+
 ## Plan-level verdicts
 
 | Plan | Verdict | Evidence | Remaining authority |
 |---|---|---|---|
 | Post-Hardening Integration (2026-08-06) | **Complete** — U1–U5 | folio-resolve PRs #2/#4 merged; mootloop PRs #31 then #30 merged; v0.4.0 release published; all three v0.4.0 consumer-pin PRs merged; post-release handoff records full verification | None. Do not reopen this release from stale handoffs. |
-| Synthetic Benchmark F1 Campaign (2026-08-16) | **Partial** — U8 complete; deterministic comparison and guarded iteration tail open | folio-resolve PRs #8–#13 and consumer runners merged; U1–U6 and U8 code/report complete; U3 gold v7/calibration complete; corpus v1 committed; U10 corrected checkpoint initialized after two fail-closed pilot defects were repaired | Autonomous queue below, evidence-bound decisions, and later owner-run metric gates |
+| Synthetic Benchmark F1 Campaign (2026-08-16) | **Partial** — U8 complete; deterministic comparison and guarded iteration tail open | folio-resolve PRs #8–#18 and consumer runners merged; U1–U6 and U8 code/report complete; U3 gold v7/calibration complete; corpus v1 committed; U10 v6 preserved at 23/60 after a fail-closed serialization-boundary false collision; corrected v7 initialized from merged main | Autonomous queue below, evidence-bound decisions, and later owner-run metric gates |
 | F1 Improvement Loop (2026-07-27 carryover) | **Implemented/superseded, with live gates carried forward** | U1–U10 implementation and measured v0.4.0 iteration/release evidence landed; Gate 1b folded through gold v7; its gated synthetic and close-out work was restructured into the 2026-08-16 campaign | Follow the newer campaign plan; do not implement old U11/U12 as a parallel design |
 
 ## Unit audit — 2026-08-06 plan
@@ -251,7 +276,7 @@ branch: "docs/recent-plan-audit-2026-08-20"
 | U7 grader/close-call lane | **Partial** | Code is complete. The first consensus-audit sitting, confidence-floor calibration, and human ratification into corpus v2 wait on D1/D2 and owner adjudication. |
 | U8 synthetic scoring | **Complete** | All 255 checkpoints completed at scorer `933c6ef`; automatic and finalize-only reports were byte-identical. Corrected depth-probe report PR #10 merged as `4bd353d5`; accounting, determinism, leak, test, type, and lint gates pass. |
 | U9 guarded iteration loop | **Partial** | Code is complete; no real corpus-v1 improvement iteration is recorded yet. Pilot must run first. |
-| U10 deterministic comparison | **Partial; v6 full run active** | Mapper #11/#12 and folio-resolve #11–#14 are merged. The failed v4 shard has no receipt; v5 preserved 3/60 receipts before new standard-library caches invalidated the fourth shard. Fresh v6 passed its canary and advanced to 4/60, proving the local repair beyond the prior failure boundary. Finish and interpret the pilot before the final full comparison. |
+| U10 deterministic comparison | **Partial; v7 full run active at 1/60** | Mapper #11/#12 and folio-resolve #11–#18 are merged. v4 and v5 remain preserved fail-closed evidence. v6 reached 23/60 before its twenty-fourth shard exposed a false collision created only across serialized JSON boundaries; PR #18 repaired the structured scan. v7's canary and zero-work replay passed from the merge commit, and the remaining 59 shards are active. Finish and interpret v7 before the final full comparison. |
 | U11 owner-run LLM lanes | **Partial / owner-run** | Flags and seams are merged. Run both shipped configurations with owner-held keys and record explicit skip markers where unavailable. |
 | U12 parity + attribution | **Partial** | Static parity map is complete. Add controlled replay/ablation only where U10 reveals an incumbent win, subject to D4. |
 | U13 campaign report/verdict | **Not started** | Assemble after U9/U10/U12; final firm exam and adoption decision are owner gates. |
@@ -274,14 +299,14 @@ from running in the same session.
    duplicate U10 PR. Preserve the true one-scoreable-item gate, exact process receipts, input
    fingerprints, full stage snapshots, gold/no-match sets, and candidate lifecycle attribution
    when running the live gate and pilot.
-4. **In progress — run the outage-safe U10 pilot.** Mapper #11/#12 and folio-resolve #11/#12/#13
-   are merged. The v4 first shard failed closed after its stages because the committed public
-   metadata path was absent from the exact allowlist; it has no receipt and remains preserved.
-   Corrected v5 passed its canary and preserved three receipts; the next shard's computation
-   completed but 17 newly generated standard-library bytecode caches correctly blocked receipt
-   publication. PR #14 is merged; fresh v6 passed its one-item canary and advanced to 4/60, beyond
-   the prior failure boundary. Continue/resume the independent receipts through finalization at
-   60/60.
+4. **In progress — run the outage-safe U10 pilot.** Mapper #11/#12 and folio-resolve #11–#18 are
+   merged. The v4 and v5 checkpoints remain preserved after their distinct fail-closed defects.
+   v6 passed its canary and advanced to 23/60; its twenty-fourth shard then exposed a false
+   protected n-gram created only across JSON serialization boundaries. PR #18 now scans strict
+   structured values before serialization. Fresh v7 initialized from exact merged main; its
+   one-item canary and zero-work replay passed at 1/60, and the remaining 59 shards plus
+   finalization are active. Continue/resume v7's independent receipts through 60/60; do not resume
+   v6 after the source change.
 5. **Complete — resumable/sharded scoring.** PR #9 checkpoints each surface-free post-adapter
    result atomically, replays through the unchanged score/depth-probe/report/leak-check path, and
    fails closed on fingerprint or record corruption. Direct, resumed, and differently ordered
@@ -402,20 +427,21 @@ Notes (optional):
   final comparison receipts remain pending.
 
 Latest pilot verification: PR #12 passed `1126 passed, 2 skipped`; PR #13 passed
-`1128 passed, 2 skipped`. PR #14 exact head `6574cdd` passes `1151 passed, 2 skipped`; its 78
-focused pilot tests, Ruff, eval mypy, and diff checks pass. The unchanged source tree currently has
-one pre-existing `no-any-return` mypy warning at `src/folio_resolve/embedding.py:149`. Corrected v5
-preserves three completion receipts; its fourth item did not publish a receipt after runtime drift.
+`1128 passed, 2 skipped`; PR #14 passed `1151 passed, 2 skipped`. PR #18 passes 71 focused
+comparison/leak tests and `1155 passed, 2 skipped`; Ruff, changed-module mypy, and diff checks pass.
+The unchanged source tree currently has one pre-existing `no-any-return` mypy warning at
+`src/folio_resolve/embedding.py:149`. v6 preserves 23 completion receipts, 24 item directories, and
+no final receipt; corrected v7 is initialized from exact PR #18 merged main.
 
 ## Shipping state
 
-- Audit branch: `docs/recent-plan-audit-2026-08-20`.
+- Current audit-update branch: `docs/u10-v7-recovery-2026-08-28`.
 - Recovery commit: `a6e87ef`.
 - Strict-type gate commit: `ae16a08`.
 - Structured-review fix commit: `88a0732`.
-- This handoff is committed alone on its focused documentation branch.
-- Commit `4ad694f` and subsequent audit-only updates are pushed on the focused branch; the branch
-  is not merged.
+- This update is isolated to this handoff on its focused documentation branch.
+- The original audit and recovery chain merged through PR #16 as `473f59e`; the subsequent v6
+  execution update merged through PR #17 as `a4bacb9`.
 - U8 resumable-scoring PR #9 merged as `4e17072b`; corrected report PR #10 merged as `4bd353d5`.
 - U10 implementation PR [#11](https://github.com/damienriehl/folio-resolve/pull/11) merged as
   `659ca93`; it includes review fixes for single-consumer reports, exact CLI/public-metadata grammar,
@@ -443,3 +469,6 @@ preserves three completion receipts; its fourth item did not publish a receipt a
 - Durable cache-reassessment handoff PR #15 merged as `04905da`. It records that upstream
   folio-python PR #20 is merged but remains absent from the latest `v0.4.0` release, so local
   containment stays until a containing release passes the memory and determinism checklist.
+- Structured JSON leak-scan PR #18 merged as `8e133bf`. v6 is preserved at 23/60 with no final
+  receipt; v7 initialized from that exact merge, passed its one-shard canary and zero-work replay,
+  and is running the remaining 59 shards plus finalization.
