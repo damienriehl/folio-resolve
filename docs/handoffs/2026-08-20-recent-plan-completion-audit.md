@@ -7,7 +7,7 @@ keywords: ["plan-audit", "ce-plan", "ce-work", "f1-campaign", "decision-sheet", 
 cwd: "/home/damienriehl/Coding Projects/folio-resolve"
 resume_focus: "Continue the autonomous queue from the first unfinished item; do not reopen completed release work or settled q1-q4 decisions."
 repository: "damienriehl/folio-resolve"
-branch: "docs/u10-v7-recovery-2026-08-28"
+branch: "docs/u10-v8-recovery-2026-08-29"
 ---
 
 # Recent-plan completion audit, residual queue, and Decision Sheet
@@ -245,12 +245,32 @@ branch: "docs/u10-v7-recovery-2026-08-28"
   one-shard canary and zero-work replay both passed with exactly one durable receipt; the remaining
   59 shards and finalization are active. v6 remains untouched.
 
+## Execution update — 2026-08-29
+
+- v7 advanced cleanly to 23/60 and then failed closed on the twenty-fourth shard while writing its
+  third stage snapshot. Item generation and both earlier consumer snapshots had completed. The
+  stage-snapshot leak gate still scanned the fully serialized JSON text, so otherwise clean strings
+  on opposite sides of a JSON value boundary formed a protected n-gram that existed in no source
+  string. The same whole-subtree optimization remained in final comparison publication and would
+  have exposed the identical false-positive class at finalization. v7 remains intact as failed
+  evidence: 23 completion receipts and reports, 24 item files, and no final report.
+- PR [#20](https://github.com/damienriehl/folio-resolve/pull/20) applies the structured-value rule
+  consistently to stage snapshots and final comparison publication while preserving exact approved
+  public-metadata exemptions. It merged as `db1cf4c` after `1156 passed, 2 skipped`, 72 focused
+  comparison/leakcheck tests, Ruff, changed-module mypy, diff checks, and an isolated replay of the
+  exact previously failing shard. That replay exited zero with all three stage snapshots, one final
+  report, and zero comparison/leak errors.
+- Fresh v8 initialized at 0/60 from exact clean merge commit `db1cf4c`, with a new fingerprint-bound
+  manifest and no reuse or mutation of v6/v7 artifacts. The canonical output remains
+  `eval/reports/synthetic-comparison-v1.json`. The full serial run is active; finish and interpret
+  it before choosing the U9 shared-scope iteration or any U12 attribution work.
+
 ## Plan-level verdicts
 
 | Plan | Verdict | Evidence | Remaining authority |
 |---|---|---|---|
 | Post-Hardening Integration (2026-08-06) | **Complete** — U1–U5 | folio-resolve PRs #2/#4 merged; mootloop PRs #31 then #30 merged; v0.4.0 release published; all three v0.4.0 consumer-pin PRs merged; post-release handoff records full verification | None. Do not reopen this release from stale handoffs. |
-| Synthetic Benchmark F1 Campaign (2026-08-16) | **Partial** — U8 complete; deterministic comparison and guarded iteration tail open | folio-resolve PRs #8–#18 and consumer runners merged; U1–U6 and U8 code/report complete; U3 gold v7/calibration complete; corpus v1 committed; U10 v6 preserved at 23/60 after a fail-closed serialization-boundary false collision; corrected v7 initialized from merged main | Autonomous queue below, evidence-bound decisions, and later owner-run metric gates |
+| Synthetic Benchmark F1 Campaign (2026-08-16) | **Partial** — U8 complete; deterministic comparison and guarded iteration tail open | folio-resolve PRs #8–#20 and consumer runners merged; U1–U6 and U8 code/report complete; U3 gold v7/calibration complete; corpus v1 committed; U10 v6/v7 preserved after distinct serialization-boundary false collisions; corrected v8 initialized from merged main | Autonomous queue below, evidence-bound decisions, and later owner-run metric gates |
 | F1 Improvement Loop (2026-07-27 carryover) | **Implemented/superseded, with live gates carried forward** | U1–U10 implementation and measured v0.4.0 iteration/release evidence landed; Gate 1b folded through gold v7; its gated synthetic and close-out work was restructured into the 2026-08-16 campaign | Follow the newer campaign plan; do not implement old U11/U12 as a parallel design |
 
 ## Unit audit — 2026-08-06 plan
@@ -276,7 +296,7 @@ branch: "docs/u10-v7-recovery-2026-08-28"
 | U7 grader/close-call lane | **Partial** | Code is complete. The first consensus-audit sitting, confidence-floor calibration, and human ratification into corpus v2 wait on D1/D2 and owner adjudication. |
 | U8 synthetic scoring | **Complete** | All 255 checkpoints completed at scorer `933c6ef`; automatic and finalize-only reports were byte-identical. Corrected depth-probe report PR #10 merged as `4bd353d5`; accounting, determinism, leak, test, type, and lint gates pass. |
 | U9 guarded iteration loop | **Partial** | Code is complete; no real corpus-v1 improvement iteration is recorded yet. Pilot must run first. |
-| U10 deterministic comparison | **Partial; v7 full run active at 1/60** | Mapper #11/#12 and folio-resolve #11–#18 are merged. v4 and v5 remain preserved fail-closed evidence. v6 reached 23/60 before its twenty-fourth shard exposed a false collision created only across serialized JSON boundaries; PR #18 repaired the structured scan. v7's canary and zero-work replay passed from the merge commit, and the remaining 59 shards are active. Finish and interpret v7 before the final full comparison. |
+| U10 deterministic comparison | **Partial; v8 full run active at 0/60** | Mapper #11/#12 and folio-resolve #11–#20 are merged. v4–v7 remain preserved fail-closed evidence. v7 reached 23/60 before its twenty-fourth shard exposed the remaining whole-JSON scan in stage snapshots; PR #20 repaired stage and final-publication scans, and the exact shard replay passed end-to-end. Finish and interpret fresh v8 before the final full comparison. |
 | U11 owner-run LLM lanes | **Partial / owner-run** | Flags and seams are merged. Run both shipped configurations with owner-held keys and record explicit skip markers where unavailable. |
 | U12 parity + attribution | **Partial** | Static parity map is complete. Add controlled replay/ablation only where U10 reveals an incumbent win, subject to D4. |
 | U13 campaign report/verdict | **Not started** | Assemble after U9/U10/U12; final firm exam and adoption decision are owner gates. |
