@@ -251,6 +251,21 @@ def test_items_leak_gate_does_not_join_distinct_json_values(tmp_path: Path) -> N
     assert row["segments"] == ["ordinary alpha", "beta ordinary"]
 
 
+def test_stage_snapshot_leak_gate_does_not_join_distinct_json_values(tmp_path: Path) -> None:
+    salt = b"0123456789abcdef"
+    manifest = build_manifest(["alpha beta"], salt=salt, gold_version="g", gold_content_sha256="h")
+    run = replace(
+        _run("folio-resolve", "candidate", {"one": set()}),
+        stages={"one": {"notes": ["ordinary alpha", "beta ordinary"]}},
+    )
+
+    fingerprints = write_stage_snapshots(
+        [run], tmp_path / "stages", leak_manifest=manifest, salt=salt
+    )
+
+    assert fingerprints[run.key]["bytes"] > 0
+
+
 def test_duplicate_snapshots_rejected_before_write(tmp_path: Path) -> None:
     run = _run("folio-resolve", "candidate", {"one": set()})
     with pytest.raises(StackContractError, match="duplicate"):
@@ -641,6 +656,16 @@ def test_versioned_public_metadata_exempts_only_exact_comparison_paths() -> None
             salt,
             public_metadata=metadata,
         )
+
+    boundary_manifest = build_manifest(
+        ["alpha beta"], salt=salt, gold_version="g", gold_content_sha256="h"
+    )
+    preflight_comparison_publication(
+        {**payload, "note": ["ordinary alpha", "beta ordinary"]},
+        boundary_manifest,
+        salt,
+        public_metadata=metadata,
+    )
 
 
 def test_public_metadata_rejects_extra_template_replacement_fields(tmp_path: Path) -> None:

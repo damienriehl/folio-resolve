@@ -29,7 +29,7 @@ from .downstream import (
     git_status_porcelain,
 )
 from .intake import sha256_bytes, sha256_text
-from .leakcheck import Manifest, scan_json_value, scan_text
+from .leakcheck import Manifest, scan_json_value
 from .report import DEFAULT_BOOTSTRAP_RESAMPLES, DEFAULT_BOOTSTRAP_SEED, bootstrap_ci
 from .score import MicroCounts
 from .synthesize import LoadedCorpus, SyntheticItem
@@ -1130,54 +1130,24 @@ def preflight_comparison_publication(
                 )
             public_fields[resolved_path] = resolved_value
 
-    def collisions(value: object, path: tuple[str, ...] = ()) -> int:
+    def leakcheck_value(value: object, path: tuple[str, ...] = ()) -> object:
         if isinstance(value, str):
             if public_fields.get(path) == value:
-                return 0
-            return scan_text(value, leak_manifest, salt)
-        has_public_descendant = any(
-            field_path[: len(path)] == path for field_path in public_fields
-        )
-        if (
-            isinstance(value, (Mapping, list, tuple, set, frozenset))
-            and not has_public_descendant
-        ):
-            # Scan independently non-public subtrees in one pass. This preserves
-            # fail-closed coverage (and can conservatively catch cross-field token
-            # windows) without paying the HMAC setup cost for every repeated IRI.
-            serialized_collisions = scan_text(
-                json.dumps(value, ensure_ascii=False, sort_keys=True, default=str),
-                leak_manifest,
-                salt,
-            )
-            escaped_collisions = 0
-            pending: list[object] = [value]
-            while pending:
-                nested = pending.pop()
-                if isinstance(nested, str):
-                    if json.dumps(nested, ensure_ascii=False)[1:-1] != nested:
-                        escaped_collisions += scan_text(nested, leak_manifest, salt)
-                elif isinstance(nested, Mapping):
-                    pending.extend(str(key) for key in nested)
-                    pending.extend(nested.values())
-                elif isinstance(nested, (list, tuple, set, frozenset)):
-                    pending.extend(nested)
-            return serialized_collisions + escaped_collisions
+                return None
+            return value
         if isinstance(value, Mapping):
-            total = 0
-            for key, nested in value.items():
-                key_text = str(key)
-                total += scan_text(key_text, leak_manifest, salt)
-                total += collisions(nested, (*path, key_text))
-            return total
-        if isinstance(value, (list, tuple, set, frozenset)):
-            return sum(
-                collisions(nested, (*path, str(index)))
+            return {
+                str(key): leakcheck_value(nested, (*path, str(key)))
+                for key, nested in value.items()
+            }
+        if isinstance(value, list):
+            return [
+                leakcheck_value(nested, (*path, str(index)))
                 for index, nested in enumerate(value)
-            )
-        return 0
+            ]
+        return value
 
-    collision_count = collisions(payload)
+    collision_count = scan_json_value(leakcheck_value(payload), leak_manifest, salt)
     if collision_count:
         raise ComparisonError(f"comparison leak check failed: collisions={collision_count}")
 
@@ -1229,7 +1199,7 @@ def write_stage_snapshots(
         text = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
         if leak_manifest is not None:
             assert checked_salt is not None
-            collisions = scan_text(text, leak_manifest, checked_salt)
+            collisions = scan_json_value(payload, leak_manifest, checked_salt)
             if collisions:
                 raise ComparisonError(f"stage snapshot leak check failed: collisions={collisions}")
         content = text.encode("utf-8")
