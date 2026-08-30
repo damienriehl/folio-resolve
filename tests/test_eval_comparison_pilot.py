@@ -15,6 +15,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import folio_eval.comparison_pilot as pilot_module
+import folio_eval.comparison_pilot_repair as repair_module
 import pytest
 from folio_eval.answer_rule import AnswerRuleConfig
 from folio_eval.comparison import (
@@ -86,6 +87,19 @@ def _run_consumer_probe(interpreter: Path) -> dict[str, object]:
     return json.loads(completed.stdout)
 
 
+def _init_git_repository(root: Path) -> None:
+    root.mkdir()
+    (root / "tracked.txt").write_text("tracked\n", encoding="utf-8")
+    for command in (
+        ["git", "init", "-q"],
+        ["git", "config", "user.email", "pilot@example.invalid"],
+        ["git", "config", "user.name", "Pilot Test"],
+        ["git", "add", "tracked.txt"],
+        ["git", "commit", "-q", "-m", "initial"],
+    ):
+        pilot_module.subprocess.run(command, cwd=root, check=True)
+
+
 def test_comparison_pilot_launcher_disables_bytecode_before_import(
     tmp_path: Path,
 ) -> None:
@@ -121,6 +135,300 @@ def test_comparison_pilot_launcher_disables_bytecode_before_import(
 
     assert completed.returncode == 0, completed.stderr
     assert not (package / "__pycache__").exists()
+
+
+def test_repair_launcher_rejects_ignored_importable_before_project_import(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "repair"
+    eval_root = repo / "eval"
+    package = eval_root / "folio_eval"
+    package.mkdir(parents=True)
+    launcher_source = (
+        Path(pilot_module.__file__).resolve().parents[1]
+        / "run_comparison_pilot_repair.py"
+    )
+    (eval_root / "run_comparison_pilot_repair.py").write_bytes(
+        launcher_source.read_bytes()
+    )
+    (package / "__init__.py").write_text(
+        'raise RuntimeError("project package imported")\n', encoding="utf-8"
+    )
+    (repo / ".gitignore").write_text("/eval/subprocess.py\n", encoding="utf-8")
+    for command in (
+        ["git", "init", "-q"],
+        ["git", "config", "user.email", "pilot@example.invalid"],
+        ["git", "config", "user.name", "Pilot Test"],
+        ["git", "add", "."],
+        ["git", "commit", "-q", "-m", "repair launcher"],
+    ):
+        pilot_module.subprocess.run(command, cwd=repo, check=True)
+    marker = repo / "shadow-imported"
+    (eval_root / "subprocess.py").write_text(
+        f"from pathlib import Path\nPath({str(marker)!r}).touch()\n",
+        encoding="utf-8",
+    )
+
+    environment = os.environ.copy()
+    environment["PYTHONPATH"] = str(eval_root)
+    nonisolated = pilot_module.subprocess.run(
+        [pilot_module.sys.executable, str(eval_root / "run_comparison_pilot_repair.py")],
+        check=False,
+        capture_output=True,
+        env=environment,
+        text=True,
+    )
+
+    assert nonisolated.returncode != 0
+    assert "requires Python isolated mode" in nonisolated.stderr
+    assert not marker.exists()
+
+    completed = pilot_module.subprocess.run(
+        [
+            pilot_module.sys.executable,
+            "-I",
+            "-B",
+            str(eval_root / "run_comparison_pilot_repair.py"),
+        ],
+        check=False,
+        capture_output=True,
+        env=environment,
+        text=True,
+    )
+
+    assert completed.returncode != 0
+    assert "ignored importable files" in completed.stderr
+    assert "project package imported" not in completed.stderr
+    assert not marker.exists()
+
+
+def test_repair_launcher_rejects_dirty_project_code_before_import(tmp_path: Path) -> None:
+    repo = tmp_path / "repair"
+    eval_root = repo / "eval"
+    package = eval_root / "folio_eval"
+    package.mkdir(parents=True)
+    launcher_source = (
+        Path(pilot_module.__file__).resolve().parents[1]
+        / "run_comparison_pilot_repair.py"
+    )
+    (eval_root / "run_comparison_pilot_repair.py").write_bytes(
+        launcher_source.read_bytes()
+    )
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    for command in (
+        ["git", "init", "-q"],
+        ["git", "config", "user.email", "pilot@example.invalid"],
+        ["git", "config", "user.name", "Pilot Test"],
+        ["git", "add", "."],
+        ["git", "commit", "-q", "-m", "repair launcher"],
+    ):
+        pilot_module.subprocess.run(command, cwd=repo, check=True)
+    marker = repo / "dirty-imported"
+    (package / "comparison_pilot_repair.py").write_text(
+        f"from pathlib import Path\nPath({str(marker)!r}).touch()\ndef main(): return 0\n",
+        encoding="utf-8",
+    )
+
+    completed = pilot_module.subprocess.run(
+        [
+            pilot_module.sys.executable,
+            "-I",
+            "-B",
+            str(eval_root / "run_comparison_pilot_repair.py"),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode != 0
+    assert "must be clean before project import" in completed.stderr
+    assert not marker.exists()
+
+
+def test_repair_entrypoint_binds_separate_clean_checkout_and_cannot_run_shards(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    candidate = tmp_path / "candidate"
+    repair = tmp_path / "repair"
+    _init_git_repository(candidate)
+    _init_git_repository(repair)
+    observed: dict[str, object] = {}
+    monkeypatch.setattr(repair_module, "REPAIR_REPOSITORY_ROOT", repair)
+
+    def pilot_main(
+        argv: list[str], *, candidate_root: Path, repair_identity: dict[str, str]
+    ) -> int:
+        observed.update(
+            argv=argv,
+            candidate_root=candidate_root,
+            repair_identity=repair_identity,
+        )
+        return 0
+
+    monkeypatch.setattr(repair_module, "pilot_main", pilot_main)
+    pilot_argv = [
+        "--finalize-only",
+        "--out",
+        str(candidate / pilot_module.PUBLISHED_COMPARISON_REPORT),
+    ]
+
+    assert (
+        repair_module.main(["--candidate-root", str(candidate), *pilot_argv]) == 0
+    )
+    assert observed["argv"] == pilot_argv
+    assert observed["candidate_root"] == candidate
+    identity = observed["repair_identity"]
+    assert identity["kind"] == pilot_module.FINALIZATION_REPAIR_KIND
+    assert len(identity["git_sha"]) >= 40
+    assert len(identity["source_sha256"]) == 64
+
+    with pytest.raises(PilotCheckpointError, match="cannot configure shard"):
+        repair_module.main(
+            [
+                "--candidate-root",
+                str(candidate),
+                "--finalize-only",
+                "--out",
+                str(candidate / pilot_module.PUBLISHED_COMPARISON_REPORT),
+                "--max-new-items=0",
+            ]
+        )
+    with pytest.raises(PilotCheckpointError, match="separate checkouts"):
+        repair_module.main(
+            [
+                "--candidate-root",
+                str(repair),
+                "--finalize-only",
+                "--out",
+                str(repair / pilot_module.PUBLISHED_COMPARISON_REPORT),
+            ]
+        )
+    with pytest.raises(PilotCheckpointError, match="canonical report path"):
+        repair_module.main(
+            [
+                "--candidate-root",
+                str(candidate),
+                "--finalize-only",
+                "--out",
+                str(tmp_path / "alternate.json"),
+            ]
+        )
+
+
+def test_repair_entrypoint_rejects_dirty_repair_checkout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    candidate = tmp_path / "candidate"
+    repair = tmp_path / "repair"
+    _init_git_repository(candidate)
+    _init_git_repository(repair)
+    (repair / "dirty.txt").write_text("dirty\n", encoding="utf-8")
+    monkeypatch.setattr(repair_module, "REPAIR_REPOSITORY_ROOT", repair)
+
+    with pytest.raises(PilotCheckpointError, match="must be clean"):
+        repair_module.main(
+            [
+                "--candidate-root",
+                str(candidate),
+                "--finalize-only",
+                "--out",
+                str(candidate / pilot_module.PUBLISHED_COMPARISON_REPORT),
+            ]
+        )
+
+
+def test_candidate_root_binding_is_scoped_to_repair_execution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    original = pilot_module.FOLIO_RESOLVE_ROOT
+    candidate = tmp_path / "candidate"
+    candidate.mkdir()
+    observed: dict[str, object] = {}
+    identity = {
+        "git_sha": "0123456789abcdef0123456789abcdef01234567",
+        "kind": pilot_module.FINALIZATION_REPAIR_KIND,
+        "source_sha256": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+    }
+
+    def inner(argv: object, *, repair_identity: object) -> int:
+        observed["root"] = pilot_module.FOLIO_RESOLVE_ROOT
+        observed["identity"] = repair_identity
+        return 0
+
+    monkeypatch.setattr(pilot_module, "_main", inner)
+
+    assert pilot_module.main([], candidate_root=candidate, repair_identity=identity) == 0
+    assert observed == {"root": candidate, "identity": identity}
+    assert original == pilot_module.FOLIO_RESOLVE_ROOT
+
+
+def test_repair_candidate_root_drift_is_rejected_by_checkpoint_manifest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    original_candidate = tmp_path / "candidate-a"
+    drifted_candidate = tmp_path / "candidate-b"
+    original_candidate.mkdir()
+    drifted_candidate.mkdir()
+    checkpoint = tmp_path / "checkpoint"
+    checkpoint.mkdir()
+    corpus = _corpus(tmp_path)
+    item_ids = _pilot_ids(corpus, 1)
+    manifest = _checkpoint_manifest(
+        fingerprint={"candidate_root": str(original_candidate)},
+        item_ids=item_ids,
+    )
+    (checkpoint / "manifest.json").write_text(
+        json.dumps(manifest), encoding="utf-8"
+    )
+    monkeypatch.setenv("PYTHONHASHSEED", "0")
+    monkeypatch.setattr(pilot_module, "load_corpus", lambda _path: corpus)
+    monkeypatch.setattr(pilot_module, "_assert_write_paths_are_safe", lambda *_args: None)
+    monkeypatch.setattr(
+        pilot_module, "_assert_existing_canonical_report_is_recoverable", lambda *_args: None
+    )
+    monkeypatch.setattr(
+        pilot_module, "_prepare_incumbents_for_new_checkpoint", lambda *_args: None
+    )
+    monkeypatch.setattr(
+        pilot_module,
+        "_fingerprint_for_args",
+        lambda *_args: {"candidate_root": str(pilot_module.FOLIO_RESOLVE_ROOT)},
+    )
+    identity = {
+        "git_sha": "0123456789abcdef0123456789abcdef01234567",
+        "kind": pilot_module.FINALIZATION_REPAIR_KIND,
+        "source_sha256": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+    }
+
+    with pytest.raises(PilotCheckpointError, match="fingerprint does not match"):
+        pilot_module.main(
+            [
+                "--corpus-manifest",
+                "corpus.json",
+                "--config",
+                "config.json",
+                "--out",
+                "report.json",
+                "--checkpoint-dir",
+                str(checkpoint),
+                "--leak-manifest",
+                "leaks.json",
+                "--salt-file",
+                "salt",
+                "--public-metadata",
+                "public.json",
+                "--mapper-root",
+                "mapper",
+                "--enrich-root",
+                "enrich",
+                "--limit",
+                "1",
+                "--finalize-only",
+            ],
+            candidate_root=drifted_candidate,
+            repair_identity=identity,
+        )
 
 
 def _stack(stack: str, lane: str, item_id: str) -> dict[str, object]:
@@ -1665,6 +1973,11 @@ def test_finalization_invocation_records_supplied_input_paths(tmp_path: Path) ->
 def test_checkpoint_finalization_extends_verified_v1_metadata_only_for_exact_producers(
     tmp_path: Path,
 ) -> None:
+    repair_identity = {
+        "git_sha": "0123456789abcdef0123456789abcdef01234567",
+        "kind": pilot_module.FINALIZATION_REPAIR_KIND,
+        "source_sha256": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+    }
     args = SimpleNamespace(
         corpus_manifest=pilot_module.FOLIO_RESOLVE_ROOT
         / "eval/synthetic/corpus_v1.manifest.json",
@@ -1710,18 +2023,24 @@ def test_checkpoint_finalization_extends_verified_v1_metadata_only_for_exact_pro
         include_nomatch=True,
         comparison_invocation=_finalization_invocation(args, tmp_path / "combined.jsonl"),
     )
+    payload["provenance"]["finalization_repair"] = repair_identity
     original = DEFAULT_COMPARISON_PUBLIC_METADATA_PATH.read_bytes()
     bound_metadata = pilot_module._load_bound_public_metadata(
         DEFAULT_COMPARISON_PUBLIC_METADATA_PATH,
         {"public_metadata_sha256": pilot_module.sha256_bytes(original)},
     )
-    metadata = pilot_module._checkpoint_finalization_public_metadata(bound_metadata, args)
+    metadata = pilot_module._checkpoint_finalization_public_metadata(
+        bound_metadata,
+        args,
+        repair_identity=repair_identity,
+    )
     salt = b"0123456789abcdef"
     manifest = build_manifest(
         [
             "changed checkpoint aggregate",
             "folio_eval.comparison_pilot.aggregate_consumer_stack",
             pilot_module.PUBLISHED_COMPARISON_REPORT.as_posix(),
+            *repair_identity.values(),
         ],
         salt=salt,
         gold_version="g",
@@ -1772,6 +2091,7 @@ def test_checkpoint_finalization_extends_verified_v1_metadata_only_for_exact_pro
     custom_metadata = pilot_module._checkpoint_finalization_public_metadata(
         bound_metadata,
         custom_args,
+        repair_identity=repair_identity,
     )
     custom_manifest = build_manifest(
         [str(custom_args.out)],
@@ -1868,6 +2188,47 @@ def test_final_completion_receipt_binds_published_report_bytes(tmp_path: Path) -
     report.write_text('{"version":2}\n', encoding="utf-8")
     with pytest.raises(PilotCheckpointError, match="does not match its report"):
         pilot_module._load_final_completion(root, report, fingerprint)
+
+
+def test_repair_completion_receipt_binds_reported_repair_identity(tmp_path: Path) -> None:
+    root = tmp_path / "checkpoint"
+    root.mkdir()
+    report = tmp_path / "report.json"
+    repair_identity = {
+        "git_sha": "0123456789abcdef0123456789abcdef01234567",
+        "kind": pilot_module.FINALIZATION_REPAIR_KIND,
+        "source_sha256": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+    }
+    report.write_text(
+        json.dumps({"provenance": {"finalization_repair": repair_identity}}),
+        encoding="utf-8",
+    )
+    fingerprint = {"stable": True}
+
+    pilot_module._publish_final_completion(
+        root,
+        report,
+        fingerprint,
+        repair_identity=repair_identity,
+    )
+    pilot_module._load_final_completion(root, report, fingerprint)
+
+    changed = json.loads(report.read_text(encoding="utf-8"))
+    changed["provenance"]["finalization_repair"]["source_sha256"] = "c" * 64
+    report.write_text(json.dumps(changed), encoding="utf-8")
+    with pytest.raises(PilotCheckpointError, match="does not match"):
+        pilot_module._load_final_completion(root, report, fingerprint)
+
+
+def test_final_completion_receipt_rejects_non_object_json(tmp_path: Path) -> None:
+    root = tmp_path / "checkpoint"
+    root.mkdir()
+    report = tmp_path / "report.json"
+    report.write_text("{}\n", encoding="utf-8")
+    (root / "final-complete.json").write_text("[]\n", encoding="utf-8")
+
+    with pytest.raises(PilotCheckpointError, match="is corrupt"):
+        pilot_module._load_final_completion(root, report, {"stable": True})
 
 
 def test_merge_stack_runs_preserves_every_item_and_rejects_static_drift() -> None:
@@ -1985,6 +2346,11 @@ def test_finalize_durably_creates_output_parent_before_publish(
         public_metadata=tmp_path / "public.json",
     )
     events: list[tuple[str, object]] = []
+    repair_identity = {
+        "git_sha": "0123456789abcdef0123456789abcdef01234567",
+        "kind": pilot_module.FINALIZATION_REPAIR_KIND,
+        "source_sha256": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+    }
 
     monkeypatch.setattr(pilot_module, "_load_completed_shard", lambda *_args: _shard("one"))
     monkeypatch.setattr(
@@ -2013,7 +2379,10 @@ def test_finalize_durably_creates_output_parent_before_publish(
     monkeypatch.setattr(
         pilot_module,
         "_checkpoint_finalization_public_metadata",
-        lambda metadata, _args: events.append(("metadata", metadata)) or metadata,
+        lambda metadata, _args, **kwargs: events.append(
+            ("metadata", (metadata, kwargs["repair_identity"]))
+        )
+        or metadata,
     )
     monkeypatch.setattr(
         pilot_module,
@@ -2036,20 +2405,29 @@ def test_finalize_durably_creates_output_parent_before_publish(
     monkeypatch.setattr(
         pilot_module,
         "_publish_final_completion",
-        lambda root, report, fingerprint: events.append(
-            ("completion", (root, report, fingerprint))
+        lambda root, report, fingerprint, **kwargs: events.append(
+            (
+                "completion",
+                (root, report, fingerprint, kwargs["repair_identity"]),
+            )
         ),
     )
 
-    pilot_module._finalize(args, _corpus(tmp_path), ("one",), {"fingerprint": {}})
+    pilot_module._finalize(
+        args,
+        _corpus(tmp_path),
+        ("one",),
+        {"fingerprint": {}},
+        repair_identity=repair_identity,
+    )
 
     assert events == [
         ("directory", checkpoint / "final-stages" / "folio-mapper" / "incumbent"),
-        ("metadata", bound_metadata),
+        ("metadata", (bound_metadata, repair_identity)),
         ("fingerprint", "before final report publication"),
         ("directory", output.parent),
         ("publish", output),
-        ("completion", (checkpoint, output, {})),
+        ("completion", (checkpoint, output, {}, repair_identity)),
     ]
 
 
@@ -2240,3 +2618,121 @@ def test_main_can_initialize_checkpoint_without_starting_an_expensive_shard(
         )
         == 0
     )
+
+
+def test_finalize_only_requires_existing_manifest_before_any_mutation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    checkpoint = tmp_path / "missing-checkpoint"
+    monkeypatch.setenv("PYTHONHASHSEED", "0")
+    monkeypatch.setattr(
+        pilot_module,
+        "_prepare_incumbents_for_new_checkpoint",
+        lambda *_args: pytest.fail("finalize-only must not prepare incumbents"),
+    )
+    monkeypatch.setattr(
+        pilot_module,
+        "_durably_create_directory",
+        lambda *_args: pytest.fail("finalize-only must not create a checkpoint"),
+    )
+
+    with pytest.raises(PilotCheckpointError, match="existing checkpoint manifest"):
+        pilot_module.main(
+            [
+                "--corpus-manifest",
+                "corpus.json",
+                "--config",
+                "config.json",
+                "--out",
+                "report.json",
+                "--checkpoint-dir",
+                str(checkpoint),
+                "--leak-manifest",
+                "leaks.json",
+                "--salt-file",
+                "salt",
+                "--public-metadata",
+                "public.json",
+                "--mapper-root",
+                "mapper",
+                "--enrich-root",
+                "enrich",
+                "--finalize-only",
+            ]
+        )
+    assert not checkpoint.exists()
+
+
+def test_finalize_only_existing_manifest_skips_preparation_and_shards(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    checkpoint = tmp_path / "checkpoint"
+    checkpoint.mkdir()
+    (checkpoint / "manifest.json").write_text("{}\n", encoding="utf-8")
+    corpus = _corpus(tmp_path)
+    fingerprint = {"stable": True}
+    finalized: list[tuple[str, ...]] = []
+    monkeypatch.setenv("PYTHONHASHSEED", "0")
+    monkeypatch.setattr(pilot_module, "load_corpus", lambda _path: corpus)
+    monkeypatch.setattr(pilot_module, "_assert_write_paths_are_safe", lambda *_args: None)
+    monkeypatch.setattr(
+        pilot_module, "_assert_existing_canonical_report_is_recoverable", lambda *_args: None
+    )
+    monkeypatch.setattr(
+        pilot_module,
+        "_prepare_incumbents_for_new_checkpoint",
+        lambda *_args: pytest.fail("finalize-only must not prepare incumbents"),
+    )
+    monkeypatch.setattr(
+        pilot_module, "_fingerprint_for_args", lambda *_args: fingerprint
+    )
+    monkeypatch.setattr(
+        pilot_module, "_create_or_validate_manifest", lambda *_args: None
+    )
+    monkeypatch.setattr(
+        pilot_module,
+        "_require_current_fingerprint",
+        lambda _args, current, _expected, *, boundary: current,
+    )
+    monkeypatch.setattr(
+        pilot_module,
+        "_run_shard",
+        lambda *_args: pytest.fail("finalize-only must not run a shard"),
+    )
+    monkeypatch.setattr(
+        pilot_module,
+        "_finalize",
+        lambda _args, _corpus, item_ids, _manifest, **_kwargs: finalized.append(
+            tuple(item_ids)
+        ),
+    )
+
+    assert (
+        pilot_module.main(
+            [
+                "--corpus-manifest",
+                "corpus.json",
+                "--config",
+                "config.json",
+                "--out",
+                "report.json",
+                "--checkpoint-dir",
+                str(checkpoint),
+                "--leak-manifest",
+                "leaks.json",
+                "--salt-file",
+                "salt",
+                "--public-metadata",
+                "public.json",
+                "--mapper-root",
+                "mapper",
+                "--enrich-root",
+                "enrich",
+                "--limit",
+                "1",
+                "--finalize-only",
+            ]
+        )
+        == 0
+    )
+    assert finalized == [tuple(_pilot_ids(corpus, 1))]

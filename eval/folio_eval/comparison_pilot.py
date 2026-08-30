@@ -8,9 +8,11 @@ import importlib.metadata
 import json
 import os
 import platform
+import re
 import subprocess
 import sys
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
 from types import MappingProxyType
@@ -45,6 +47,8 @@ SHARD_COMPLETION_KIND = "synthetic-comparison-pilot-shard-completion"
 SHARD_COMPLETION_VERSION = 1
 FINAL_COMPLETION_KIND = "synthetic-comparison-pilot-final-completion"
 FINAL_COMPLETION_VERSION = 1
+FINAL_COMPLETION_REPAIR_VERSION = 2
+FINALIZATION_REPAIR_KIND = "reviewed-finalization-repair"
 DEFAULT_LIMIT = 30
 INCUMBENT_VERSION = "0.4.0"
 PUBLISHED_COMPARISON_REPORT = Path("eval/reports/synthetic-comparison-v1.json")
@@ -1687,33 +1691,56 @@ def _final_completion_path(root: Path) -> Path:
 
 
 def _final_completion_receipt(
-    report: Path, fingerprint: Mapping[str, object]
+    report: Path,
+    fingerprint: Mapping[str, object],
+    *,
+    repair_identity: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     try:
         report_sha256 = _sha256_file(report)
     except OSError as exc:
         raise PilotCheckpointError(f"final pilot report is missing: {report}") from exc
-    return {
+    receipt: dict[str, object] = {
         "fingerprint_sha256": sha256_bytes(
             json.dumps(fingerprint, sort_keys=True, separators=(",", ":")).encode()
         ),
         "kind": FINAL_COMPLETION_KIND,
         "report_sha256": report_sha256,
-        "schema_version": FINAL_COMPLETION_VERSION,
+        "schema_version": (
+            FINAL_COMPLETION_REPAIR_VERSION
+            if repair_identity is not None
+            else FINAL_COMPLETION_VERSION
+        ),
     }
+    if repair_identity is not None:
+        checked_identity = _validate_repair_identity(repair_identity)
+        receipt["repair_identity_sha256"] = sha256_bytes(
+            json.dumps(checked_identity, sort_keys=True, separators=(",", ":")).encode()
+        )
+    return receipt
 
 
 def _publish_final_completion(
-    root: Path, report: Path, fingerprint: Mapping[str, object]
+    root: Path,
+    report: Path,
+    fingerprint: Mapping[str, object],
+    *,
+    repair_identity: Mapping[str, object] | None = None,
 ) -> None:
     path = _final_completion_path(root)
-    expected = _final_completion_receipt(report, fingerprint)
+    expected = _final_completion_receipt(
+        report, fingerprint, repair_identity=repair_identity
+    )
     _atomic_create(path, expected)
-    _load_final_completion(root, report, fingerprint)
+    _load_final_completion(root, report, fingerprint, repair_identity=repair_identity)
 
 
 def _load_final_completion(
-    root: Path, report: Path, fingerprint: Mapping[str, object]
+    root: Path,
+    report: Path,
+    fingerprint: Mapping[str, object],
+    *,
+    repair_identity: Mapping[str, object] | None = None,
 ) -> None:
     path = _final_completion_path(root)
     if not path.is_file():
@@ -1722,8 +1749,45 @@ def _load_final_completion(
         observed = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise PilotCheckpointError(f"pilot final completion is corrupt: {path}") from exc
-    if observed != _final_completion_receipt(report, fingerprint):
+    if not isinstance(observed, dict):
+        raise PilotCheckpointError(f"pilot final completion is corrupt: {path}")
+    if repair_identity is None and observed.get("schema_version") == FINAL_COMPLETION_REPAIR_VERSION:
+        repair_identity = _repair_identity_from_report(report)
+    if observed != _final_completion_receipt(
+        report, fingerprint, repair_identity=repair_identity
+    ):
         raise PilotCheckpointError("pilot final completion does not match its report")
+
+
+def _validate_repair_identity(identity: Mapping[str, object]) -> dict[str, str]:
+    """Validate the minimal reviewed-code identity allowed into public provenance."""
+    checked = dict(identity)
+    if set(checked) != {"git_sha", "kind", "source_sha256"}:
+        raise PilotCheckpointError("finalization repair identity is malformed")
+    kind = checked.get("kind")
+    git_sha = checked.get("git_sha")
+    source_sha256 = checked.get("source_sha256")
+    if kind != FINALIZATION_REPAIR_KIND:
+        raise PilotCheckpointError("finalization repair identity is malformed")
+    if not isinstance(git_sha, str) or not re.fullmatch(r"[0-9a-f]{40,64}", git_sha):
+        raise PilotCheckpointError("finalization repair identity is malformed")
+    if not isinstance(source_sha256, str) or not re.fullmatch(
+        r"[0-9a-f]{64}", source_sha256
+    ):
+        raise PilotCheckpointError("finalization repair identity is malformed")
+    return {"git_sha": git_sha, "kind": kind, "source_sha256": source_sha256}
+
+
+def _repair_identity_from_report(report: Path) -> dict[str, str]:
+    try:
+        payload = json.loads(report.read_text(encoding="utf-8"))
+        provenance = payload["provenance"]
+        identity = provenance["finalization_repair"]
+    except (OSError, json.JSONDecodeError, KeyError, TypeError) as exc:
+        raise PilotCheckpointError("final pilot report repair identity is malformed") from exc
+    if not isinstance(identity, Mapping):
+        raise PilotCheckpointError("final pilot report repair identity is malformed")
+    return _validate_repair_identity(identity)
 
 
 def _run_shard(args: argparse.Namespace, item_id: str, fingerprint: Mapping[str, object]) -> None:
@@ -1913,6 +1977,8 @@ def _finalize(
     corpus: LoadedCorpus,
     item_ids: Sequence[str],
     manifest: Mapping[str, object],
+    *,
+    repair_identity: Mapping[str, object] | None = None,
 ) -> None:
     fingerprint = manifest.get("fingerprint")
     if not isinstance(fingerprint, Mapping):
@@ -1968,9 +2034,12 @@ def _finalize(
             for item_id in item_ids
         },
     }
+    if repair_identity is not None:
+        provenance["finalization_repair"] = _validate_repair_identity(repair_identity)
     public_metadata = _checkpoint_finalization_public_metadata(
         _load_bound_public_metadata(args.public_metadata, fingerprint),
         args,
+        repair_identity=repair_identity,
     )
     _require_current_fingerprint(
         args, corpus, fingerprint, boundary="before final report publication"
@@ -1985,7 +2054,12 @@ def _finalize(
         temporary_dir=args.out.parent,
         temporary_prefix=f".{args.out.name}.",
     )
-    _publish_final_completion(args.checkpoint_dir, args.out, fingerprint)
+    _publish_final_completion(
+        args.checkpoint_dir,
+        args.out,
+        fingerprint,
+        repair_identity=repair_identity,
+    )
 
 
 def _load_bound_public_metadata(
@@ -2004,6 +2078,8 @@ def _load_bound_public_metadata(
 def _checkpoint_finalization_public_metadata(
     metadata: PublicComparisonMetadata,
     args: argparse.Namespace,
+    *,
+    repair_identity: Mapping[str, object] | None = None,
 ) -> PublicComparisonMetadata:
     """Add exact pilot-owned fields after the checkpoint-bound v1 bytes are verified."""
     fields = dict(metadata.fields)
@@ -2023,6 +2099,10 @@ def _checkpoint_finalization_public_metadata(
             "value",
             PUBLISHED_COMPARISON_REPORT.as_posix(),
         )
+    if repair_identity is not None:
+        checked_identity = _validate_repair_identity(repair_identity)
+        for key, value in checked_identity.items():
+            extensions[("provenance", "finalization_repair", key)] = ("value", value)
     for path, expected in extensions.items():
         existing = fields.get(path)
         if existing is not None and existing != expected:
@@ -2050,22 +2130,55 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv: Sequence[str] | None = None) -> int:
+@contextmanager
+def _candidate_root(root: Path | None) -> Iterator[None]:
+    """Temporarily bind all checkpoint checks to a pinned candidate checkout."""
+    global FOLIO_RESOLVE_ROOT
+    original = FOLIO_RESOLVE_ROOT
+    if root is not None:
+        FOLIO_RESOLVE_ROOT = root.resolve()
+    try:
+        yield
+    finally:
+        FOLIO_RESOLVE_ROOT = original
+
+
+def main(
+    argv: Sequence[str] | None = None,
+    *,
+    candidate_root: Path | None = None,
+    repair_identity: Mapping[str, object] | None = None,
+) -> int:
+    with _candidate_root(candidate_root):
+        return _main(argv, repair_identity=repair_identity)
+
+
+def _main(
+    argv: Sequence[str] | None = None,
+    *,
+    repair_identity: Mapping[str, object] | None = None,
+) -> int:
     args = _parser().parse_args(argv)
+    if repair_identity is not None and not args.finalize_only:
+        raise PilotCheckpointError("finalization repair requires --finalize-only")
     if os.environ.get("PYTHONHASHSEED") != "0":
         raise PilotCheckpointError("comparison pilot requires PYTHONHASHSEED=0")
     _assert_unoptimized_runtime()
     _assert_clean_runtime_environment()
     _resolve_path_arguments(args)
+    checkpoint_manifest_path = args.checkpoint_dir / "manifest.json"
+    if args.finalize_only and not checkpoint_manifest_path.is_file():
+        raise PilotCheckpointError("finalize-only requires an existing checkpoint manifest")
     corpus = load_corpus(args.corpus_manifest)
     _assert_write_paths_are_safe(args, corpus)
     item_ids = _pilot_ids(corpus, args.limit)
     _assert_existing_canonical_report_is_recoverable(args, item_ids)
-    _prepare_incumbents_for_new_checkpoint(args)
+    if not args.finalize_only:
+        _prepare_incumbents_for_new_checkpoint(args)
     fingerprint = _fingerprint_for_args(args, corpus)
     manifest = _checkpoint_manifest(fingerprint=fingerprint, item_ids=item_ids)
     _durably_create_directory(args.checkpoint_dir)
-    _create_or_validate_manifest(args.checkpoint_dir / "manifest.json", manifest)
+    _create_or_validate_manifest(checkpoint_manifest_path, manifest)
     final_completion = _final_completion_path(args.checkpoint_dir)
     if final_completion.exists():
         _load_final_completion(args.checkpoint_dir, args.out, fingerprint)
@@ -2116,7 +2229,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     corpus = _require_current_fingerprint(
         args, corpus, fingerprint, boundary="before finalization"
     )
-    _finalize(args, corpus, item_ids, manifest)
+    _finalize(
+        args,
+        corpus,
+        item_ids,
+        manifest,
+        repair_identity=repair_identity,
+    )
     print(f"pilot report: {args.out}")
     return 0
 
