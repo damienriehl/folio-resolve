@@ -10,12 +10,19 @@ import py_compile
 import struct
 import venv
 from copy import deepcopy
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
 import folio_eval.comparison_pilot as pilot_module
 import pytest
 from folio_eval.answer_rule import AnswerRuleConfig
+from folio_eval.comparison import (
+    CONSUMER_DETERMINISTIC_CONFIGS,
+    DEFAULT_COMPARISON_PUBLIC_METADATA_PATH,
+    ComparisonError,
+    preflight_comparison_publication,
+)
 from folio_eval.comparison_pilot import (
     PilotCheckpointError,
     _checkpoint_manifest,
@@ -28,6 +35,7 @@ from folio_eval.comparison_pilot import (
     _pilot_ids,
     _run_shard,
 )
+from folio_eval.leakcheck import build_manifest
 from folio_eval.synthesize import CorpusManifest, LoadedCorpus, SyntheticItem
 
 
@@ -1654,6 +1662,132 @@ def test_finalization_invocation_records_supplied_input_paths(tmp_path: Path) ->
     }
 
 
+def test_checkpoint_finalization_extends_verified_v1_metadata_only_for_exact_producers(
+    tmp_path: Path,
+) -> None:
+    args = SimpleNamespace(
+        corpus_manifest=pilot_module.FOLIO_RESOLVE_ROOT
+        / "eval/synthetic/corpus_v1.manifest.json",
+        config=pilot_module.FOLIO_RESOLVE_ROOT
+        / "eval/synthetic/answer_rule_config_synthetic_v1.json",
+        out=pilot_module.FOLIO_RESOLVE_ROOT / pilot_module.PUBLISHED_COMPARISON_REPORT,
+        checkpoint_dir=tmp_path / "checkpoint",
+        leak_manifest=pilot_module.FOLIO_RESOLVE_ROOT
+        / "eval/synthetic/firm-surface-manifest-v1.json",
+        salt_file=tmp_path / "salt",
+        public_metadata=DEFAULT_COMPARISON_PUBLIC_METADATA_PATH,
+        mapper_root=Path("/repo/folio-mapper"),
+        enrich_root=Path("/repo/folio-enrich"),
+        limit=1,
+    )
+    config = pilot_module.load_config(args.config)
+    corpus = _corpus(tmp_path)
+    corpus = replace(
+        corpus,
+        manifest=replace(
+            corpus.manifest,
+            answer_rule_config_sha256=config.content_sha256(),
+        ),
+    )
+    shards = [_shard("one"), _shard("none", nomatch=True)]
+    for shard in shards:
+        enrich = shard["stacks"]["folio-enrich:incumbent"]
+        enrich["invocation"]["argv"][1] = (
+            "/repo/folio-enrich/backend/eval/synthetic_runner.py"
+        )
+        mapper = shard["stacks"]["folio-mapper:incumbent"]
+        mapper["invocation"]["argv"][1] = (
+            "/repo/folio-mapper/backend/scripts/synthetic_runner.py"
+        )
+        enrich["config"] = dict(CONSUMER_DETERMINISTIC_CONFIGS["folio-enrich"])
+        mapper["config"] = dict(CONSUMER_DETERMINISTIC_CONFIGS["folio-mapper"])
+        shard["stacks"]["folio-resolve:candidate"]["config"] = config.to_json()
+    payload = pilot_module.build_comparison(
+        corpus,
+        _merge_stack_runs(shards),
+        config,
+        limit=1,
+        include_nomatch=True,
+        comparison_invocation=_finalization_invocation(args, tmp_path / "combined.jsonl"),
+    )
+    original = DEFAULT_COMPARISON_PUBLIC_METADATA_PATH.read_bytes()
+    bound_metadata = pilot_module._load_bound_public_metadata(
+        DEFAULT_COMPARISON_PUBLIC_METADATA_PATH,
+        {"public_metadata_sha256": pilot_module.sha256_bytes(original)},
+    )
+    metadata = pilot_module._checkpoint_finalization_public_metadata(bound_metadata, args)
+    salt = b"0123456789abcdef"
+    manifest = build_manifest(
+        [
+            "changed checkpoint aggregate",
+            "folio_eval.comparison_pilot.aggregate_consumer_stack",
+            pilot_module.PUBLISHED_COMPARISON_REPORT.as_posix(),
+        ],
+        salt=salt,
+        gold_version="g",
+        gold_content_sha256="h",
+    )
+
+    preflight_comparison_publication(payload, manifest, salt, public_metadata=metadata)
+
+    wrong_path = deepcopy(payload)
+    wrong_path["note"] = "folio_eval.comparison_pilot.aggregate_consumer_stack"
+    with pytest.raises(ComparisonError, match="collisions"):
+        preflight_comparison_publication(
+            wrong_path,
+            manifest,
+            salt,
+            public_metadata=metadata,
+        )
+
+    wrong_value = deepcopy(payload)
+    wrong_value["stacks"]["folio-enrich:incumbent"]["invocation"]["argv"][0] = (
+        "changed checkpoint aggregate"
+    )
+    with pytest.raises(ComparisonError, match="value mismatch"):
+        preflight_comparison_publication(
+            wrong_value,
+            manifest,
+            salt,
+            public_metadata=metadata,
+        )
+
+    duplicate_out = deepcopy(payload)
+    duplicate_out["provenance"]["comparison_invocation"]["argv"].extend(
+        ["--out", pilot_module.PUBLISHED_COMPARISON_REPORT.as_posix()]
+    )
+    with pytest.raises(ComparisonError, match="missing or duplicated"):
+        preflight_comparison_publication(
+            duplicate_out,
+            manifest,
+            salt,
+            public_metadata=metadata,
+        )
+
+    custom_args = SimpleNamespace(**vars(args))
+    custom_args.out = tmp_path / "custom-report.json"
+    custom_payload = deepcopy(payload)
+    argv = custom_payload["provenance"]["comparison_invocation"]["argv"]
+    argv[argv.index("--out") + 1] = str(custom_args.out)
+    custom_metadata = pilot_module._checkpoint_finalization_public_metadata(
+        bound_metadata,
+        custom_args,
+    )
+    custom_manifest = build_manifest(
+        [str(custom_args.out)],
+        salt=salt,
+        gold_version="g",
+        gold_content_sha256="h",
+    )
+    with pytest.raises(ComparisonError, match="collisions"):
+        preflight_comparison_publication(
+            custom_payload,
+            custom_manifest,
+            salt,
+            public_metadata=custom_metadata,
+        )
+
+
 def test_load_shard_rejects_item_or_stack_drift(tmp_path: Path) -> None:
     path = tmp_path / "report.json"
     path.write_text(json.dumps(_shard("one")), encoding="utf-8")
@@ -1870,7 +2004,17 @@ def test_finalize_durably_creates_output_parent_before_publish(
     )
     monkeypatch.setattr(pilot_module, "_file_fingerprint", lambda *_args, **_kwargs: {})
     monkeypatch.setattr(pilot_module, "_sha256_file", lambda _path: "a" * 64)
-    monkeypatch.setattr(pilot_module, "_load_bound_public_metadata", lambda *_args: object())
+    bound_metadata = object()
+    monkeypatch.setattr(
+        pilot_module,
+        "_load_bound_public_metadata",
+        lambda *_args: bound_metadata,
+    )
+    monkeypatch.setattr(
+        pilot_module,
+        "_checkpoint_finalization_public_metadata",
+        lambda metadata, _args: events.append(("metadata", metadata)) or metadata,
+    )
     monkeypatch.setattr(
         pilot_module,
         "_require_current_fingerprint",
@@ -1901,6 +2045,7 @@ def test_finalize_durably_creates_output_parent_before_publish(
 
     assert events == [
         ("directory", checkpoint / "final-stages" / "folio-mapper" / "incumbent"),
+        ("metadata", bound_metadata),
         ("fingerprint", "before final report publication"),
         ("directory", output.parent),
         ("publish", output),

@@ -26,24 +26,12 @@
       "value": "eval/synthetic/public_comparison_metadata_v1.json"
     },
     {
-      "path": ["provenance", "comparison_invocation", "argv", "--out"],
-      "value": "eval/reports/synthetic-comparison-v1.json"
-    },
-    {
       "path": ["provenance", "config_selection", "answer_rule_config", "rationale"],
       "value": "synthetic lane v1: top_k sized to corpus gold density (uncalibrated)"
     },
     {
-      "path": ["stacks", "folio-enrich:incumbent", "invocation", "argv", "0"],
-      "value": "folio_eval.comparison_pilot.aggregate_consumer_stack"
-    },
-    {
       "path": ["stacks", "folio-enrich:incumbent", "invocation", "argv", "1"],
       "value_template": "{working_directory}/backend/eval/synthetic_runner.py"
-    },
-    {
-      "path": ["stacks", "folio-mapper:incumbent", "invocation", "argv", "0"],
-      "value": "folio_eval.comparison_pilot.aggregate_consumer_stack"
     },
     {
       "path": ["stacks", "folio-mapper:incumbent", "invocation", "argv", "1"],

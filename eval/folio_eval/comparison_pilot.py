@@ -11,7 +11,9 @@ import platform
 import subprocess
 import sys
 from collections.abc import Mapping, Sequence
+from dataclasses import replace
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any
 
 from .answer_rule import load_config
@@ -46,6 +48,9 @@ FINAL_COMPLETION_VERSION = 1
 DEFAULT_LIMIT = 30
 INCUMBENT_VERSION = "0.4.0"
 PUBLISHED_COMPARISON_REPORT = Path("eval/reports/synthetic-comparison-v1.json")
+CHECKPOINT_AGGREGATE_CONSUMER_INVOCATION = (
+    "folio_eval.comparison_pilot.aggregate_consumer_stack"
+)
 PILOT_STACK_LANES = (
     ("folio-enrich", "incumbent"),
     ("folio-mapper", "incumbent"),
@@ -1827,7 +1832,7 @@ def _merge_stack_runs(shards: Sequence[Mapping[str, Any]]) -> list[StackRun]:
             if len(first_argv) < 2 or not isinstance(first_argv[1], str):
                 raise PilotCheckpointError(f"pilot shard {key} runner path is missing")
             aggregate_invocation = (
-                "folio_eval.comparison_pilot.aggregate_consumer_stack",
+                CHECKPOINT_AGGREGATE_CONSUMER_INVOCATION,
                 first_argv[1],
                 "--source-shard-count",
                 str(len(shards)),
@@ -1963,7 +1968,10 @@ def _finalize(
             for item_id in item_ids
         },
     }
-    public_metadata = _load_bound_public_metadata(args.public_metadata, fingerprint)
+    public_metadata = _checkpoint_finalization_public_metadata(
+        _load_bound_public_metadata(args.public_metadata, fingerprint),
+        args,
+    )
     _require_current_fingerprint(
         args, corpus, fingerprint, boundary="before final report publication"
     )
@@ -1991,6 +1999,38 @@ def _load_bound_public_metadata(
     if sha256_bytes(content) != fingerprint.get("public_metadata_sha256"):
         raise PilotCheckpointError("comparison public metadata drifted before finalization")
     return load_public_comparison_metadata(path, content=content)
+
+
+def _checkpoint_finalization_public_metadata(
+    metadata: PublicComparisonMetadata,
+    args: argparse.Namespace,
+) -> PublicComparisonMetadata:
+    """Add exact pilot-owned fields after the checkpoint-bound v1 bytes are verified."""
+    fields = dict(metadata.fields)
+    extensions: dict[tuple[str, ...], tuple[str, str]] = {
+        ("stacks", "folio-enrich:incumbent", "invocation", "argv", "0"): (
+            "value",
+            CHECKPOINT_AGGREGATE_CONSUMER_INVOCATION,
+        ),
+        ("stacks", "folio-mapper:incumbent", "invocation", "argv", "0"): (
+            "value",
+            CHECKPOINT_AGGREGATE_CONSUMER_INVOCATION,
+        ),
+    }
+    canonical_out = FOLIO_RESOLVE_ROOT / PUBLISHED_COMPARISON_REPORT
+    if args.out == canonical_out:
+        extensions[("provenance", "comparison_invocation", "argv", "--out")] = (
+            "value",
+            PUBLISHED_COMPARISON_REPORT.as_posix(),
+        )
+    for path, expected in extensions.items():
+        existing = fields.get(path)
+        if existing is not None and existing != expected:
+            raise PilotCheckpointError(
+                f"checkpoint finalization public metadata conflicts at path: {path!r}"
+            )
+        fields[path] = expected
+    return replace(metadata, fields=MappingProxyType(fields))
 
 
 def _parser() -> argparse.ArgumentParser:

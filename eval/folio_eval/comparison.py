@@ -115,11 +115,8 @@ COMPARISON_PUBLIC_METADATA_PATHS = frozenset(
         ("provenance", "comparison_invocation", "argv", "--config"),
         ("provenance", "comparison_invocation", "argv", "--leak-manifest"),
         ("provenance", "comparison_invocation", "argv", "--public-metadata"),
-        ("provenance", "comparison_invocation", "argv", "--out"),
         ("provenance", "config_selection", "answer_rule_config", "rationale"),
-        ("stacks", "folio-enrich:incumbent", "invocation", "argv", "0"),
         ("stacks", "folio-enrich:incumbent", "invocation", "argv", "1"),
-        ("stacks", "folio-mapper:incumbent", "invocation", "argv", "0"),
         ("stacks", "folio-mapper:incumbent", "invocation", "argv", "1"),
         ("stacks", "folio-resolve:candidate", "config", "rationale"),
     }
