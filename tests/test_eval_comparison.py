@@ -524,7 +524,7 @@ def test_atomic_comparison_write_can_stage_temporary_file_outside_destination(
 
 
 def _comparison_public_metadata_payload() -> dict[str, object]:
-    argv = ["safe"] * 17
+    argv = ["safe"] * 19
     argv[2] = "run_synthetic_comparison"
     argv[3] = "--corpus-manifest"
     argv[4] = "eval/synthetic/corpus_v1.manifest.json"
@@ -534,6 +534,8 @@ def _comparison_public_metadata_payload() -> dict[str, object]:
     argv[14] = "eval/synthetic/firm-surface-manifest-v1.json"
     argv[15] = "--public-metadata"
     argv[16] = "eval/synthetic/public_comparison_metadata_v1.json"
+    argv[17] = "--out"
+    argv[18] = "eval/reports/synthetic-comparison-v1.json"
     rationale = "synthetic lane v1: top_k sized to corpus gold density (uncalibrated)"
     return {
         "kind": "synthetic_comparison",
@@ -549,13 +551,19 @@ def _comparison_public_metadata_payload() -> dict[str, object]:
         "stacks": {
             "folio-enrich:incumbent": {
                 "invocation": {
-                    "argv": ["python", "/repos/enrich/backend/eval/synthetic_runner.py"],
+                    "argv": [
+                        "folio_eval.comparison_pilot.aggregate_consumer_stack",
+                        "/repos/enrich/backend/eval/synthetic_runner.py",
+                    ],
                     "working_directory": "/repos/enrich",
                 }
             },
             "folio-mapper:incumbent": {
                 "invocation": {
-                    "argv": ["python", "/repos/mapper/backend/scripts/synthetic_runner.py"],
+                    "argv": [
+                        "folio_eval.comparison_pilot.aggregate_consumer_stack",
+                        "/repos/mapper/backend/scripts/synthetic_runner.py",
+                    ],
                     "working_directory": "/repos/mapper",
                 }
             },
@@ -574,6 +582,8 @@ def test_versioned_public_metadata_exempts_only_exact_comparison_paths() -> None
         "eval/synthetic/answer_rule_config_synthetic_v1.json",
         "eval/synthetic/firm-surface-manifest-v1.json",
         "eval/synthetic/public_comparison_metadata_v1.json",
+        "eval/reports/synthetic-comparison-v1.json",
+        "folio_eval.comparison_pilot.aggregate_consumer_stack",
         "synthetic lane v1: top_k sized to corpus gold density (uncalibrated)",
         "/repos/enrich/backend/eval/synthetic_runner.py",
         "/repos/mapper/backend/scripts/synthetic_runner.py",
@@ -599,6 +609,8 @@ def test_versioned_public_metadata_exempts_only_exact_comparison_paths() -> None
         "eval/synthetic/corpus_v1.manifest.json",
         "--public-metadata",
         "eval/synthetic/public_comparison_metadata_v1.json",
+        "--out",
+        "eval/reports/synthetic-comparison-v1.json",
     ]
     preflight_comparison_publication(reordered, manifest, salt, public_metadata=metadata)
 
@@ -611,6 +623,7 @@ def test_versioned_public_metadata_exempts_only_exact_comparison_paths() -> None
         "--config=eval/synthetic/answer_rule_config_synthetic_v1.json",
         "--leak-manifest=eval/synthetic/firm-surface-manifest-v1.json",
         "--public-metadata=eval/synthetic/public_comparison_metadata_v1.json",
+        "--out=eval/reports/synthetic-comparison-v1.json",
         "--limit",
         "1",
     ]
@@ -652,6 +665,13 @@ def test_versioned_public_metadata_exempts_only_exact_comparison_paths() -> None
     with pytest.raises(ComparisonError, match="collisions"):
         preflight_comparison_publication(
             {**payload, "note": {"escaped": "Secret\nSurface"}},
+            manifest,
+            salt,
+            public_metadata=metadata,
+        )
+    with pytest.raises(ComparisonError, match="collisions=1"):
+        preflight_comparison_publication(
+            {**payload, "note": "folio_eval.comparison_pilot.aggregate_consumer_stack"},
             manifest,
             salt,
             public_metadata=metadata,
