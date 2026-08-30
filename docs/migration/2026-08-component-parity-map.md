@@ -64,6 +64,54 @@ restored), repeatably, with snapshots showing the expected causal boundary. If i
 impossible, use the smallest factorial replay that separates interacting components and document
 the interaction. Correlation between a missing item and a stage difference is not causation.
 
+## U10 v8 runtime attribution (2026-08-30)
+
+The finalized shared-benchmark comparison is a loss for the candidate against both deterministic
+incumbents. Candidate F1 is `0.004357`, versus `0.024423` for enrich and `0.028612` for mapper.
+The paired candidate deltas are `-0.020329` (95% CI `[-0.035060, -0.006497]`) and `-0.023864`
+(95% CI `[-0.039394, -0.009722]`), respectively. Because both intervals remain below zero, this
+is the plan's loss/redirect branch rather than an in-band hold.
+
+The stage snapshots localize the lost true positives without identifying any protected row:
+
+- Enrich won eight scoreable gold relations. All eight first appeared in enrich's `EntityRuler`.
+  The candidate had already retrieved every one, but ranked each below its six-answer cutoff;
+  all eight came from the candidate's Aho–Corasick path.
+- Mapper won nine scoreable gold relations. All nine first appeared in mapper's `stage1_filter`.
+  The candidate again had every relation below its six-answer cutoff: eight came from
+  Aho–Corasick and one from `MultiStrategyRecall`.
+- Across the union of incumbent-winning relations, candidate ranks were 7, 9, 10, 24, or 36
+  (median 9). Most carried the same maximum primary score as the false positives selected above
+  them. The observed loss is therefore primarily a ranking/tie-ordering failure, not a retrieval
+  absence and not evidence for wholesale porting of either incumbent extraction stage.
+
+### Controlled replay
+
+A single-variable replay held the corpus, ontology, candidate pool, gates, primary scores,
+threshold, and `top_k = 6` constant. For primary-score ties only, it used ontology-definition word
+overlap from a bounded anchor-local window. Retrieval output, probability values, pre-ranking
+candidate eligibility, and the top-k setting were unchanged. Top-six membership changed only
+through ordering among equal primary scores.
+
+The table covers the full corpus replay: 225 scoreable items plus 30 no-match controls.
+
+| Replay | TP | FP | FN | Micro-F1 | No-match FP rate |
+|---|---:|---:|---:|---:|---:|
+| Baseline IRI tie-order | 6 | 1,344 | 357 | 0.007005 | 1.0 |
+| Whole-passage definition tie-order | 11 | 1,339 | 352 | 0.012843 | 1.0 |
+| Local-window definition tie-order | 15 | 1,335 | 348 | 0.017513 | 1.0 |
+
+Separately, on the U10 pilot cohort, the local-window replay produced 5 true positives, 535 false
+positives, 94 false negatives, and micro-F1 `0.015649`. It promoted four of the nine
+incumbent-winning gold relations into the top six and regressed zero candidate true-gold
+relations. That causal movement makes **definition-informed tie ordering in shared ranking code**
+the next U9 iteration target. It does not by itself reopen adoption: the negative-control error
+rate is unchanged, the pilot replay F1 remains lower than both pilot incumbents, and the
+full-corpus replay is not an incumbent comparison or an authoritative scored attempt. A clean
+checkpoint-bound corpus run must establish the authoritative delta before another comparison
+round. The analysis retained only aggregates and component names; row-level protected material is
+omitted.
+
 ## Verification boundary
 
 The comparison implementation inspected was `eval/folio_eval/comparison.py`, specifically
