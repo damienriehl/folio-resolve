@@ -50,7 +50,7 @@ from test_eval_splits import (  # sibling test module (pytest rootdir on sys.pat
     write_gold,
 )
 
-from folio_resolve import Concept, InMemoryOntology
+from folio_resolve import Concept, InMemoryOntology, MatchCandidate
 
 
 @dataclass
@@ -295,6 +295,30 @@ def test_ties_break_by_score_desc_then_iri_asc() -> None:
     assert [c.iri for c in ranked] == ["Mid", "Alpha", "Zeta"]
 
 
+def test_context_breaks_primary_score_ties_without_changing_calibration() -> None:
+    ranked = rank_candidates(
+        [
+            MatchCandidate(
+                iri="Alpha",
+                label="A",
+                score=100.0,
+                rank_tiebreak_score=0.2,
+            ),
+            MatchCandidate(
+                iri="Zulu",
+                label="Z",
+                score=100.0,
+                rank_tiebreak_score=0.8,
+            ),
+        ],
+        AnswerRuleConfig(),
+    )
+
+    assert [candidate.iri for candidate in ranked] == ["Zulu", "Alpha"]
+    assert [candidate.score for candidate in ranked] == [100.0, 100.0]
+    assert [candidate.probability for candidate in ranked] == [1.0, 1.0]
+
+
 def test_duplicate_iris_keep_the_best_score() -> None:
     ranked = rank_candidates(
         [
@@ -349,6 +373,22 @@ def test_adapter_passes_leaf_as_surface_term_and_ancestors_as_heading_terms() ->
     record = item("adapter", ("R-arb",), leaf="rules of arbitration")
     results = adapter(record)
     assert any(candidate.iri == "R-arb" for candidate in results)
+
+
+def test_adapter_passes_the_full_input_text_for_shared_context_ranking() -> None:
+    captured: dict[str, object] = {}
+
+    class CapturingPipeline:
+        def match(self, surface_term: str, **kwargs: object) -> list[MatchCandidate]:
+            captured["surface_term"] = surface_term
+            captured.update(kwargs)
+            return []
+
+    record = item("adapter-context", (), leaf="rules of arbitration")
+
+    PipelineAdapter(CapturingPipeline()).__call__(record)  # type: ignore[arg-type]
+
+    assert captured["full_text"] == record.input_text
 
 
 def test_build_pipeline_can_enable_multi_strategy_recall() -> None:

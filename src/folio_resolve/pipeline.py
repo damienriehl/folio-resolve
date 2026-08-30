@@ -30,6 +30,7 @@ from .gates import PlaceNameGate, ShortLabelGate
 from .judge import Judge, build_judge_prompt, parse_judge_json
 from .ontology import Concept, OntologyProvider
 from .recall import MultiStrategyRecall
+from .scoring import definition_context_score
 from .sources import SourceClassifier
 
 
@@ -43,6 +44,7 @@ class MatchCandidate:
     surface_term: str = ""
     gated: bool = False
     gate_reason: str = ""
+    rank_tiebreak_score: float = 0.0
 
     def as_probability(self, calibration: ScoreCalibration) -> float:
         return calibration.probability(self.score)
@@ -143,7 +145,12 @@ class MatchPipeline:
     # -- Stage 3: rank ----------------------------------------------------
 
     def _rank(
-        self, candidates: list[MatchCandidate], *, domains: list[str], heading_terms: set[str]
+        self,
+        candidates: list[MatchCandidate],
+        *,
+        domains: list[str],
+        heading_terms: set[str],
+        context_text: str | None = None,
     ) -> list[MatchCandidate]:
         survivors: dict[str, MatchCandidate] = {}
         for cand in candidates:
@@ -159,15 +166,35 @@ class MatchPipeline:
             )
             short = self.short_gate.evaluate(query=cand.surface_term, label=cand.label, score=place.score)
             cand.score = short.score
+            if context_text:
+                concept = self.ontology.get_concept(cand.iri)
+                cand.rank_tiebreak_score = definition_context_score(
+                    context_text,
+                    concept.definition if concept is not None else None,
+                    anchor=cand.surface_term,
+                )
             cand.gated = place.demoted or short.demoted
             cand.gate_reason = "; ".join(r for r in (place.reason, short.reason) if r)
             if cand.score < self.score_floor:
                 continue
-            # Keep the best-scoring candidate per IRI.
+            # Keep the strongest primary/secondary ranking evidence per IRI.
             existing = survivors.get(cand.iri)
-            if existing is None or cand.score > existing.score:
+            if existing is None or (
+                cand.score,
+                cand.rank_tiebreak_score,
+            ) > (
+                existing.score,
+                existing.rank_tiebreak_score,
+            ):
                 survivors[cand.iri] = cand
-        ranked = sorted(survivors.values(), key=lambda c: c.score, reverse=True)
+        ranked = sorted(
+            survivors.values(),
+            key=lambda candidate: (
+                -candidate.score,
+                -candidate.rank_tiebreak_score,
+                candidate.iri,
+            ),
+        )
         return ranked
 
     # -- Stage 4: judge ---------------------------------------------------
@@ -189,7 +216,14 @@ class MatchPipeline:
                 continue
             cand.score = j.adjusted_score
             out.append(cand)
-        return sorted(out, key=lambda c: c.score, reverse=True)
+        return sorted(
+            out,
+            key=lambda candidate: (
+                -candidate.score,
+                -candidate.rank_tiebreak_score,
+                candidate.iri,
+            ),
+        )
 
     # -- public API -------------------------------------------------------
 
@@ -211,7 +245,12 @@ class MatchPipeline:
         document_type = domain_prior.as_judge_context() if domain_prior else ""
 
         raw = self._filter(surface_term) + self._expand(surface_term)
-        ranked = self._rank(raw, domains=domains, heading_terms=heading_terms or set())
+        ranked = self._rank(
+            raw,
+            domains=domains,
+            heading_terms=heading_terms or set(),
+            context_text=full_text,
+        )
         if run_judge:
             ranked = self._judge(full_text or surface_term, ranked, document_type=document_type)
         return ranked

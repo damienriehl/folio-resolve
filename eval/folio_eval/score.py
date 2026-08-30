@@ -381,6 +381,7 @@ class PipelineAdapter:
         return self.pipeline.match(
             surface_term=item.leaf,
             heading_terms={part.lower() for part in item.ancestor_path},
+            full_text=item.input_text,
         )
 
 

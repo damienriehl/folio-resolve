@@ -8,10 +8,28 @@ from folio_resolve.scoring import (
     SEARCH_STOPWORDS,
     compute_relevance_score,
     content_words,
+    definition_context_score,
     generate_search_terms,
     tokenize,
     word_overlap,
 )
+
+
+def test_definition_context_score_prefers_the_definition_near_the_matched_anchor() -> None:
+    passage = (
+        "A maritime shipping vessel is discussed under Alpha Doctrine. "
+        + "neutral filler " * 80
+        + "The evidentiary burden controls under Zulu Doctrine."
+    )
+
+    relevant = definition_context_score(
+        passage, "evidentiary burden", anchor="Zulu Doctrine"
+    )
+    distant = definition_context_score(
+        passage, "maritime shipping vessel", anchor="Zulu Doctrine"
+    )
+
+    assert relevant > distant
 
 
 def test_word_order_invariant() -> None:

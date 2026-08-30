@@ -137,6 +137,30 @@ def test_only_the_best_scoring_candidate_per_iri_survives(ontology: InMemoryOnto
     assert [r.score for r in results] == sorted((r.score for r in results), reverse=True)
 
 
+def test_definition_context_breaks_equal_score_ties_without_mutating_primary_scores() -> None:
+    ontology = InMemoryOntology(
+        [
+            Concept(iri="R-alpha", label="Alpha", definition="maritime shipping vessel"),
+            Concept(iri="R-zulu", label="Zulu", definition="evidentiary burden"),
+        ]
+    )
+    candidates = [
+        MatchCandidate(iri="R-alpha", label="Alpha", score=100.0, surface_term="Doctrine"),
+        MatchCandidate(iri="R-zulu", label="Zulu", score=100.0, surface_term="Doctrine"),
+    ]
+
+    ranked = MatchPipeline(ontology=ontology)._rank(
+        candidates,
+        domains=[],
+        heading_terms=set(),
+        context_text="The evidentiary burden controls under this Doctrine.",
+    )
+
+    assert [candidate.iri for candidate in ranked] == ["R-zulu", "R-alpha"]
+    assert [candidate.score for candidate in ranked] == [100.0, 100.0]
+    assert ranked[0].rank_tiebreak_score > ranked[1].rank_tiebreak_score
+
+
 def test_the_score_floor_drops_weak_candidates(ontology: InMemoryOntology) -> None:
     lenient = MatchPipeline(ontology=ontology, score_floor=0.0).match("arbitration")
     strict = MatchPipeline(ontology=ontology, score_floor=95.0).match("arbitration")
@@ -169,6 +193,13 @@ def test_a_candidate_carries_its_calibrated_probability() -> None:
     cal = ScoreCalibration([(50.0, 0.2), (90.0, 0.9)])
     assert MatchCandidate(iri="R1", label="X", score=90.0).as_probability(cal) == 0.9
     assert MatchCandidate(iri="R1", label="X", score=50.0).as_probability(cal) == 0.2
+
+
+def test_the_secondary_rank_key_preserves_existing_positional_construction() -> None:
+    candidate = MatchCandidate("R1", "X", 90.0, "Litigation")
+
+    assert candidate.branch == "Litigation"
+    assert candidate.rank_tiebreak_score == 0.0
 
 
 def test_without_a_judge_the_ranked_candidates_pass_through(ontology: InMemoryOntology) -> None:

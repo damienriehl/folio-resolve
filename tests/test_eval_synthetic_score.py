@@ -9,7 +9,7 @@ from typing import cast
 
 import pytest
 from folio_eval import synthetic_score as synthetic_score_module
-from folio_eval.answer_rule import AnswerRuleConfig, commit_answers, load_config
+from folio_eval.answer_rule import AnswerRuleConfig, commit_answers, load_config, rank_candidates
 from folio_eval.leakcheck import ScryptParams, build_manifest
 from folio_eval.score import score_items
 from folio_eval.selftest import synthetic_scoring_payload
@@ -158,6 +158,35 @@ def test_adapter_committed_sets_repeat_identically() -> None:
     adapter = DocumentAdapter(_ontology())
     passage = "Arbitration Rules govern the burden of proof."
     assert commit_answers(adapter(passage), config) == commit_answers(adapter(passage), config)
+
+
+def test_adapter_uses_local_definition_context_to_break_exact_match_ties() -> None:
+    ontology = InMemoryOntology(
+        [
+            Concept(
+                iri="R-alpha",
+                label="Alpha Doctrine",
+                definition="maritime shipping vessel",
+            ),
+            Concept(
+                iri="R-zulu",
+                label="Zulu Doctrine",
+                definition="evidentiary burden",
+            ),
+        ]
+    )
+    passage = (
+        "Alpha Doctrine applies. "
+        + "neutral filler " * 80
+        + "The evidentiary burden controls under Zulu Doctrine."
+    )
+
+    adapted = DocumentAdapter(ontology).adapt(passage, segments=())
+    ranked = rank_candidates(adapted.candidates, AnswerRuleConfig(threshold=0.0, top_k=2))
+
+    assert [candidate.iri for candidate in ranked] == ["R-zulu", "R-alpha"]
+    assert [candidate.score for candidate in ranked] == [100.0, 100.0]
+    assert adapted.candidates[0].rank_tiebreak_score > adapted.candidates[1].rank_tiebreak_score
 
 
 def test_adapter_does_not_retain_candidates_for_identical_passage(
