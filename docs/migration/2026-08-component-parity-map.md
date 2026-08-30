@@ -87,13 +87,14 @@ The stage snapshots localize the lost true positives without identifying any pro
 
 ### Controlled replay
 
-A single-variable replay held the corpus, ontology, candidate pool, gates, primary scores,
-threshold, and `top_k = 6` constant. For primary-score ties only, it used ontology-definition word
-overlap from a bounded anchor-local window. Retrieval output, probability values, pre-ranking
-candidate eligibility, and the top-k setting were unchanged. Top-six membership changed only
-through ordering among equal primary scores.
+A retrospective full-corpus replay held the U8 full-corpus cohort, ontology, candidate pool,
+gates, primary scores, threshold, and `top_k = 6` constant. For primary-score ties only, it used
+ontology-definition word overlap from a bounded anchor-local window. Retrieval output,
+probability values, pre-ranking candidate eligibility, and the top-k setting were unchanged.
+Top-six membership changed only through ordering among equal primary scores.
 
-The table covers the full corpus replay: 225 scoreable items plus 30 no-match controls.
+The table covers that retrospective replay: 225 scoreable items plus 30 no-match controls. Its
+baseline is the U8 full-corpus baseline (`0.007005`), not the U10 pilot baseline.
 
 | Replay | TP | FP | FN | Micro-F1 | No-match FP rate |
 |---|---:|---:|---:|---:|---:|
@@ -101,15 +102,18 @@ The table covers the full corpus replay: 225 scoreable items plus 30 no-match co
 | Whole-passage definition tie-order | 11 | 1,339 | 352 | 0.012843 | 1.0 |
 | Local-window definition tie-order | 15 | 1,335 | 348 | 0.017513 | 1.0 |
 
-Separately, on the U10 pilot cohort, the local-window replay produced 5 true positives, 535 false
-positives, 94 false negatives, and micro-F1 `0.015649`. It promoted four of the nine
-incumbent-winning gold relations into the top six and regressed zero candidate true-gold
-relations. That causal movement makes **definition-informed tie ordering in shared ranking code**
-the next U9 iteration target. It does not by itself reopen adoption: the negative-control error
-rate is unchanged, the pilot replay F1 remains lower than both pilot incumbents, and the
-full-corpus replay is not an incumbent comparison or an authoritative scored attempt. A clean
-checkpoint-bound corpus run must establish the authoritative delta before another comparison
-round. The analysis retained only aggregates and component names; row-level protected material is
+Separately, a controlled replay within the U10 pilot cohort used its own candidate baseline: 1
+true positive, 359 false positives, 98 false negatives, and micro-F1 `0.004357`. On that same
+cohort, the local-window tie order produced 5 true positives, 535 false positives, 94 false
+negatives, and micro-F1 `0.015649`. It promoted four of the nine incumbent-winning gold relations
+into the top six and regressed zero candidate true-gold relations. This is within-cohort causal
+evidence only; it is not a full-corpus-to-pilot comparison. That causal movement makes
+**definition-informed tie ordering in shared ranking code** the next U9 iteration target. It does
+not by itself reopen adoption: the negative-control error rate is unchanged, the pilot replay F1
+remains lower than both pilot incumbents, and the full-corpus replay is not an incumbent comparison
+or an authoritative scored attempt. A clean checkpoint-bound corpus run must establish the
+authoritative delta before another comparison round. The analysis retained only aggregates and
+component names; row-level protected material is
 omitted.
 
 ## Verification boundary
