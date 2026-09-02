@@ -11,7 +11,6 @@ from folio_resolve import (
     MatchPipeline,
     PlaceNameGate,
     Reconciler,
-    decompose,
     load_seed_blocklist,
 )
 
@@ -120,46 +119,11 @@ def test_us_ri_02_place_name_traps_are_demoted(
 
 
 def test_us_ri_03_law_does_not_resolve_to_delaware(
-    readme_ontology: InMemoryOntology,
+    law_delaware_resolver: LabelResolver,
 ) -> None:
     """US-RI-03: resolver policy rejects law to Delaware and carries survivor metadata."""
-    delaware = readme_ontology.get_concept("R-delaware")
-    assert delaware is not None
-
-    def search(label: str) -> list[tuple[object, float]]:
-        if label == "law":
-            return [(delaware, 90.0)]
-        return list(readme_ontology.search_by_label(label))
-
-    resolver = LabelResolver(search_by_label=search)
-
-    assert resolver.resolve("law") == []
-    survivor = resolver.resolve("Arbitration Rules")
+    assert law_delaware_resolver.resolve("law") == []
+    survivor = law_delaware_resolver.resolve("Arbitration Rules")
     assert len(survivor) == 1
     assert survivor[0].branch == "Service"
     assert 0.0 <= survivor[0].score <= 100.0
-
-    proposed_heading = "Proposed Findings of Fact and Conclusions of Law"
-    proposed = resolver.resolve(proposed_heading)
-    assert {(item.iri, item.surface) for item in proposed} == {
-        ("R-findings", "Proposed Findings of Fact"),
-        ("R-conclusions", "Proposed Conclusions of Law"),
-    }
-
-    noisy_heading = "Findings of Fact and Conclusions of Law"
-    assert decompose(noisy_heading) == [
-        "Findings of Fact and Conclusions of Law",
-        "Findings of Fact Law",
-        "Conclusions of Law",
-    ]
-
-    pipeline = MatchPipeline(ontology=readme_ontology)
-    sibling_matches = pipeline.match(noisy_heading)
-    sibling_iris = {item.iri for item in sibling_matches if item.extraction_path == "decomposition"}
-    conclusions_iris = {item.iri for item in sibling_matches if "Conclusions of Law" in item.label}
-    noise_matches = pipeline.match("Findings of Fact Law")
-    noise_iris = {item.iri for item in noise_matches}
-
-    assert noise_iris <= sibling_iris
-    assert noise_iris.isdisjoint(conclusions_iris)
-    assert all(not item.gated for item in noise_matches)

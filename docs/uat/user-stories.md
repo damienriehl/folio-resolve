@@ -116,7 +116,10 @@ so that a reviewer can assess each proposed concept independently.
 **Acceptance criteria:**
 
 - An annotation exposes its concept tags and each tag's public confidence value.
-- Applying a public `TagVerdict` changes only the selected tag's observable review state.
+- A per-tag `TagVerdict` record is constructed through the public model, and the public
+  lifecycle operations (`promote`, `reject`, `restore`) change only the selected annotation's
+  observable state. (The library ships the verdict model, not an operation that attaches a
+  verdict to a tag; that remains a consumer-side step, see the report's follow-up note.)
 
 ### US-AA-02 — Reject and restore tags
 
@@ -169,9 +172,10 @@ so that offline operation remains useful.
 **Acceptance criteria:**
 
 - With no `Judge`, candidates pass through unchanged and the pipeline does not crash.
-- The zero-key result is deterministic across repeated calls.
-- The BYOK guide's consumer-side marking (`extraction_path = "unjudged"` on each pass-through
-  candidate) works on the returned candidates.
+- `match(..., run_judge=True)` returns exactly the same candidates as `run_judge=False`,
+  deterministically across two calls.
+- No returned candidate carries a `verdict` attribute; the absence tells consumers that no model
+  ran.
 
 ## Ontology and spec maintainer (OM)
 
@@ -207,7 +211,9 @@ remain explicit, so that scoring—not silent decomposition drift—filters it.
 
 - `decompose("Findings of Fact and Conclusions of Law")` returns exactly
   `["Findings of Fact and Conclusions of Law", "Findings of Fact Law", "Conclusions of Law"]`.
-- `Findings of Fact Law` resolves to no concept in the README ontology.
+- `Findings of Fact Law` reaches only a Findings-of-Fact concept already produced by the first
+  sibling, or reaches nothing.
+- It never reaches a Conclusions-of-Law concept and any noise candidate remains ungated.
 
 ## Public synthetic-eval operator (EO)
 

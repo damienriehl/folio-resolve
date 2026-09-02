@@ -128,9 +128,8 @@ def test_us_om_02_expand_a_genuine_shared_tail(
 
 def test_us_om_03_expose_the_documented_shared_tail_over_fire(
     readme_ontology: InMemoryOntology,
-    request: pytest.FixtureRequest,
 ) -> None:
-    """US-OM-03 pins the over-fire and gates the same check on the real ontology."""
+    """US-OM-03 pins the harmless, ungated Findings-of-Fact over-fire."""
     expected = [
         "Findings of Fact and Conclusions of Law",
         "Findings of Fact Law",
@@ -142,16 +141,27 @@ def test_us_om_03_expose_the_documented_shared_tail_over_fire(
 
     pipeline = MatchPipeline(ontology=readme_ontology)
     sibling_matches = pipeline.match(decomposed[0])
-    sibling_iris = {item.iri for item in sibling_matches if item.extraction_path == "decomposition"}
+    findings_iris = {item.iri for item in sibling_matches if "Findings of Fact" in item.label}
     conclusions_iris = {item.iri for item in sibling_matches if "Conclusions of Law" in item.label}
     noise_matches = pipeline.match("Findings of Fact Law")
     noise_iris = {item.iri for item in noise_matches}
 
-    assert noise_iris <= sibling_iris
+    assert noise_iris <= findings_iris
     assert noise_iris.isdisjoint(conclusions_iris)
     assert all(not item.gated for item in noise_matches)
 
-    real_ontology = request.getfixturevalue("real_ontology")
-    assert isinstance(real_ontology, OntologyProvider)
-    real_labels = real_ontology.all_labels()
-    assert set(real_labels) <= set(augment_labels(real_labels, on_missing_spacy="skip"))
+
+def test_us_om_03_real_ontology_preserves_the_harmless_over_fire(
+    real_ontology: OntologyProvider,
+) -> None:
+    """US-OM-03 checks the same subset, disjointness, and gating contract when opted in."""
+    pipeline = MatchPipeline(ontology=real_ontology)
+    sibling_matches = pipeline.match("Findings of Fact and Conclusions of Law")
+    findings_iris = {item.iri for item in sibling_matches if "Findings of Fact" in item.label}
+    conclusions_iris = {item.iri for item in sibling_matches if "Conclusions of Law" in item.label}
+    noise_matches = pipeline.match("Findings of Fact Law")
+    noise_iris = {item.iri for item in noise_matches}
+
+    assert noise_iris <= findings_iris
+    assert noise_iris.isdisjoint(conclusions_iris)
+    assert all(not item.gated for item in noise_matches)

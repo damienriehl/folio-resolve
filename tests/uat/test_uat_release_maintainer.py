@@ -1,16 +1,14 @@
 from __future__ import annotations
 
 import importlib.metadata
-import os
-import subprocess
-import sys
+from pathlib import Path
 
 from folio_resolve import __version__
 
-from .conftest import blocked_optional_imports
+from .conftest import audited_python_process, blocked_optional_imports
 
 
-def test_us_rm_01_core_import_and_quick_start_without_extras() -> None:
+def test_us_rm_01_core_import_and_quick_start_without_extras(tmp_path: Path) -> None:
     """US-RM-01 imports the public core and runs the README quick start without extras."""
     completed = blocked_optional_imports(
         """
@@ -26,7 +24,8 @@ matches = pipe.match("rules of arbitration")
 prior = DomainPrior.from_manifest_subjects("treatise", [("R-lit", "Litigation")])
 pipe.match("Defenses", domain_prior=prior)
 print(json.dumps({"label": matches[0].label, "version": folio_resolve.__version__}, sort_keys=True))
-"""
+""",
+        tmp_path,
     )
 
     assert completed.returncode == 0, completed.stderr
@@ -47,7 +46,7 @@ def test_us_rm_02_version_and_extras_are_independent(
     assert all(isinstance(available, bool) for available in extras_present.values())
 
 
-def _run_determinism_probe(seed: str) -> bytes:
+def _run_determinism_probe(seed: str, tmp_path: Path) -> str:
     source = """
 import json
 from folio_resolve import Concept, InMemoryOntology, MatchPipeline, generate_search_terms
@@ -67,20 +66,21 @@ payload = {
 }
 print(json.dumps(payload, separators=(",", ":"), sort_keys=True))
 """
-    completed = subprocess.run(
-        [sys.executable, "-c", source],
-        capture_output=True,
-        env={**os.environ, "PYTHONHASHSEED": seed},
-        check=False,
+    child = audited_python_process(
+        tmp_path,
+        f"release-determinism-{seed}",
+        source,
+        extra_env={"PYTHONHASHSEED": seed},
     )
-    assert completed.returncode == 0, completed.stderr.decode(errors="replace")
+    completed = child.run()
+    assert completed.returncode == 0, completed.stderr
     return completed.stdout
 
 
-def test_us_rm_03_public_output_is_hash_seed_deterministic() -> None:
+def test_us_rm_03_public_output_is_hash_seed_deterministic(tmp_path: Path) -> None:
     """US-RM-03 returns byte-identical, stably ordered public output across hash seeds."""
-    seed_zero = _run_determinism_probe("0")
-    seed_one = _run_determinism_probe("1")
+    seed_zero = _run_determinism_probe("0", tmp_path)
+    seed_one = _run_determinism_probe("1", tmp_path)
 
     assert seed_zero == seed_one
-    assert seed_zero.index(b"R-001") < seed_zero.index(b"R-002") < seed_zero.index(b"R-003")
+    assert seed_zero.index("R-001") < seed_zero.index("R-002") < seed_zero.index("R-003")

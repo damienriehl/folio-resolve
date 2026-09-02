@@ -1,14 +1,8 @@
 from __future__ import annotations
 
-import builtins
 import json
-import os
-from collections.abc import Callable, Iterator
-from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from types import SimpleNamespace
-from typing import Any, cast
 
 import pytest
 from folio_eval import synthetic_score as synthetic_score_module
@@ -22,7 +16,6 @@ from folio_eval.experiment import (
     start_attempt,
 )
 from folio_eval.leakcheck import Manifest, ScryptParams, build_manifest, scan_file
-from folio_eval.selftest import run_determinism_selftest
 from folio_eval.synthesize import SynthesisError, SyntheticItem, build_corpus, load_corpus
 from folio_eval.synthetic_checkpoint import CheckpointFingerprint, SyntheticCheckpointStore
 from folio_eval.synthetic_score import (
@@ -38,6 +31,8 @@ from folio_eval.synthetic_score import (
 )
 
 from folio_resolve import AliasBlocklist, Concept, InMemoryOntology, OntologyProvider
+
+from .conftest import audit_open_paths, audited_python_process
 
 
 @dataclass(frozen=True)
@@ -184,43 +179,11 @@ def _report(result: SyntheticScoreResult, inputs: _OperatorInputs) -> dict[str, 
     )
 
 
-@contextmanager
-def _audit_open_paths(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[list[Path]]:
-    opened: list[Path] = []
-    original_open = cast(Callable[..., Any], builtins.open)
-    original_path_open = cast(Callable[..., Any], Path.open)
-
-    def record(file: object) -> None:
-        if isinstance(file, (str, os.PathLike)):
-            opened.append(Path(file).resolve())
-
-    def audited_open(file: object, *args: object, **kwargs: object) -> Any:
-        record(file)
-        return original_open(file, *args, **kwargs)
-
-    def audited_path_open(path: Path, *args: object, **kwargs: object) -> Any:
-        record(path)
-        return original_path_open(path, *args, **kwargs)
-
-    with monkeypatch.context() as patch:
-        patch.setattr(builtins, "open", audited_open)
-        patch.setattr(Path, "open", audited_path_open)
-        yield opened
-
-    schema_root = (Path(__file__).resolve().parents[2] / "eval" / "synthetic").resolve()
-    disallowed = [
-        path
-        for path in opened
-        if not path.is_relative_to(tmp_path.resolve()) and not path.is_relative_to(schema_root)
-    ]
-    assert not disallowed, f"operator opened paths outside its public sandbox: {disallowed}"
-
-
 def test_us_eo_01_versioned_cohort_fails_closed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """US-EO-01 verifies versioned local slices and fails closed on a changed hash."""
-    with _audit_open_paths(monkeypatch, tmp_path):
+    with audit_open_paths(monkeypatch, tmp_path):
         inputs = _operator_inputs(tmp_path)
         loaded = load_corpus(inputs.corpus_manifest)
 
@@ -245,7 +208,7 @@ def test_us_eo_02_shards_finalize_to_identical_report(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """US-EO-02 scores only eligible rows and makes sharded output byte-identical."""
-    with _audit_open_paths(monkeypatch, tmp_path):
+    with audit_open_paths(monkeypatch, tmp_path):
         inputs = _operator_inputs(tmp_path)
         corpus = load_corpus(inputs.corpus_manifest)
         direct_adapter = synthetic_score_module.DocumentAdapter(
@@ -310,7 +273,7 @@ def test_us_eo_03_leak_check_and_experiment_are_local(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """US-EO-03 detects report collisions and completes a local experiment record."""
-    with _audit_open_paths(monkeypatch, tmp_path):
+    with audit_open_paths(monkeypatch, tmp_path):
         inputs = _operator_inputs(tmp_path)
         collision_report = tmp_path / "collision-report.json"
         collision_report.write_text(
@@ -362,11 +325,27 @@ def test_us_eo_03_leak_check_and_experiment_are_local(
         assert loaded_record.decision == "keep"
         assert not pending_path.exists()
 
-    first = run_determinism_selftest(timeout=20.0)
-    second = run_determinism_selftest(timeout=20.0)
-    assert first.deterministic is True
-    assert second.deterministic is True
-    assert first.first_sha256 == second.first_sha256
+    eval_root = Path(__file__).resolve().parents[2] / "eval"
+    source = f"""
+import sys
+sys.path.insert(0, {str(eval_root)!r})
+from folio_eval.selftest import DEFAULT_SELFTEST_TARGET, payload_sha256
+
+print(payload_sha256(DEFAULT_SELFTEST_TARGET))
+"""
+    outputs: list[str] = []
+    for seed in ("0", "1"):
+        child = audited_python_process(
+            tmp_path,
+            f"operator-determinism-{seed}",
+            source,
+            extra_env={"PYTHONHASHSEED": seed},
+        )
+        completed = child.run(timeout=20.0)
+        assert completed.returncode == 0, completed.stderr
+        outputs.append(completed.stdout.strip())
+
+    assert outputs[0] == outputs[1]
 
 
 def test_us_eo_02_cli_real_ontology_runs_one_shard(
@@ -375,54 +354,69 @@ def test_us_eo_02_cli_real_ontology_runs_one_shard(
     real_ontology: OntologyProvider,
 ) -> None:
     """US-EO-02 CLI scenario requires the real-ontology opt-in and runs one shard."""
-    schema_root = Path(__file__).resolve().parents[2] / "eval" / "synthetic"
-    config_path = schema_root / "answer_rule_config_synthetic_v1.json"
-    metadata_path = schema_root / "public_report_metadata_v1.json"
-    config = load_config(config_path)
-    inputs = _operator_inputs(tmp_path, config)
-    fingerprint = _fingerprint(inputs)
+    assert isinstance(real_ontology, OntologyProvider)
+    repo_root = Path(__file__).resolve().parents[2]
+    eval_root = repo_root / "eval"
+    schema_root = eval_root / "synthetic"
+    with audit_open_paths(monkeypatch, tmp_path, allowed_roots=(schema_root,)):
+        config_path = schema_root / "answer_rule_config_synthetic_v1.json"
+        metadata_path = schema_root / "public_report_metadata_v1.json"
+        config = load_config(config_path)
+        inputs = _operator_inputs(tmp_path, config)
+        fingerprint = _fingerprint(inputs)
 
-    monkeypatch.setattr(synthetic_score_module, "ensure_hash_seed", lambda: None)
-    monkeypatch.setattr(
-        synthetic_score_module,
-        "assert_ontology_pin",
-        lambda _sha: SimpleNamespace(sha256="c" * 64),
-    )
-    monkeypatch.setattr(synthetic_score_module, "load_manifest", lambda _path: inputs.leak_manifest)
-    monkeypatch.setattr(
-        synthetic_score_module,
-        "build_checkpoint_fingerprint",
-        lambda _corpus, _config, repo_root: fingerprint,
-    )
+    cli_args = [
+        "--corpus-manifest",
+        str(inputs.corpus_manifest),
+        "--config",
+        str(config_path),
+        "--out",
+        str(tmp_path / "cli-report.json"),
+        "--leak-manifest",
+        str(inputs.leak_manifest_path),
+        "--salt-file",
+        str(inputs.salt_path),
+        "--public-metadata",
+        str(metadata_path),
+        "--checkpoint-dir",
+        str(tmp_path / "cli-checkpoint"),
+        "--shard-count",
+        "1",
+        "--shard-index",
+        "0",
+    ]
+    source = f"""
+import sys
+from types import SimpleNamespace
 
-    provider = real_ontology
-    monkeypatch.setattr(
-        synthetic_score_module,
-        "FolioPythonProvider",
-        lambda _folio=None: provider,
-    )
-    result = synthetic_score_module.main(
-        [
-            "--corpus-manifest",
-            str(inputs.corpus_manifest),
-            "--config",
-            str(config_path),
-            "--out",
-            str(tmp_path / "cli-report.json"),
-            "--leak-manifest",
-            str(inputs.leak_manifest_path),
-            "--salt-file",
-            str(inputs.salt_path),
-            "--public-metadata",
-            str(metadata_path),
-            "--checkpoint-dir",
-            str(tmp_path / "cli-checkpoint"),
-            "--shard-count",
-            "1",
-            "--shard-index",
-            "0",
-        ]
-    )
+sys.path.insert(0, {str(eval_root)!r})
+from folio_eval import synthetic_score as synthetic_score_module
+from folio_eval.synthetic_checkpoint import CheckpointFingerprint
+from folio_eval.selftest import SelfTestResult
 
-    assert result == 0
+fingerprint = CheckpointFingerprint(**{fingerprint.to_json()!r})
+synthetic_score_module.assert_ontology_pin = lambda _sha: SimpleNamespace(sha256={"c" * 64!r})
+synthetic_score_module.build_checkpoint_fingerprint = (
+    lambda _corpus, _config, repo_root: fingerprint
+)
+selftest = SelfTestResult(
+    target="folio_eval.selftest:synthetic_scoring_payload",
+    first_sha256="a" * 64,
+    second_sha256="a" * 64,
+    first_seed="0",
+    second_seed="1",
+)
+synthetic_score_module.run_determinism_selftest = lambda: selftest
+raise SystemExit(synthetic_score_module.main({cli_args!r}))
+"""
+    child = audited_python_process(
+        tmp_path,
+        "real-ontology-cli",
+        source,
+        allowed_roots=(schema_root,),
+        extra_env={"PYTHONHASHSEED": "0", "FOLIO_RESOLVE_UAT_REAL_ONTOLOGY": "1"},
+    )
+    completed = child.run(timeout=120.0)
+
+    assert completed.returncode == 0, completed.stderr
     assert (tmp_path / "cli-report.json").is_file()

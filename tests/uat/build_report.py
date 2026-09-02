@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import os
 import platform
 import re
 import shlex
 import subprocess
 import sys
 import xml.etree.ElementTree as ET
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -23,11 +24,19 @@ _STORY_HEADING = re.compile(r"^###\s+(US-([A-Z]{2})-\d{2})\b", re.MULTILINE)
 _STORY_NAME = re.compile(r"(?:test_)?us_([a-z]{2})_(\d{2})(?:_|$)", re.IGNORECASE)
 _STORY_TEXT = re.compile(r"\bUS-([A-Z]{2})-(\d{2})\b", re.IGNORECASE)
 _CLASSIFIED_REASON = re.compile(
-    r"^(library defect|documentation drift|test defect):\s+(.+)$",
-    re.IGNORECASE,
+    r"^(library defect|documentation drift|test defect): (\S(?:.*\S)?)$",
 )
+_LINK_TARGET = re.compile(r"(?:https?://\S+|(?:\.?\.?/)?(?:[^/\s]+/)+[^/\s]+)$")
 _REASON_LIMIT = 120
 _VERDICT_PRIORITY = {"untested": 0, "skip": 1, "pass": 2, "fail (classified)": 3, "fail": 4}
+_METADATA_PROPERTIES = (
+    "python_version",
+    "extras_folio",
+    "extras_spacy",
+    "extras_embedding",
+    "real_ontology_enabled",
+    "commit",
+)
 
 
 @dataclass(frozen=True)
@@ -36,6 +45,15 @@ class TestResult:
     story_id: str | None
     verdict: str
     reason: str
+
+
+@dataclass(frozen=True)
+class ReportMetadata:
+    python_version: str
+    extras: Mapping[str, str]
+    real_ontology_enabled: str
+    commit: str
+    source: str
 
 
 def _story_catalog(path: Path) -> list[tuple[str, str]]:
@@ -89,6 +107,20 @@ def _truncate_reason(reason: str) -> str:
     return compact.replace("|", "\\|")
 
 
+def _classified_skip_reason(case: ET.Element) -> str | None:
+    skipped = case.find("skipped")
+    if skipped is None or skipped.get("type") != "pytest.xfail":
+        return None
+    match = _CLASSIFIED_REASON.fullmatch(skipped.get("message") or "")
+    if match is None:
+        return None
+    classification, target = match.groups()
+    rendered_target = target.replace("|", "\\|")
+    if _LINK_TARGET.fullmatch(target):
+        rendered_target = f"[{rendered_target}]({target})"
+    return f"{classification}: {rendered_target}"
+
+
 def _results(path: Path) -> list[TestResult]:
     outcomes = parse_junitxml(path)
     root = ET.parse(path).getroot()
@@ -103,14 +135,18 @@ def _results(path: Path) -> list[TestResult]:
             "skipped": "skip",
         }.get(raw_verdict, "fail")
         reason = _case_reason(case)
-        if verdict == "skip" and _CLASSIFIED_REASON.match(" ".join(reason.split())):
+        classified_reason = _classified_skip_reason(case) if verdict == "skip" else None
+        if classified_reason is not None:
             verdict = "fail (classified)"
+            reason = classified_reason
+        else:
+            reason = _truncate_reason(reason)
         results.append(
             TestResult(
                 nodeid=nodeid,
                 story_id=_property_story_id(case) or _name_story_id(case),
                 verdict=verdict,
-                reason=_truncate_reason(reason),
+                reason=reason,
             )
         )
     return results
@@ -121,8 +157,11 @@ def _story_result(story_id: str, results: Sequence[TestResult]) -> tuple[str, st
     if not matching:
         return "untested", ""
     selected = max(matching, key=lambda result: _VERDICT_PRIORITY[result.verdict])
-    reasons = [result.reason for result in matching if result.reason]
-    return selected.verdict, _truncate_reason("; ".join(reasons))
+    reasons = list(dict.fromkeys(result.reason for result in matching if result.reason))
+    combined = "; ".join(reasons)
+    if any(result.verdict == "fail (classified)" for result in matching):
+        return selected.verdict, combined
+    return selected.verdict, _truncate_reason(combined)
 
 
 def _extras_present() -> dict[str, bool]:
@@ -154,13 +193,79 @@ def _commit() -> str:
     return completed.stdout.strip() if completed.returncode == 0 else "unknown"
 
 
+def _testsuite_properties(path: Path) -> dict[str, str]:
+    root = ET.parse(path).getroot()
+    suites = [root] if root.tag == "testsuite" else list(root.iter("testsuite"))
+    properties: dict[str, str] = {}
+    for suite in suites:
+        for prop in suite.findall("./properties/property"):
+            name = prop.get("name")
+            value = prop.get("value")
+            if name in _METADATA_PROPERTIES and value is not None:
+                properties.setdefault(name, value)
+    return properties
+
+
+def _metadata(path: Path) -> ReportMetadata:
+    properties = _testsuite_properties(path)
+    missing = [name for name in _METADATA_PROPERTIES if name not in properties]
+    fallback: dict[str, str] = {}
+    if "python_version" in missing:
+        fallback["python_version"] = platform.python_version()
+    missing_extras = [name for name in missing if name.startswith("extras_")]
+    if missing_extras:
+        detected_extras = _extras_present()
+        for name in missing_extras:
+            fallback[name] = str(detected_extras[name.removeprefix("extras_")]).lower()
+    if "real_ontology_enabled" in missing:
+        fallback["real_ontology_enabled"] = str(
+            os.environ.get("FOLIO_RESOLVE_UAT_REAL_ONTOLOGY") == "1"
+        ).lower()
+    if "commit" in missing:
+        fallback["commit"] = _commit()
+    values = {
+        name: properties[name] if name in properties else fallback[name]
+        for name in _METADATA_PROPERTIES
+    }
+    if not properties:
+        source = "report-interpreter fallback (JUnit properties absent)"
+    elif missing:
+        source = "JUnit testsuite properties; report-interpreter fallback for " + ", ".join(missing)
+    else:
+        source = "JUnit testsuite properties"
+    return ReportMetadata(
+        python_version=values["python_version"],
+        extras={
+            "folio": values["extras_folio"],
+            "spacy": values["extras_spacy"],
+            "embedding": values["extras_embedding"],
+        },
+        real_ontology_enabled=values["real_ontology_enabled"],
+        commit=values["commit"],
+        source=source,
+    )
+
+
 def _rerun_commands(
     junit: Path,
     stories: Path,
     output: Path,
-    core_junit: Path | None,
+    core_junit: Path,
 ) -> list[str]:
-    pytest_command = [
+    core_command = [
+        "uv",
+        "run",
+        "--isolated",
+        "--extra",
+        "dev",
+        "pytest",
+        "tests/uat",
+        "-m",
+        "uat",
+        f"--junitxml={core_junit}",
+    ]
+    extras_command = [
+        "FOLIO_RESOLVE_UAT_REAL_ONTOLOGY=1",
         ".venv/bin/python",
         "-m",
         "pytest",
@@ -178,10 +283,10 @@ def _rerun_commands(
         str(stories),
         "--out",
         str(output),
+        "--core-junit",
+        str(core_junit),
     ]
-    if core_junit is not None:
-        report_command.extend(["--core-junit", str(core_junit)])
-    return [shlex.join(pytest_command), shlex.join(report_command)]
+    return [shlex.join(core_command), shlex.join(extras_command), shlex.join(report_command)]
 
 
 def build_markdown(
@@ -189,20 +294,22 @@ def build_markdown(
     junit: Path,
     stories_path: Path,
     output: Path,
-    core_junit: Path | None = None,
+    core_junit: Path,
 ) -> str:
     stories = _story_catalog(stories_path)
     results = _results(junit)
-    core_results = _results(core_junit) if core_junit is not None else []
-    extras = _extras_present()
+    core_results = _results(core_junit)
+    metadata = _metadata(junit)
 
     lines = [
         "# User acceptance test report",
         "",
-        f"- Commit: `{_commit()}`",
-        f"- Python: `{platform.python_version()}`",
+        f"- Commit: `{metadata.commit}`",
+        f"- Python: `{metadata.python_version}`",
         "- Extras present: "
-        + ", ".join(f"`{name}={str(value).lower()}`" for name, value in extras.items()),
+        + ", ".join(f"`{name}={value}`" for name, value in metadata.extras.items()),
+        f"- Real ontology enabled: `{metadata.real_ontology_enabled}`",
+        f"- Metadata source: {metadata.source}.",
         "",
         "## Rerun commands",
         "",
@@ -220,11 +327,19 @@ def build_markdown(
         ]
     )
 
-    summary = {"pass": 0, "fail": 0, "skip": 0, "untested": 0}
+    summaries = {
+        "extras": {"pass": 0, "fail": 0, "skip": 0},
+        "core": {"pass": 0, "fail": 0, "skip": 0},
+    }
     for story_id, persona in stories:
         verdict, reason = _story_result(story_id, results)
-        core_verdict = _story_result(story_id, core_results)[0] if core_junit is not None else ""
-        summary["fail" if verdict.startswith("fail") else verdict] += 1
+        core_verdict, core_reason = _story_result(story_id, core_results)
+        for lane, lane_verdict in (("extras", verdict), ("core", core_verdict)):
+            summary_key = "fail" if lane_verdict.startswith("fail") else lane_verdict
+            if summary_key in summaries[lane]:
+                summaries[lane][summary_key] += 1
+        if core_verdict != verdict and core_reason:
+            reason = "; ".join(part for part in (reason, f"core: {core_reason}") if part)
         lines.append(f"| {story_id} | {persona} | {verdict} | {core_verdict} | {reason} |")
 
     unmapped = [result for result in [*results, *core_results] if result.story_id is None]
@@ -240,12 +355,27 @@ def build_markdown(
     else:
         lines.append("- None.")
 
+    harness_failures = sum(result.verdict.startswith("fail") for result in unmapped)
     lines.extend(
         [
             "",
             "## Summary",
             "",
-            ", ".join(f"{name}: {count}" for name, count in summary.items()),
+            ", ".join(
+                [
+                    "extras: "
+                    + " ".join(
+                        f"{verdict} {summaries['extras'][verdict]}"
+                        for verdict in ("pass", "fail", "skip")
+                    ),
+                    "core: "
+                    + " ".join(
+                        f"{verdict} {summaries['core'][verdict]}"
+                        for verdict in ("pass", "fail", "skip")
+                    ),
+                    f"harness failures: {harness_failures}",
+                ]
+            ),
             "",
         ]
     )
@@ -257,7 +387,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--junit", required=True, type=Path)
     parser.add_argument("--stories", required=True, type=Path)
     parser.add_argument("--out", required=True, type=Path)
-    parser.add_argument("--core-junit", type=Path)
+    parser.add_argument("--core-junit", required=True, type=Path)
     return parser
 
 

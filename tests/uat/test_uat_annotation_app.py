@@ -8,16 +8,15 @@ from folio_resolve.annotate import (
     FeedbackEntry,
     FeedbackStore,
     Span,
-    TagVerdict,
-    Verdict,
+    promote,
     reject,
     render_segments,
     restore,
 )
 
 
-def test_us_aa_01_review_confidence_and_verdicts() -> None:
-    """US-AA-01 records confidence and a verdict for one selected concept tag."""
+def test_us_aa_01_review_confidence_and_public_selection() -> None:
+    """US-AA-01 exposes confidence and promotes one selected concept through the public API."""
     arbitration = ConceptTag(
         iri="R-arbitration-rules",
         label="Arbitration Rules",
@@ -35,23 +34,19 @@ def test_us_aa_01_review_confidence_and_verdicts() -> None:
         concepts=[arbitration, defenses],
     )
 
-    selected_verdict = TagVerdict(
-        unit_id=annotation.id,
-        tag_iri=defenses.iri,
-        tag_label=defenses.label,
-        match_score=defenses.match_score,
-        verdict=Verdict.WEAK,
-        note="Related, but not the concept named by this span.",
-    )
-    verdicts_by_tag = {selected_verdict.tag_iri: selected_verdict}
-
     assert [(tag.iri, tag.confidence) for tag in annotation.concepts] == [
         ("R-arbitration-rules", 0.99),
         ("R-litigation-defenses", 0.88),
     ]
-    assert verdicts_by_tag[defenses.iri].verdict == Verdict.WEAK
-    assert arbitration.iri not in verdicts_by_tag
-    assert annotation.concepts[0] == arbitration
+
+    returned = promote(annotation, 1)
+
+    assert returned is annotation
+    assert annotation.state == "confirmed"
+    assert annotation.primary_iri == defenses.iri
+    assert annotation.concepts == [defenses, arbitration]
+    assert annotation.lineage[-1].action == "user_promotion"
+    assert annotation.lineage[-1].detail == f"promoted {defenses.iri}"
 
 
 def test_us_aa_02_reject_and_restore_tags(tmp_path: Path) -> None:
