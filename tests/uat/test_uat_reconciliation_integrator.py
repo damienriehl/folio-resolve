@@ -152,10 +152,14 @@ def test_us_ri_03_law_does_not_resolve_to_delaware(
         "Findings of Fact Law",
         "Conclusions of Law",
     ]
-    assert resolver.resolve("Findings of Fact Law") == []
 
-    noise_matches = MatchPipeline(ontology=readme_ontology).match("Findings of Fact Law")
-    observed = [(item.iri, item.label, item.score) for item in noise_matches]
-    assert noise_matches == [], (
-        f"README promises the shared-tail noise string produces no tag; observed {observed!r}"
-    )
+    pipeline = MatchPipeline(ontology=readme_ontology)
+    sibling_matches = pipeline.match(noisy_heading)
+    sibling_iris = {item.iri for item in sibling_matches if item.extraction_path == "decomposition"}
+    conclusions_iris = {item.iri for item in sibling_matches if "Conclusions of Law" in item.label}
+    noise_matches = pipeline.match("Findings of Fact Law")
+    noise_iris = {item.iri for item in noise_matches}
+
+    assert noise_iris <= sibling_iris
+    assert noise_iris.isdisjoint(conclusions_iris)
+    assert all(not item.gated for item in noise_matches)

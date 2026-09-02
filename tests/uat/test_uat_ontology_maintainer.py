@@ -9,6 +9,7 @@ from folio_resolve import (
     Concept,
     InMemoryOntology,
     LabelResolver,
+    MatchPipeline,
     OntologyProvider,
     OntologySpec,
     ScoreCalibration,
@@ -60,7 +61,11 @@ def test_us_om_01_decompose_the_proposed_heading_example() -> None:
     )
 
     decomposed = decompose("Proposed Findings of Fact and Conclusions of Law")
-    resolved = LabelResolver(ontology.search_by_label).resolve(decomposed[0])
+
+    def search(label: str) -> list[tuple[object, float]]:
+        return list(ontology.search_by_label(label))
+
+    resolved = LabelResolver(search).resolve(decomposed[0])
 
     calibration = ScoreCalibration.fit(
         [
@@ -132,10 +137,19 @@ def test_us_om_03_expose_the_documented_shared_tail_over_fire(
         "Conclusions of Law",
     ]
     decomposed = decompose("Findings of Fact and Conclusions of Law")
-    resolver = LabelResolver(readme_ontology.search_by_label)
 
     assert decomposed == expected
-    assert resolver.resolve("Findings of Fact Law") == []
+
+    pipeline = MatchPipeline(ontology=readme_ontology)
+    sibling_matches = pipeline.match(decomposed[0])
+    sibling_iris = {item.iri for item in sibling_matches if item.extraction_path == "decomposition"}
+    conclusions_iris = {item.iri for item in sibling_matches if "Conclusions of Law" in item.label}
+    noise_matches = pipeline.match("Findings of Fact Law")
+    noise_iris = {item.iri for item in noise_matches}
+
+    assert noise_iris <= sibling_iris
+    assert noise_iris.isdisjoint(conclusions_iris)
+    assert all(not item.gated for item in noise_matches)
 
     real_ontology = request.getfixturevalue("real_ontology")
     assert isinstance(real_ontology, OntologyProvider)

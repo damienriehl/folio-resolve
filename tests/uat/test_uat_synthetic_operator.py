@@ -3,12 +3,12 @@ from __future__ import annotations
 import builtins
 import json
 import os
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from folio_eval import synthetic_score as synthetic_score_module
@@ -187,8 +187,8 @@ def _report(result: SyntheticScoreResult, inputs: _OperatorInputs) -> dict[str, 
 @contextmanager
 def _audit_open_paths(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[list[Path]]:
     opened: list[Path] = []
-    original_open = builtins.open
-    original_path_open = Path.open
+    original_open = cast(Callable[..., Any], builtins.open)
+    original_path_open = cast(Callable[..., Any], Path.open)
 
     def record(file: object) -> None:
         if isinstance(file, (str, os.PathLike)):

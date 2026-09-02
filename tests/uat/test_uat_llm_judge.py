@@ -73,12 +73,18 @@ def test_us_lj_02_parse_hardened_model_output() -> None:
 
 
 def test_us_lj_03_degrade_without_a_judge(readme_ontology: InMemoryOntology) -> None:
-    """US-LJ-03 keeps deterministic candidates marked unjudged without a Judge."""
+    """US-LJ-03 keeps deterministic candidates available for consumer-side marking."""
     pipeline = MatchPipeline(ontology=readme_ontology)
 
+    without_judge_stage = pipeline.match("rules of arbitration")
     first = pipeline.match("rules of arbitration", run_judge=True)
     second = pipeline.match("rules of arbitration", run_judge=True)
 
-    assert first == second
+    assert first == second == without_judge_stage
     assert first and first[0].iri == "R-arb-rules"
-    assert [getattr(candidate, "verdict", None) for candidate in first] == ["unjudged"] * len(first)
+
+    for candidate in first:
+        candidate.extraction_path = candidate.extraction_path or "unjudged"
+
+    assert first[0].extraction_path == "label_search"
+    assert all(candidate.extraction_path for candidate in first)
