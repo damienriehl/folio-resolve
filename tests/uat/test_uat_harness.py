@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import platform
+import sys
+import sysconfig
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -35,6 +38,60 @@ def test_real_ontology_propagates_installed_package_import_failures(
 
     with pytest.raises(ImportError, match="transitive folio dependency failed"):
         uat_conftest.load_real_ontology()
+
+
+def test_real_ontology_audit_roots_require_opt_in_and_use_folio_defaults(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    cache_dir = tmp_path / "folio-cache-root" / "cache"
+    config_path = tmp_path / "folio-config-root" / "config.json"
+    folio_modules = {
+        "folio.graph": SimpleNamespace(DEFAULT_CACHE_DIR=cache_dir),
+        "folio.config": SimpleNamespace(DEFAULT_CONFIG_PATH=config_path),
+    }
+    folio_available = False
+
+    def find_folio(_module: str) -> object | None:
+        return object() if folio_available else None
+
+    monkeypatch.setattr("uat.conftest.importlib.util.find_spec", find_folio)
+    monkeypatch.setattr(
+        "uat.conftest.importlib.import_module",
+        lambda module: folio_modules[module],
+    )
+
+    monkeypatch.delenv("FOLIO_RESOLVE_UAT_REAL_ONTOLOGY", raising=False)
+    assert uat_conftest.real_ontology_audit_roots() == ()
+
+    monkeypatch.setenv("FOLIO_RESOLVE_UAT_REAL_ONTOLOGY", "1")
+    assert uat_conftest.real_ontology_audit_roots() == ()
+
+    folio_available = True
+    assert uat_conftest.real_ontology_audit_roots() == (
+        cache_dir.parent.resolve(),
+        config_path.parent.resolve(),
+    )
+
+
+def test_audit_categories_allow_runtime_and_repo_but_protect_eval_data(
+    tmp_path: Path,
+) -> None:
+    purelib = Path(sysconfig.get_paths()["purelib"]).resolve()
+    assert purelib.is_relative_to(Path(sys.prefix).resolve())
+    observed = [
+        purelib / "example_package" / "__init__.py",
+        uat_conftest._REPO_ROOT / "tests" / "uat" / "conftest.py",
+        uat_conftest._REPO_ROOT / "eval" / "data" / "x",
+        Path.home() / "Documents" / "x",
+    ]
+
+    assert uat_conftest._audit_categories(
+        observed,
+        tmp_path=tmp_path,
+        home_root=Path.home(),
+        allowed_roots=uat_conftest._resolved_audit_roots(()),
+    ) == {"eval-data": 1, "home": 1}
 
 
 def test_blocked_optional_imports_keeps_the_public_core_importable(tmp_path: Path) -> None:

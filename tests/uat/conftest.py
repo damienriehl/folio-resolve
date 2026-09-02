@@ -8,6 +8,7 @@ import os
 import re
 import subprocess
 import sys
+import sysconfig
 from collections import Counter
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from contextlib import contextmanager
@@ -27,9 +28,26 @@ from folio_resolve import (
 )
 
 UAT_ROOT = Path(__file__).resolve().parent
-_REPO_ROOT = UAT_ROOT.parents[1]
+
+
+def _repository_root() -> Path:
+    completed = subprocess.run(
+        ["git", "rev-parse", "--show-toplevel"],
+        cwd=UAT_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if completed.returncode == 0 and completed.stdout.strip():
+        return Path(completed.stdout.strip()).resolve()
+    return Path(__file__).resolve().parents[2]
+
+
+_REPO_ROOT = _repository_root()
 PROTECTED_ROOTS = ("eval/data/", "eval/reports/")
 _REAL_ONTOLOGY_SKIP_REASON = "requires the folio extra and FOLIO_RESOLVE_UAT_REAL_ONTOLOGY=1"
+_AUDIT_ALLOWED_ROOTS_ENV = "FOLIO_RESOLVE_UAT_AUDIT_ALLOWED_ROOTS"
+_AUDIT_PROTECTED_ROOTS_ENV = "FOLIO_RESOLVE_UAT_AUDIT_PROTECTED_ROOTS"
 
 _STORY_NAME = re.compile(r"(?:test_)?us_([a-z]{2})_(\d{2})(?:_|$)", re.IGNORECASE)
 _STORY_TEXT = re.compile(r"\bUS-([A-Z]{2})-(\d{2})\b", re.IGNORECASE)
@@ -166,6 +184,48 @@ def load_real_ontology() -> OntologyProvider:
     return FolioPythonProvider()
 
 
+def real_ontology_audit_roots() -> tuple[Path, ...]:
+    if os.environ.get("FOLIO_RESOLVE_UAT_REAL_ONTOLOGY") != "1":
+        return ()
+    if not _module_available("folio"):
+        return ()
+
+    folio_graph = importlib.import_module("folio.graph")
+    folio_config = importlib.import_module("folio.config")
+    return (
+        Path(folio_graph.DEFAULT_CACHE_DIR).expanduser().resolve().parent,
+        Path(folio_config.DEFAULT_CONFIG_PATH).expanduser().resolve().parent,
+    )
+
+
+def _interpreter_audit_roots() -> tuple[Path, ...]:
+    install_paths = sysconfig.get_paths()
+    return tuple(
+        Path(path).expanduser().resolve()
+        for path in (
+            sys.prefix,
+            sys.base_prefix,
+            install_paths["purelib"],
+            install_paths["platlib"],
+            install_paths["stdlib"],
+        )
+    )
+
+
+def _resolved_audit_roots(allowed_roots: Iterable[Path]) -> tuple[Path, ...]:
+    resolved: list[Path] = []
+    for root in (
+        *allowed_roots,
+        *_interpreter_audit_roots(),
+        _REPO_ROOT,
+        *real_ontology_audit_roots(),
+    ):
+        path = root.expanduser().resolve()
+        if path not in resolved:
+            resolved.append(path)
+    return tuple(resolved)
+
+
 @pytest.fixture(scope="session")
 def real_ontology() -> OntologyProvider:
     return load_real_ontology()
@@ -185,10 +245,10 @@ def _audit_categories(
     counts: Counter[str] = Counter()
     for observed in paths:
         path = observed.resolve()
-        if path.is_relative_to(tmp_root) or any(path.is_relative_to(root) for root in allowed):
-            continue
         if any(path.is_relative_to(root) for root in protected):
             counts["eval-data"] += 1
+        elif path.is_relative_to(tmp_root) or any(path.is_relative_to(root) for root in allowed):
+            continue
         elif path.is_relative_to(home_root):
             counts["home"] += 1
         else:
@@ -207,7 +267,7 @@ def assert_public_path_audit(
         paths,
         tmp_path=tmp_path,
         home_root=home_root,
-        allowed_roots=allowed_roots,
+        allowed_roots=_resolved_audit_roots(allowed_roots),
     )
     assert not counts, _audit_failure_message(counts)
 
@@ -313,6 +373,7 @@ def audited_python_process(
     allowed_roots: Iterable[Path] = (),
     extra_env: Mapping[str, str] | None = None,
 ) -> AuditedPythonProcess:
+    resolved_allowed_roots = _resolved_audit_roots(allowed_roots)
     process_root = tmp_path / f"child-{label}"
     process_root.mkdir()
     audit_module_root = process_root / "audit-module"
@@ -328,9 +389,26 @@ def audited_python_process(
 import builtins
 import json
 import os
+import sys
+import sysconfig
 from pathlib import Path
 
 _AUDIT_LOG = Path(os.environ["FOLIO_RESOLVE_UAT_AUDIT_LOG"]).resolve()
+_AUDIT_ALLOWED_ROOTS = tuple(
+    Path(path).resolve()
+    for path in (
+        *json.loads(os.environ["FOLIO_RESOLVE_UAT_AUDIT_ALLOWED_ROOTS"]),
+        sys.prefix,
+        sys.base_prefix,
+        sysconfig.get_paths()["purelib"],
+        sysconfig.get_paths()["platlib"],
+        sysconfig.get_paths()["stdlib"],
+    )
+)
+_AUDIT_PROTECTED_ROOTS = tuple(
+    Path(path).resolve()
+    for path in json.loads(os.environ["FOLIO_RESOLVE_UAT_AUDIT_PROTECTED_ROOTS"])
+)
 _ORIGINAL_OPEN = builtins.open
 _ORIGINAL_PATH_OPEN = Path.open
 
@@ -343,7 +421,9 @@ def _write(payload: dict[str, object]) -> None:
 def _record(file: object) -> None:
     if isinstance(file, (str, os.PathLike)):
         path = Path(file).resolve()
-        if path != _AUDIT_LOG:
+        protected = any(path.is_relative_to(root) for root in _AUDIT_PROTECTED_ROOTS)
+        allowed = any(path.is_relative_to(root) for root in _AUDIT_ALLOWED_ROOTS)
+        if path != _AUDIT_LOG and (protected or not allowed):
             _write({"path": str(path)})
 
 
@@ -384,10 +464,20 @@ exec(compile({source!r}, "<uat-child>", "exec"))
             "HOME": str(child_home),
             "PYTHONPATH": str(audit_module_root),
             "FOLIO_RESOLVE_UAT_AUDIT_LOG": str(audit_log),
+            _AUDIT_ALLOWED_ROOTS_ENV: json.dumps([str(path) for path in resolved_allowed_roots]),
+            _AUDIT_PROTECTED_ROOTS_ENV: json.dumps(
+                [str((_REPO_ROOT / path.rstrip("/")).resolve()) for path in PROTECTED_ROOTS]
+            ),
         }
     )
     if extra_env is not None:
-        reserved = {"HOME", "PYTHONPATH", "FOLIO_RESOLVE_UAT_AUDIT_LOG"} & extra_env.keys()
+        reserved = {
+            "HOME",
+            "PYTHONPATH",
+            "FOLIO_RESOLVE_UAT_AUDIT_LOG",
+            _AUDIT_ALLOWED_ROOTS_ENV,
+            _AUDIT_PROTECTED_ROOTS_ENV,
+        } & extra_env.keys()
         if reserved:
             raise ValueError(f"reserved audit environment overrides={len(reserved)}")
         env.update(extra_env)
@@ -397,7 +487,7 @@ exec(compile({source!r}, "<uat-child>", "exec"))
         audit_log=audit_log,
         tmp_path=tmp_path,
         home_root=Path.home().resolve(),
-        allowed_roots=tuple(allowed_roots),
+        allowed_roots=resolved_allowed_roots,
     )
 
 
