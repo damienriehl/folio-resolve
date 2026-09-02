@@ -47,7 +47,7 @@ label token (Presumptions → Litigation Burdens of Proof). Those became this li
 
 ### Reading that table precisely
 
-Three rows mean slightly less than a quick read suggests. Consumers pin this library, so the
+Four rows mean slightly less than a quick read suggests. Consumers pin this library, so the
 exact shape matters more than the headline:
 
 - **"Word-order invariant" is a property of the *overlap*, not of the final number.**
@@ -56,6 +56,11 @@ exact shape matters more than the headline:
   `"arbitration rules"` scores **99.0** against *Arbitration Rules* (exact string), while
   `"rules of arbitration"` scores **88.0** (pure overlap). Same concept, same rank in practice;
   not the same score. Consumers that threshold on an absolute value should know which path fired.
+- **The folio-python provider is a recall source, not a scoring authority.** Every label-search
+  candidate it returns is re-scored by this library's own scorer, so consumers see the same
+  0–100 relevance scale whether they use `FolioPythonProvider` or `InMemoryOntology`. This can
+  change scores, ranks, result membership, and thresholded `MatchPipeline` output. When migrating,
+  revalidate `MatchPipeline.score_floor`, score calibration, and committed ranking snapshots.
 - **`generate_search_terms` is a helper you call, not a pipeline stage.** It produces the
   sub-phrases, content words, and `LEGAL_TERM_EXPANSIONS` suffixes ("litigation" → "litigation
   practice", "litigation service"), and it is exported for exactly that use — but
