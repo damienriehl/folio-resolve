@@ -17,6 +17,7 @@ import pytest
 
 from folio_resolve import Concept, InMemoryOntology, LabelInfo, OntologyProvider
 from folio_resolve.ontology import FolioPythonProvider, _owl_to_concept
+from folio_resolve.scoring import compute_relevance_score, content_words
 
 FOLIO_IRI = "https://folio.openlegalstandard.org/"
 
@@ -252,8 +253,7 @@ class _FolioSpy:
         requested_limit = int(kwargs.get("limit", 10))
         count = min(self.result_count, requested_limit + self.over_return_by)
         return [
-            (_Owl(iri=f"iri:{index}", label=f"Concept {index}"), 100.0)
-            for index in range(count)
+            (_Owl(iri=f"iri:{index}", label=f"Contract {index}"), 100.0) for index in range(count)
         ]
 
 
@@ -320,16 +320,58 @@ def test_provider_search_by_label_normalizes_and_limits(fake_folio: _FakeFolio) 
     concept, score = out[0]
     assert isinstance(concept, Concept)
     assert concept.iri == f"{FOLIO_IRI}R-arb"
-    assert score == 90.0
+    assert score == compute_relevance_score(
+        content_words("arbitration"),
+        "arbitration",
+        concept.label,
+        definition=concept.definition,
+        synonyms=list(concept.alternative_labels),
+        preferred_label=concept.preferred_label,
+    )
     assert fake_folio.searched == ["arbitration"]
 
 
-def test_folio_provider_forwards_requested_limit() -> None:
+def test_provider_search_by_label_rescores_recall_candidates() -> None:
+    query = "Findings of Fact"
+    unrelated = _Owl(iri="R-unrelated", label="South Georgia and the South Sandwich Islands")
+    matching_b = _Owl(iri="R-match-b", label=query)
+    matching_a = _Owl(iri="R-match-a", label=query)
+
+    class _RankedFakeFolio(_FakeFolio):
+        def search_by_label(self, query: str, **kwargs: Any) -> list[tuple[_Owl, float]]:
+            return [(unrelated, 90.0), (matching_b, 40.0), (matching_a, 30.0)]
+
+    provider = FolioPythonProvider(_RankedFakeFolio([unrelated, matching_b, matching_a]))
+    expected_score = compute_relevance_score(content_words(query), query, query)
+
+    assert provider.search_by_label(query) == [
+        (_owl_to_concept(matching_a), expected_score),
+        (_owl_to_concept(matching_b), expected_score),
+    ]
+
+
+def test_provider_search_by_label_rescoring_is_repeatable() -> None:
+    folio = _FakeFolio(
+        [
+            _Owl(iri="R-b", label="Contract"),
+            _Owl(iri="R-a", label="Contract"),
+            _Owl(iri="R-zero", label="Arbitration"),
+        ]
+    )
+    provider = FolioPythonProvider(folio)
+
+    first = provider.search_by_label("contract")
+
+    assert [concept.iri for concept, _score in first] == ["R-a", "R-b"]
+    assert provider.search_by_label("contract") == first
+
+
+def test_folio_provider_widens_upstream_recall_window() -> None:
     folio = _FolioSpy(50)
 
     FolioPythonProvider(folio).search_by_label("contract", limit=27)
 
-    assert folio.calls == [("contract", {"limit": 27})]
+    assert folio.calls == [("contract", {"limit": 135})]
 
 
 def test_folio_provider_can_return_more_than_upstream_default() -> None:
@@ -356,7 +398,7 @@ def test_provider_search_by_label_accepts_bare_rows() -> None:
             return list(self.classes)
 
     out = FolioPythonProvider(_BareSearch([_Owl(iri="R1", label="X")])).search_by_label("x")
-    assert out[0][1] == 0.0
+    assert out[0][1] == 99.0
 
 
 def test_provider_releases_upstream_search_caches_after_copying_results() -> None:
@@ -364,7 +406,7 @@ def test_provider_releases_upstream_search_caches_after_copying_results() -> Non
     folio = _CachingFolio([owl])
     provider = FolioPythonProvider(folio)
 
-    assert provider.search_by_label("contract") == [(_owl_to_concept(owl), 90.0)]
+    assert provider.search_by_label("contract") == [(_owl_to_concept(owl), 99.0)]
     assert folio._basic_search.cache_info().currsize == 0
 
     assert provider.search_by_definition("agreement") == [(_owl_to_concept(owl), 90.0)]
@@ -382,7 +424,7 @@ def test_provider_reuses_only_bounded_copied_search_results() -> None:
 
     first = provider.search_by_label("contract")
     first.clear()
-    assert provider.search_by_label("contract") == [(_owl_to_concept(owl), 90.0)]
+    assert provider.search_by_label("contract") == [(_owl_to_concept(owl), 99.0)]
     assert folio.search_calls["label"] == 1
     assert folio._basic_search.cache_info().currsize == 0
 

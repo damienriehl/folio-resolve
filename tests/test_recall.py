@@ -429,12 +429,11 @@ def test_folio_adapter_exposes_runtime_recall_capabilities_defensively() -> None
     assert [concept.iri for concept in provider.parents_of("child")] == ["parent"]
 
 
-def test_folio_scored_searches_sort_returned_score_ties_by_iri() -> None:
+def test_folio_scored_searches_rescore_labels_and_sort_definition_ties() -> None:
     provider = FolioPythonProvider(_Folio())
 
     assert [concept.iri for concept, _ in provider.search_by_label("contract", limit=7)] == [
-        "child",
-        "parent",
+        "child"
     ]
     assert [
         concept.iri

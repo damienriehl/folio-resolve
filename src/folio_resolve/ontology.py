@@ -15,6 +15,9 @@ from typing import Any, Protocol, TypeVar, runtime_checkable
 from .scoring import compute_relevance_score, content_words
 
 _PROVIDER_SEARCH_CACHE_SIZE = 256
+_LABEL_SEARCH_RECALL_MULTIPLIER = 5
+_LABEL_SEARCH_RECALL_MINIMUM = 50
+_LABEL_SEARCH_RECALL_MAXIMUM = 200
 _CacheKey = TypeVar("_CacheKey")
 _CacheValue = TypeVar("_CacheValue")
 
@@ -221,19 +224,38 @@ class FolioPythonProvider:
         return out
 
     def search_by_label(self, query: str, *, limit: int = 20) -> list[tuple[Concept, float]]:
-        """Normalize returned score ties; folio-python owns pre-return limit membership."""
+        """Use folio-python for recall, then apply the library's label scorer.
+
+        The widened, bounded upstream window reduces losses when folio-python and the library
+        rank candidates differently, but candidates outside that recall window remain unavailable.
+        """
         cache_key = (query, limit)
         if (cached := _cache_get(self._label_search_cache, cache_key)) is not None:
             return list(cached)
 
         folio = self._get()
         try:
-            results = folio.search_by_label(query, limit=limit)
-            out: list[tuple[Concept, float]] = []
-            for item in results[:limit]:
-                owl, score = item if isinstance(item, tuple) else (item, 0.0)
-                out.append((_owl_to_concept(owl), float(score)))
-            normalized = tuple(sorted(out, key=lambda pair: (-pair[1], pair[0].iri)))
+            upstream_limit = min(
+                max(limit * _LABEL_SEARCH_RECALL_MULTIPLIER, _LABEL_SEARCH_RECALL_MINIMUM),
+                _LABEL_SEARCH_RECALL_MAXIMUM,
+            )
+            results = folio.search_by_label(query, limit=upstream_limit)
+            query_content = content_words(query)
+            scored: list[tuple[Concept, float]] = []
+            for item in results[:upstream_limit]:
+                owl = item[0] if isinstance(item, tuple) else item
+                concept = _owl_to_concept(owl)
+                score = compute_relevance_score(
+                    query_content,
+                    query,
+                    concept.label,
+                    definition=concept.definition,
+                    synonyms=list(concept.alternative_labels),
+                    preferred_label=concept.preferred_label,
+                )
+                if score > 0:
+                    scored.append((concept, score))
+            normalized = tuple(sorted(scored, key=lambda pair: (-pair[1], pair[0].iri))[:limit])
             _cache_put(self._label_search_cache, cache_key, normalized)
             return list(normalized)
         finally:
@@ -260,7 +282,10 @@ class FolioPythonProvider:
             _release_upstream_search_caches(folio)
 
     def search_by_definition(self, query: str, *, limit: int = 20) -> list[tuple[Concept, float]]:
-        """Normalize returned score ties; folio-python owns pre-return limit membership."""
+        """Normalize returned score ties; folio-python owns pre-return limit membership.
+
+        Scores are folio-python's definition-search scores, not the library's label scores.
+        """
         cache_key = (query, limit)
         if (cached := _cache_get(self._definition_search_cache, cache_key)) is not None:
             return list(cached)
