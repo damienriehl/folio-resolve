@@ -168,8 +168,10 @@ so that offline operation remains useful.
 
 **Acceptance criteria:**
 
-- With no `Judge`, candidates pass through marked `unjudged`.
-- The zero-key result is deterministic and the pipeline does not crash.
+- With no `Judge`, candidates pass through unchanged and the pipeline does not crash.
+- The zero-key result is deterministic across repeated calls.
+- The BYOK guide's consumer-side marking (`extraction_path = "unjudged"` on each pass-through
+  candidate) works on the returned candidates.
 
 ## Ontology and spec maintainer (OM)
 
