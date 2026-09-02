@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import platform
 import sys
 import sysconfig
@@ -44,8 +45,20 @@ def test_real_ontology_audit_roots_require_opt_in_and_use_folio_defaults(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    cache_dir = tmp_path / "folio-cache-root" / "cache"
-    config_path = tmp_path / "folio-config-root" / "config.json"
+    cache_root = tmp_path / "folio-cache-root"
+    cache_root.mkdir()
+    cache_target = tmp_path / "cache-target-root" / "cache"
+    cache_target.mkdir(parents=True)
+    cache_dir = cache_root / "cache"
+    cache_dir.symlink_to(cache_target, target_is_directory=True)
+
+    config_root = tmp_path / "folio-config-root"
+    config_root.mkdir()
+    config_target = tmp_path / "config-target-root" / "config.json"
+    config_target.parent.mkdir()
+    config_target.write_text("{}", encoding="utf-8")
+    config_path = config_root / "config.json"
+    config_path.symlink_to(config_target)
     folio_modules = {
         "folio.graph": SimpleNamespace(DEFAULT_CACHE_DIR=cache_dir),
         "folio.config": SimpleNamespace(DEFAULT_CONFIG_PATH=config_path),
@@ -72,6 +85,31 @@ def test_real_ontology_audit_roots_require_opt_in_and_use_folio_defaults(
         cache_dir.parent.resolve(),
         config_path.parent.resolve(),
     )
+
+    allowed_file = cache_root / "allowed.txt"
+    allowed_file.write_text("allowed", encoding="utf-8")
+    unrelated_file = tmp_path / "unrelated.txt"
+    unrelated_file.write_text("recorded", encoding="utf-8")
+    child = uat_conftest.audited_python_process(
+        tmp_path,
+        "folio-allowed-roots",
+        f"""
+from pathlib import Path
+
+Path({str(allowed_file)!r}).read_text(encoding="utf-8")
+Path({str(unrelated_file)!r}).read_text(encoding="utf-8")
+""",
+    )
+
+    completed = child.run()
+    assert completed.returncode == 0, completed.stderr
+    observed = {
+        Path(payload["path"])
+        for line in child.audit_log.read_text(encoding="utf-8").splitlines()
+        if "path" in (payload := json.loads(line))
+    }
+    assert allowed_file.resolve() not in observed
+    assert unrelated_file.resolve() in observed
 
 
 def test_audit_categories_allow_runtime_and_repo_but_protect_eval_data(

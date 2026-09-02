@@ -193,8 +193,8 @@ def real_ontology_audit_roots() -> tuple[Path, ...]:
     folio_graph = importlib.import_module("folio.graph")
     folio_config = importlib.import_module("folio.config")
     return (
-        Path(folio_graph.DEFAULT_CACHE_DIR).expanduser().resolve().parent,
-        Path(folio_config.DEFAULT_CONFIG_PATH).expanduser().resolve().parent,
+        Path(folio_graph.DEFAULT_CACHE_DIR).expanduser().parent.resolve(),
+        Path(folio_config.DEFAULT_CONFIG_PATH).expanduser().parent.resolve(),
     )
 
 
