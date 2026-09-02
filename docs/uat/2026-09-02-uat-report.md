@@ -1,6 +1,6 @@
 # User acceptance test report
 
-- Commit: `bdd395ec958b842808f97a9c2623f38daa6237ab`
+- Commit: `4cf7876f7c89965eb23e42687f41f67a73d2d30b`
 - Python: `3.13.11`
 - Extras present: `folio=true`, `spacy=true`, `embedding=false`
 - Real ontology enabled: `true`
@@ -33,9 +33,9 @@
 | US-LJ-03 | LJ | pass | pass |  |
 | US-OM-01 | OM | pass | pass |  |
 | US-OM-02 | OM | pass | pass |  |
-| US-OM-03 | OM | fail | pass | AssertionError: assert {'https://fol...JbpNO1A', ...} <= set() Extra items in the left set: 'https://folio.openlegalsta…; core: requires the folio extra and FOLIO_RESOLVE_UAT_REAL_ONTOLOGY=1 |
+| US-OM-03 | OM | pass | pass |  |
 | US-EO-01 | EO | pass | pass |  |
-| US-EO-02 | EO | fail | pass | AssertionError: path audit failed: home=64, eval-data=0, other-outside-tmp=0 assert not Counter({'home': 64}); core: requires the folio extra and FOLIO_RESOLVE_UAT_REAL_ONTOLOGY=1 |
+| US-EO-02 | EO | pass | pass |  |
 | US-EO-03 | EO | pass | pass |  |
 | US-RM-01 | RM | pass | pass |  |
 | US-RM-02 | RM | pass | pass |  |
@@ -46,6 +46,8 @@
 - `tests.uat.test_uat_harness::test_uat_marker_is_applied_to_tests_in_this_package` (pass)
 - `tests.uat.test_uat_harness::test_real_ontology_requires_the_extra_and_explicit_opt_in` (pass)
 - `tests.uat.test_uat_harness::test_real_ontology_propagates_installed_package_import_failures` (pass)
+- `tests.uat.test_uat_harness::test_real_ontology_audit_roots_require_opt_in_and_use_folio_defaults` (pass)
+- `tests.uat.test_uat_harness::test_audit_categories_allow_runtime_and_repo_but_protect_eval_data` (pass)
 - `tests.uat.test_uat_harness::test_blocked_optional_imports_keeps_the_public_core_importable` (pass)
 - `tests.uat.test_uat_harness::test_build_report_uses_strict_classification_metadata_and_lane_counts` (pass)
 - `tests.uat.test_uat_harness::test_build_report_labels_interpreter_metadata_fallback` (pass)
@@ -53,4 +55,4 @@
 
 ## Summary
 
-extras: pass 22 fail 2 skip 0, core: pass 24 fail 0 skip 0, harness failures: 0
+extras: pass 24 fail 0 skip 0, core: pass 24 fail 0 skip 0, harness failures: 0
