@@ -282,12 +282,12 @@ consumer snapshots remain byte-identical.
 
 | R3 README promise | Owning story IDs | Report link |
 |---|---|---|
-| Exact-score example (`99.0`, `88.0`, same first-ranked concept) | US-SI-01 | |
-| Proposed-heading and genuine shared-tail decomposition examples | US-OM-01, US-OM-02 | |
-| Shared-tail over-fire on a prepositional tail | US-OM-03 | |
-| `Action` versus `Auction` guard | US-RI-01 | |
-| Place-name demotions (`Slovenia`, `Northern Mariana Islands`) | US-RI-02 | |
-| Rejected `law` → `Delaware` mapping | US-RI-03 | |
-| Quick-start ontology, pipeline match, and domain prior | US-PI-01, US-PI-02 | |
-| Specificity-penalty example (`67.5` at full penalty) | US-SI-02 | |
-| Byte-identical determinism guarantee | US-RM-03 | |
+| Exact-score example (`99.0`, `88.0`, same first-ranked concept) | US-SI-01 | [2026-09-02 report](2026-09-02-uat-report.md) |
+| Proposed-heading and genuine shared-tail decomposition examples | US-OM-01, US-OM-02 | [2026-09-02 report](2026-09-02-uat-report.md) |
+| Shared-tail over-fire on a prepositional tail | US-OM-03 | [2026-09-02 report](2026-09-02-uat-report.md) |
+| `Action` versus `Auction` guard | US-RI-01 | [2026-09-02 report](2026-09-02-uat-report.md) |
+| Place-name demotions (`Slovenia`, `Northern Mariana Islands`) | US-RI-02 | [2026-09-02 report](2026-09-02-uat-report.md) |
+| Rejected `law` → `Delaware` mapping | US-RI-03 | [2026-09-02 report](2026-09-02-uat-report.md) |
+| Quick-start ontology, pipeline match, and domain prior | US-PI-01, US-PI-02 | [2026-09-02 report](2026-09-02-uat-report.md) |
+| Specificity-penalty example (`67.5` at full penalty) | US-SI-02 | [2026-09-02 report](2026-09-02-uat-report.md) |
+| Byte-identical determinism guarantee | US-RM-03 | [2026-09-02 report](2026-09-02-uat-report.md) |
