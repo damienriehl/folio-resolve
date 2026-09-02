@@ -72,8 +72,9 @@ exact shape matters more than the headline:
   right when the tail is a genuine elided head noun — `"Antitrust and Securities Law"` →
   `["Antitrust Law", "Securities Law"]` — and wrong when the tail word is the object of a
   preposition: `"Findings of Fact and Conclusions of Law"` emits `"Findings of Fact Law"`
-  alongside the correct `"Conclusions of Law"`. That extra string is noise the scorer filters
-  (nothing matches it), not a wrong tag, and a leading shared head suppresses the tail rule
+  alongside the correct `"Conclusions of Law"`. That extra string is harmless noise, not a wrong
+  tag: anything it reaches is a Findings-of-Fact concept the first sibling already produced, and
+  against most ontologies it reaches nothing. A leading shared head suppresses the tail rule
   entirely — which is why the **Proposed** variant in the table decomposes cleanly.
 
 ### Determinism is a guarantee, not a coincidence
@@ -208,8 +209,9 @@ accept a provider through a `typing.Protocol` seam you fill with an object you c
 
 You own the key, the vendor (OpenAI / Gemini / Anthropic / local), and the spend. The library ships the
 judge **prompt builders** and **deterministic verdict enforcement**; you supply only the raw model call.
-Graceful degradation is the default — no key means deterministic-only output with items marked
-`unjudged`, never a crash. Reference cost: **≈ $0.12 / chapter on `gemini-2.5-flash-lite`** (~1,875
+Graceful degradation is the default — no key means deterministic-only output, never a crash;
+mark the pass-through candidates `unjudged` yourself so reviewers can tell "no model ran" from
+"the model declined" (the BYOK guide shows the one-line `extraction_path` tag). Reference cost: **≈ $0.12 / chapter on `gemini-2.5-flash-lite`** (~1,875
 calls, ~652K tokens, 464 units). Full guide, env-var conventions, and a minimal wiring example per
 vendor: **[docs/BYOK.md](docs/BYOK.md)**.
 

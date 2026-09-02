@@ -85,3 +85,6 @@ asyncio_mode = "auto"
 testpaths = ["tests"]
 addopts = "--strict-markers"
 pythonpath = ["eval"]
+markers = [
+    "uat: persona-driven user acceptance tests",
+]
