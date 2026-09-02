@@ -146,7 +146,7 @@ class LocalEmbeddingProvider:
             raise RuntimeError(
                 f"sentence-transformers model {self._model_name!r} does not report an embedding dimension"
             )
-        return dimension
+        return int(dimension)
 
     def embed(self, text: str) -> list[float]:
         return [float(x) for x in self._model.encode(text, normalize_embeddings=True)]
