@@ -72,8 +72,9 @@ exact shape matters more than the headline:
   right when the tail is a genuine elided head noun — `"Antitrust and Securities Law"` →
   `["Antitrust Law", "Securities Law"]` — and wrong when the tail word is the object of a
   preposition: `"Findings of Fact and Conclusions of Law"` emits `"Findings of Fact Law"`
-  alongside the correct `"Conclusions of Law"`. That extra string is noise the scorer filters
-  (nothing matches it), not a wrong tag, and a leading shared head suppresses the tail rule
+  alongside the correct `"Conclusions of Law"`. That extra string is harmless noise, not a wrong
+  tag: anything it reaches is a Findings-of-Fact concept the first sibling already produced, and
+  against most ontologies it reaches nothing. A leading shared head suppresses the tail rule
   entirely — which is why the **Proposed** variant in the table decomposes cleanly.
 
 ### Determinism is a guarantee, not a coincidence
