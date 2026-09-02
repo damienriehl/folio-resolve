@@ -243,17 +243,35 @@ def fake_folio() -> _FakeFolio:
 
 
 class _FolioSpy:
-    def __init__(self, result_count: int, *, over_return_by: int = 0) -> None:
+    def __init__(
+        self,
+        result_count: int,
+        *,
+        over_return_by: int = 0,
+        exact_match_at: int | None = None,
+    ) -> None:
         self.result_count = result_count
         self.over_return_by = over_return_by
+        self.exact_match_at = exact_match_at
         self.calls: list[tuple[str, dict[str, Any]]] = []
 
     def search_by_label(self, label: str, **kwargs: Any) -> list[tuple[_Owl, float]]:
         self.calls.append((label, kwargs))
         requested_limit = int(kwargs.get("limit", 10))
         count = min(self.result_count, requested_limit + self.over_return_by)
+        indexes = list(reversed(range(count)))
+        if self.exact_match_at in indexes:
+            indexes.remove(self.exact_match_at)
+            indexes.append(self.exact_match_at)
         return [
-            (_Owl(iri=f"iri:{index}", label=f"Contract {index}"), 100.0) for index in range(count)
+            (
+                _Owl(
+                    iri=f"iri:{index:03d}",
+                    label="Contract" if index == self.exact_match_at else "Contract Candidate",
+                ),
+                100.0,
+            )
+            for index in indexes
         ]
 
 
@@ -334,20 +352,16 @@ def test_provider_search_by_label_normalizes_and_limits(fake_folio: _FakeFolio) 
 def test_provider_search_by_label_rescores_recall_candidates() -> None:
     query = "Findings of Fact"
     unrelated = _Owl(iri="R-unrelated", label="South Georgia and the South Sandwich Islands")
-    matching_b = _Owl(iri="R-match-b", label=query)
-    matching_a = _Owl(iri="R-match-a", label=query)
+    matching = _Owl(iri="R-match", label=query)
 
     class _RankedFakeFolio(_FakeFolio):
         def search_by_label(self, query: str, **kwargs: Any) -> list[tuple[_Owl, float]]:
-            return [(unrelated, 90.0), (matching_b, 40.0), (matching_a, 30.0)]
+            return [(unrelated, 90.0), (matching, 40.0)]
 
-    provider = FolioPythonProvider(_RankedFakeFolio([unrelated, matching_b, matching_a]))
+    provider = FolioPythonProvider(_RankedFakeFolio([unrelated, matching]))
     expected_score = compute_relevance_score(content_words(query), query, query)
 
-    assert provider.search_by_label(query) == [
-        (_owl_to_concept(matching_a), expected_score),
-        (_owl_to_concept(matching_b), expected_score),
-    ]
+    assert provider.search_by_label(query, limit=1) == [(_owl_to_concept(matching), expected_score)]
 
 
 def test_provider_search_by_label_rescoring_is_repeatable() -> None:
@@ -374,6 +388,15 @@ def test_folio_provider_widens_upstream_recall_window() -> None:
     assert folio.calls == [("contract", {"limit": 135})]
 
 
+def test_folio_provider_never_underfills_a_limit_above_the_widening_cap() -> None:
+    folio = _FolioSpy(300, over_return_by=50)
+
+    results = FolioPythonProvider(folio).search_by_label("contract", limit=250)
+
+    assert folio.calls == [("contract", {"limit": 250})]
+    assert len(results) == 250
+
+
 def test_folio_provider_can_return_more_than_upstream_default() -> None:
     folio = _FolioSpy(25)
 
@@ -383,11 +406,14 @@ def test_folio_provider_can_return_more_than_upstream_default() -> None:
 
 
 def test_folio_provider_truncates_upstream_over_return() -> None:
-    folio = _FolioSpy(25, over_return_by=5)
+    folio = _FolioSpy(61, over_return_by=1, exact_match_at=60)
 
     results = FolioPythonProvider(folio).search_by_label("contract", limit=12)
 
-    assert len(results) == 12
+    assert [concept.iri for concept, _score in results] == [
+        f"iri:{index:03d}" for index in range(12)
+    ]
+    assert all(concept.iri != "iri:060" for concept, _score in results)
 
 
 def test_provider_search_by_label_accepts_bare_rows() -> None:
@@ -432,6 +458,32 @@ def test_provider_reuses_only_bounded_copied_search_results() -> None:
         provider.search_by_label(f"query-{index}")
     provider.search_by_label("contract")
     assert folio.search_calls["label"] == 259
+
+
+@pytest.mark.parametrize("limits", [(1, 20), (20, 1)])
+def test_provider_label_search_cache_isolated_by_limit_in_both_orders(
+    limits: tuple[int, int],
+) -> None:
+    classes = [_Owl(iri=f"R-{index:02d}", label="Contract") for index in range(20)]
+    folio = _CachingFolio(classes)
+    provider = FolioPythonProvider(folio)
+    first_results: dict[int, list[tuple[Concept, float]]] = {}
+
+    for limit in limits:
+        result = provider.search_by_label("contract", limit=limit)
+        assert [concept.iri for concept, _score in result] == [
+            f"R-{index:02d}" for index in range(limit)
+        ]
+        first_results[limit] = result
+
+    assert folio.search_calls["label"] == 2
+
+    for limit in limits:
+        repeated = provider.search_by_label("contract", limit=limit)
+        assert repeated == first_results[limit]
+        assert repeated is not first_results[limit]
+
+    assert folio.search_calls["label"] == 2
 
 
 @pytest.mark.parametrize(

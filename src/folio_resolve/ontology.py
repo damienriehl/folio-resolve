@@ -9,6 +9,7 @@ that wraps the real ``folio-python`` package (install the ``folio`` extra).
 from __future__ import annotations
 
 from collections import OrderedDict
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Any, Protocol, TypeVar, runtime_checkable
 
@@ -33,6 +34,27 @@ class Concept:
     preferred_label: str | None = None
     branch: str = ""
     parent_iris: tuple[str, ...] = ()
+
+
+def _score_label_candidates(
+    query: str, concepts: Iterable[Concept], limit: int
+) -> list[tuple[Concept, float]]:
+    """Score normalized label candidates with the provider-independent policy."""
+    query_content = content_words(query)
+    scored: list[tuple[Concept, float]] = []
+    for concept in concepts:
+        score = compute_relevance_score(
+            query_content,
+            query,
+            concept.label,
+            definition=concept.definition,
+            synonyms=list(concept.alternative_labels),
+            preferred_label=concept.preferred_label,
+        )
+        if score > 0:
+            scored.append((concept, score))
+    scored.sort(key=lambda pair: (-pair[1], pair[0].iri))
+    return scored[:limit]
 
 
 @dataclass(frozen=True)
@@ -112,21 +134,7 @@ class InMemoryOntology:
         return out
 
     def search_by_label(self, query: str, *, limit: int = 20) -> list[tuple[Concept, float]]:
-        qc = content_words(query)
-        scored: list[tuple[Concept, float]] = []
-        for c in self._concepts:
-            score = compute_relevance_score(
-                qc,
-                query,
-                c.label,
-                definition=c.definition,
-                synonyms=list(c.alternative_labels),
-                preferred_label=c.preferred_label,
-            )
-            if score > 0:
-                scored.append((c, score))
-        scored.sort(key=lambda pair: (-pair[1], pair[0].iri))
-        return scored[:limit]
+        return _score_label_candidates(query, self._concepts, limit)
 
     def get_concept(self, iri: str) -> Concept | None:
         return self._by_iri.get(iri)
@@ -226,8 +234,9 @@ class FolioPythonProvider:
     def search_by_label(self, query: str, *, limit: int = 20) -> list[tuple[Concept, float]]:
         """Use folio-python for recall, then apply the library's label scorer.
 
-        The widened, bounded upstream window reduces losses when folio-python and the library
-        rank candidates differently, but candidates outside that recall window remain unavailable.
+        The upstream window is ``max(limit, min(max(limit * 5, 50), 200))``: extra recall
+        widening is capped at 200 rows, but the window is never smaller than the caller's limit.
+        Only candidates inside that window are re-scored, so later upstream rows remain unavailable.
         """
         cache_key = (query, limit)
         if (cached := _cache_get(self._label_search_cache, cache_key)) is not None:
@@ -235,27 +244,19 @@ class FolioPythonProvider:
 
         folio = self._get()
         try:
-            upstream_limit = min(
-                max(limit * _LABEL_SEARCH_RECALL_MULTIPLIER, _LABEL_SEARCH_RECALL_MINIMUM),
-                _LABEL_SEARCH_RECALL_MAXIMUM,
+            upstream_limit = max(
+                limit,
+                min(
+                    max(limit * _LABEL_SEARCH_RECALL_MULTIPLIER, _LABEL_SEARCH_RECALL_MINIMUM),
+                    _LABEL_SEARCH_RECALL_MAXIMUM,
+                ),
             )
             results = folio.search_by_label(query, limit=upstream_limit)
-            query_content = content_words(query)
-            scored: list[tuple[Concept, float]] = []
-            for item in results[:upstream_limit]:
-                owl = item[0] if isinstance(item, tuple) else item
-                concept = _owl_to_concept(owl)
-                score = compute_relevance_score(
-                    query_content,
-                    query,
-                    concept.label,
-                    definition=concept.definition,
-                    synonyms=list(concept.alternative_labels),
-                    preferred_label=concept.preferred_label,
-                )
-                if score > 0:
-                    scored.append((concept, score))
-            normalized = tuple(sorted(scored, key=lambda pair: (-pair[1], pair[0].iri))[:limit])
+            concepts = (
+                _owl_to_concept(item[0] if isinstance(item, tuple) else item)
+                for item in results[:upstream_limit]
+            )
+            normalized = tuple(_score_label_candidates(query, concepts, limit))
             _cache_put(self._label_search_cache, cache_key, normalized)
             return list(normalized)
         finally:

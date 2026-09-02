@@ -58,7 +58,9 @@ exact shape matters more than the headline:
   not the same score. Consumers that threshold on an absolute value should know which path fired.
 - **The folio-python provider is a recall source, not a scoring authority.** Every label-search
   candidate it returns is re-scored by this library's own scorer, so consumers see the same
-  0–100 relevance scale whether they use `FolioPythonProvider` or `InMemoryOntology`.
+  0–100 relevance scale whether they use `FolioPythonProvider` or `InMemoryOntology`. This can
+  change scores, ranks, result membership, and thresholded `MatchPipeline` output. When migrating,
+  revalidate `MatchPipeline.score_floor`, score calibration, and committed ranking snapshots.
 - **`generate_search_terms` is a helper you call, not a pipeline stage.** It produces the
   sub-phrases, content words, and `LEGAL_TERM_EXPANSIONS` suffixes ("litigation" → "litigation
   practice", "litigation service"), and it is exported for exactly that use — but
