@@ -265,6 +265,40 @@ branch: "docs/u10-v8-recovery-2026-08-29"
   `eval/reports/synthetic-comparison-v1.json`. The full serial run is active; finish and interpret
   it before choosing the U9 shared-scope iteration or any U12 attribution work.
 
+## Execution update — 2026-09-02 (resume after reboot)
+
+- The reboot handoff written on 2026-08-30 merged through PR
+  [#27](https://github.com/damienriehl/folio-resolve/pull/27). Main at `2191835` verifies
+  `1168 passed, 1 skipped` under `PYTHONHASHSEED=0`.
+- U9 attempt-0001 resumed on 2026-09-02 from its exact fingerprint-bound checkpoint (17 durable
+  receipts at resume) at scoring commit `4e0407e` on the now-pushed branch
+  `feat/u9-u12-loss-recovery`. Eight shards run in parallel under a detached launcher; the
+  checkpoint store validated the unchanged fingerprint before any shard started. The planned
+  report path from the original runner is honored at finalization through a finalize-only replay,
+  which must be byte-identical to the automatic finalization.
+- The owner answered the Decision Sheet inline on 2026-09-02: **D1 = Yes, D2 = Calibrate,
+  D3 = Yes, D4 = Yes, D5 = Public metadata exclusions.** All five match the provisional
+  implementation, so no rework follows. The cockpit answers receipt is deferred until the owner
+  lifts the cockpit freeze; this handoff is the durable receipt meanwhile.
+- The owner also settled three execution-policy questions the same day: a winning U9 iteration is
+  merged to `main` only (no `v0.5.0` tag and no consumer pin PRs until the adoption verdict);
+  merged, evidence-free worktrees and branches are pruned while every checkpoint-bearing worktree
+  and the external consumer clones are preserved; and the persona/user-story acceptance work ships
+  as a committed UAT suite plus a report.
+- folio-python's latest release is still `v0.4.0` (checked 2026-09-02), so the cache follow-up in
+  `docs/handoffs/2026-08-21-folio-python-cache-upstream-followup.md` remains open and inactive.
+- Retired seven consumed handoffs in this update. Each was resumed by a later session, its tasks
+  completed, and its learnings absorbed here or in `docs/solutions/`: the 2026-07-28 Gate 1b handoff
+  (folded through gold v7); the three 2026-08-06 handoffs (Codex orientation, eval-loop transition,
+  recall owner measurement — all closed by the v0.4.0 release and this audit); the 2026-08-09
+  post-release handoff (release verified complete); the 2026-08-17 baseline restart (superseded by
+  the completed U8 baseline); and the 2026-08-29 U10 v8 reboot handoff (consumed by PRs #24–#26).
+  `git log --diff-filter=D -- docs/handoffs/` recovers any of them.
+- Worktree/branch hygiene: eight merged, clean, evidence-free worktrees were removed and eighteen
+  merged remote branches deleted. Preserved: the U8 baseline checkpoint, the U10 live-gate and
+  pilot v1–v8 checkpoints, the live U9 attempt-0001 checkpoint, and the external mapper/enrich
+  clones.
+
 ## Plan-level verdicts
 
 | Plan | Verdict | Evidence | Remaining authority |
