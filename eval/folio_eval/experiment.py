@@ -487,8 +487,9 @@ def _manifest_record_collisions(
 ) -> int:
     """Scan record content while exempting exact, code-owned synthetic metadata.
 
-    JSON object keys are schema, not record content. The corpus-version token and determinism
-    target are likewise fixed public identities; every other string value remains leak-scanned.
+    Every mapping key is independently leak-scanned and must already be a string. The
+    corpus-version token and determinism target are fixed public identities; every other string
+    value remains leak-scanned.
     """
     if isinstance(value, str):
         if path == ("corpus_version",) and _SYNTHETIC_CORPUS_VERSION_RE.fullmatch(value):
@@ -497,10 +498,18 @@ def _manifest_record_collisions(
             return 0
         return scan_text(value, manifest, salt)
     if isinstance(value, Mapping):
-        return sum(
-            _manifest_record_collisions(nested, manifest, salt, path=(*path, str(key)))
-            for key, nested in value.items()
-        )
+        collisions = 0
+        for key, nested in value.items():
+            if not isinstance(key, str):
+                raise TypeError("manifest-scanned mapping keys must be strings")
+            collisions += scan_text(key, manifest, salt)
+            collisions += _manifest_record_collisions(
+                nested,
+                manifest,
+                salt,
+                path=(*path, key),
+            )
+        return collisions
     if isinstance(value, (list, tuple)):
         return sum(
             _manifest_record_collisions(nested, manifest, salt, path=path) for nested in value
@@ -516,12 +525,9 @@ def append_record(
     manifest_checker: ManifestChecker | None = None,
 ) -> Path:
     """Append one JSON line, refusing a firm-surface leak before it ever touches disk (KTD1)."""
-    text = json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n"
     surface_list = tuple(surfaces)
     if not surface_list and manifest_checker is None:
         raise ValueError("empty surfaces require an explicit manifest_checker")
-    if surface_list:
-        assert_no_surfaces(text, surface_list, what=str(path))
     if manifest_checker is not None:
         manifest, salt = manifest_checker
         collisions = _manifest_record_collisions(payload, manifest, salt)
@@ -529,6 +535,9 @@ def append_record(
             raise SurfaceLeakError(
                 f"{path} contains {collisions} manifest-matched firm surface(s) — refusing write"
             )
+    text = json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n"
+    if surface_list:
+        assert_no_surfaces(text, surface_list, what=str(path))
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as handle:
         handle.write(text)

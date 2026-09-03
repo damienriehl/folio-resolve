@@ -211,7 +211,10 @@ def definition_context_score(
 
     Whole-document overlap lets distant legal boilerplate win an exact-match tie. When the
     matched surface is available, score only a bounded character window around its first
-    case-insensitive occurrence. Missing anchors fall back to the full supplied text.
+    case-insensitive occurrence. Missing anchors fall back to the full supplied text. The
+    pipeline stores this value as ``rank_tiebreak_score``: it affects only equal-primary ordering
+    under ``(-score, -rank_tiebreak_score, iri)`` and never the score floor, calibration,
+    probability threshold, or top-k ordering across unequal primary scores.
     """
     checked_text = _as_text(text)
     checked_definition = _as_text(definition)

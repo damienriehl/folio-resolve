@@ -161,6 +161,41 @@ def test_definition_context_breaks_equal_score_ties_without_mutating_primary_sco
     assert ranked[0].rank_tiebreak_score > ranked[1].rank_tiebreak_score
 
 
+def test_secondary_score_cannot_outrank_primary_or_cross_the_score_floor(
+    ontology: InMemoryOntology,
+) -> None:
+    candidates = [
+        MatchCandidate(
+            iri="PrimaryLeader",
+            label="Doctrine",
+            score=90.0,
+            surface_term="Doctrine",
+            rank_tiebreak_score=0.0,
+        ),
+        MatchCandidate(
+            iri="SecondaryLeader",
+            label="Doctrine",
+            score=89.0,
+            surface_term="Doctrine",
+            rank_tiebreak_score=1.0,
+        ),
+    ]
+
+    ranked = MatchPipeline(ontology=ontology, score_floor=0.0)._rank(
+        candidates,
+        domains=[],
+        heading_terms=set(),
+    )
+    above_floor = MatchPipeline(ontology=ontology, score_floor=90.0)._rank(
+        candidates,
+        domains=[],
+        heading_terms=set(),
+    )
+
+    assert [candidate.iri for candidate in ranked] == ["PrimaryLeader", "SecondaryLeader"]
+    assert [candidate.iri for candidate in above_floor] == ["PrimaryLeader"]
+
+
 def test_the_score_floor_drops_weak_candidates(ontology: InMemoryOntology) -> None:
     lenient = MatchPipeline(ontology=ontology, score_floor=0.0).match("arbitration")
     strict = MatchPipeline(ontology=ontology, score_floor=95.0).match("arbitration")

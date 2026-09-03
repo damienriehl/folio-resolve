@@ -16,6 +16,7 @@ import pytest
 from folio_eval.answer_rule import (
     AnswerRuleConfig,
     commit_answers,
+    commit_from_ranked,
     load_config,
     load_or_create_config,
     rank_candidates,
@@ -317,6 +318,43 @@ def test_context_breaks_primary_score_ties_without_changing_calibration() -> Non
     assert [candidate.iri for candidate in ranked] == ["Zulu", "Alpha"]
     assert [candidate.score for candidate in ranked] == [100.0, 100.0]
     assert [candidate.probability for candidate in ranked] == [1.0, 1.0]
+
+
+def test_secondary_score_cannot_override_primary_threshold_order_or_top_k() -> None:
+    config = AnswerRuleConfig(threshold=0.5, top_k=1)
+    ranked = rank_candidates(
+        [
+            MatchCandidate(
+                iri="PrimaryLeader",
+                label="Leader",
+                score=90.0,
+                rank_tiebreak_score=0.0,
+            ),
+            MatchCandidate(
+                iri="SecondaryLeader",
+                label="Secondary",
+                score=89.0,
+                rank_tiebreak_score=1.0,
+            ),
+            MatchCandidate(
+                iri="BelowThreshold",
+                label="Below",
+                score=49.0,
+                rank_tiebreak_score=1.0,
+            ),
+        ],
+        config,
+    )
+
+    assert [candidate.iri for candidate in ranked] == [
+        "PrimaryLeader",
+        "SecondaryLeader",
+        "BelowThreshold",
+    ]
+    assert [candidate.iri for candidate in commit_from_ranked(ranked, config)] == [
+        "PrimaryLeader"
+    ]
+    assert ranked[-1].probability < config.threshold
 
 
 def test_duplicate_iris_keep_the_best_score() -> None:

@@ -61,6 +61,11 @@ exact shape matters more than the headline:
   0–100 relevance scale whether they use `FolioPythonProvider` or `InMemoryOntology`. This can
   change scores, ranks, result membership, and thresholded `MatchPipeline` output. When migrating,
   revalidate `MatchPipeline.score_floor`, score calibration, and committed ranking snapshots.
+- **`full_text` now affects non-judge tie ordering, not primary eligibility.** It supplies the
+  `rank_tiebreak_score` used for deterministic `(-score, -rank_tiebreak_score, iri)` ordering,
+  even when `run_judge=False`. It can reorder equal-primary candidates, including membership at
+  an equal-score top-k boundary, but score floors, calibration, thresholds, and precedence across
+  unequal primary scores still use `score` alone.
 - **`generate_search_terms` is a helper you call, not a pipeline stage.** It produces the
   sub-phrases, content words, and `LEGAL_TERM_EXPANSIONS` suffixes ("litigation" → "litigation
   practice", "litigation service"), and it is exported for exactly that use — but

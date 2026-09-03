@@ -9,7 +9,7 @@ fixes wired in:
 * **expand**  — span decomposition (conjunction split + shared-head) and the semantic index add
   the candidates that label matching alone cannot reach (Presumptions -> Burdens of Proof).
 * **rank**    — the alias blocklist drops homonyms (Action != Auction); the place-name and
-  short-label gates demote pathological fuzzy hits; score calibration redraws the weak band.
+  short-label gates demote pathological fuzzy hits; definition context breaks equal-score ties.
 * **judge**   — an optional LLM judge validates the survivors with the multi-tag domain prior
   threaded in (Defenses -> Litigation Defenses).
 
@@ -36,6 +36,15 @@ from .sources import SourceClassifier
 
 @dataclass
 class MatchCandidate:
+    """One candidate carrying primary relevance and a secondary ranking-only score.
+
+    ``score`` remains the primary value used by the pipeline score floor and by calibration.
+    ``rank_tiebreak_score`` only orders candidates whose primary scores are equal. Candidate
+    order is deterministic as ``(-score, -rank_tiebreak_score, iri)``; the secondary value never
+    changes score-floor, calibrated-probability, threshold, or top-k eligibility across unequal
+    primary scores.
+    """
+
     iri: str
     label: str
     score: float
@@ -237,7 +246,14 @@ class MatchPipeline:
         full_text: str | None = None,
         run_judge: bool = False,
     ) -> list[MatchCandidate]:
-        """Match one surface term to ranked FOLIO candidates through all four stages."""
+        """Match one surface term to ranked FOLIO candidates through all four stages.
+
+        When ``full_text`` is supplied, its definition overlap feeds ``rank_tiebreak_score`` and
+        can therefore change equal-primary ordering even when ``run_judge`` is false. Results use
+        deterministic ``(-score, -rank_tiebreak_score, iri)`` ordering. The pipeline score floor,
+        downstream calibration and probability thresholds, and top-k boundaries remain governed
+        by the primary ``score`` alone; the secondary key cannot promote a lower-primary result.
+        """
         if section_label and not self.source_classifier.is_taggable(section_label, surface_term):
             return []  # metadata/front-matter excluded (Ch02 unit d3c44e2a)
 

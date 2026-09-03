@@ -711,7 +711,7 @@ def test_append_record_exempts_only_schema_owned_synthetic_metadata(tmp_path: Pa
         "record_type": "attempt",
         "corpus_version": "synthetic-v1",
         "determinism_selftest": {"target": DEFAULT_SELFTEST_TARGET},
-        "scores_before": {"synthetic": {"aggregate": {"items": 2}, "items": []}},
+        "scores_before": {"public_slice": {"aggregate": {"items": 2}, "items": []}},
         "reason": "aggregate improvement",
     }
 
@@ -726,6 +726,65 @@ def test_append_record_exempts_only_schema_owned_synthetic_metadata(tmp_path: Pa
         append_record(
             tmp_path / "leak.jsonl",
             {**payload, "reason": "synthetic"},
+            surfaces=(),
+            manifest_checker=(manifest, salt),
+        )
+
+
+def test_append_record_rejects_manifest_collision_in_top_level_mapping_key(
+    tmp_path: Path,
+) -> None:
+    salt = b"0123456789abcdef"
+    manifest = build_manifest(
+        ["synthetic"],
+        salt,
+        gold_version="gold_v1",
+        gold_content_sha256="a" * 64,
+        scrypt_params=ScryptParams(n=2, r=1, p=1, dklen=8, test_params=True),
+    )
+
+    with pytest.raises(experiment_module.SurfaceLeakError, match="manifest-matched"):
+        append_record(
+            tmp_path / "top-level-key-leak.jsonl",
+            {"synthetic": "safe value"},
+            surfaces=(),
+            manifest_checker=(manifest, salt),
+        )
+
+
+def test_append_record_rejects_manifest_collision_in_nested_mapping_key(tmp_path: Path) -> None:
+    salt = b"0123456789abcdef"
+    manifest = build_manifest(
+        ["synthetic"],
+        salt,
+        gold_version="gold_v1",
+        gold_content_sha256="a" * 64,
+        scrypt_params=ScryptParams(n=2, r=1, p=1, dklen=8, test_params=True),
+    )
+
+    with pytest.raises(experiment_module.SurfaceLeakError, match="manifest-matched"):
+        append_record(
+            tmp_path / "nested-key-leak.jsonl",
+            {"outer": {"synthetic": "safe value"}},
+            surfaces=(),
+            manifest_checker=(manifest, salt),
+        )
+
+
+def test_append_record_rejects_non_string_mapping_key(tmp_path: Path) -> None:
+    salt = b"0123456789abcdef"
+    manifest = build_manifest(
+        ["synthetic"],
+        salt,
+        gold_version="gold_v1",
+        gold_content_sha256="a" * 64,
+        scrypt_params=ScryptParams(n=2, r=1, p=1, dklen=8, test_params=True),
+    )
+
+    with pytest.raises(TypeError, match="mapping keys must be strings"):
+        append_record(
+            tmp_path / "non-string-key.jsonl",
+            {"record_type": "attempt", 7: "safe value"},  # type: ignore[dict-item]
             surfaces=(),
             manifest_checker=(manifest, salt),
         )
