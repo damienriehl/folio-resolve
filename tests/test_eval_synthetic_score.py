@@ -28,6 +28,7 @@ from folio_eval.synthetic_score import (
 
 from folio_resolve import AliasBlocklist, BlockedAlias, Concept, InMemoryOntology
 from folio_resolve.pipeline import MatchCandidate
+from folio_resolve.scoring import definition_context_score
 
 
 def _ontology() -> InMemoryOntology:
@@ -187,6 +188,40 @@ def test_adapter_uses_local_definition_context_to_break_exact_match_ties() -> No
     assert [candidate.iri for candidate in ranked] == ["R-zulu", "R-alpha"]
     assert [candidate.score for candidate in ranked] == [100.0, 100.0]
     assert adapted.candidates[0].rank_tiebreak_score > adapted.candidates[1].rank_tiebreak_score
+
+
+def test_adapter_keeps_the_strongest_context_across_same_iri_anchors() -> None:
+    ontology = InMemoryOntology(
+        [
+            Concept(
+                iri="R-context",
+                label="Alpha Anchor",
+                definition="evidentiary burden",
+                alternative_labels=("Zulu Anchor",),
+            )
+        ]
+    )
+    passage = (
+        "Alpha Anchor applies. "
+        + "neutral filler " * 80
+        + "The evidentiary burden controls under Zulu Anchor."
+    )
+
+    adapted = DocumentAdapter(ontology).adapt(passage, segments=())
+
+    assert len(adapted.candidates) == 1
+    assert adapted.candidates[0].surface_term == "zulu anchor"
+    assert adapted.candidates[0].score == 100.0
+    assert adapted.candidates[0].rank_tiebreak_score == definition_context_score(
+        passage,
+        "evidentiary burden",
+        anchor="zulu anchor",
+    )
+    assert adapted.candidates[0].rank_tiebreak_score > definition_context_score(
+        passage,
+        "evidentiary burden",
+        anchor="alpha anchor",
+    )
 
 
 def test_adapter_does_not_retain_candidates_for_identical_passage(

@@ -253,10 +253,26 @@ class DocumentAdapter:
     def adapt(self, passage: str, *, segments: Sequence[str] | None = None) -> AdapterResult:
         best: dict[str, MatchCandidate] = {}
         for candidate in self._raw_candidates(passage, segments=segments):
+            concept = self._concept(candidate.iri)
+            candidate.rank_tiebreak_score = definition_context_score(
+                passage,
+                concept.definition if concept is not None else None,
+                anchor=candidate.surface_term,
+            )
             current = best.get(candidate.iri)
-            candidate_key = (-candidate.score, candidate.extraction_path, candidate.surface_term)
+            candidate_key = (
+                -candidate.score,
+                -candidate.rank_tiebreak_score,
+                candidate.extraction_path,
+                candidate.surface_term,
+            )
             current_key = (
-                (-current.score, current.extraction_path, current.surface_term)
+                (
+                    -current.score,
+                    -current.rank_tiebreak_score,
+                    current.extraction_path,
+                    current.surface_term,
+                )
                 if current is not None
                 else None
             )
@@ -346,14 +362,7 @@ class DocumentAdapter:
                     )
                 )
                 continue
-            concept = self._concept(candidate.iri)
-            context_score = definition_context_score(
-                passage,
-                concept.definition if concept is not None else None,
-                anchor=candidate.surface_term,
-            )
             candidate.score = short.score
-            candidate.rank_tiebreak_score = context_score
             candidate.gated = place.demoted or short.demoted
             candidate.gate_reason = "; ".join((place.reason, short.reason))
             survivors.append(candidate)

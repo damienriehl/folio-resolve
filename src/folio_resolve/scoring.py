@@ -133,6 +133,25 @@ def _as_text(value: object) -> str:
     return value if isinstance(value, str) else ""
 
 
+def _casefolded_span(text: str, needle: str) -> tuple[int, int] | None:
+    """Find ``needle`` case-insensitively and return offsets into the original ``text``."""
+    folded_parts: list[str] = []
+    original_offsets: list[int] = []
+    for original_offset, character in enumerate(text):
+        folded_character = character.casefold()
+        folded_parts.append(folded_character)
+        original_offsets.extend([original_offset] * len(folded_character))
+
+    folded_needle = needle.casefold()
+    if not folded_needle:
+        return None
+    folded_start = "".join(folded_parts).find(folded_needle)
+    if folded_start < 0:
+        return None
+    folded_end = folded_start + len(folded_needle)
+    return original_offsets[folded_start], original_offsets[folded_end - 1] + 1
+
+
 # Strength of the specificity penalty at ``specificity_penalty=1.0`` (the historical constant):
 # a candidate whose label is entirely extra words loses 40% of its score.
 SPECIFICITY_PENALTY_WEIGHT = 0.4
@@ -224,12 +243,11 @@ def definition_context_score(
     if radius < 0:
         raise ValueError("definition context radius must be nonnegative")
     if checked_anchor:
-        start = checked_text.casefold().find(checked_anchor.casefold())
-        if start >= 0:
+        anchor_span = _casefolded_span(checked_text, checked_anchor)
+        if anchor_span is not None:
+            start, end = anchor_span
             checked_text = checked_text[
-                max(0, start - radius) : min(
-                    len(checked_text), start + len(checked_anchor) + radius
-                )
+                max(0, start - radius) : min(len(checked_text), end + radius)
             ]
     return round(
         word_overlap(content_words(checked_text), content_words(checked_definition)), 6

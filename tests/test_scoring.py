@@ -32,6 +32,17 @@ def test_definition_context_score_prefers_the_definition_near_the_matched_anchor
     assert relevant > distant
 
 
+def test_definition_context_score_maps_casefolded_offsets_to_the_original_text() -> None:
+    passage = "ßdefinition Anchor"
+
+    assert definition_context_score(
+        passage,
+        "definition anchor",
+        anchor="anchor",
+        radius=len("definition "),
+    ) == 1.0
+
+
 def test_word_order_invariant() -> None:
     # Ch02 finding 004: "arbitration rules" == "rules of arbitration".
     a = content_words("arbitration rules")
