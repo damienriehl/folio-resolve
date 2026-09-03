@@ -11,6 +11,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import folio_eval.experiment as experiment_module
+import folio_eval.leakcheck as leakcheck_module
 import pytest
 from folio_eval.experiment import (
     CHECK_IN_ATTEMPTS,
@@ -858,6 +859,16 @@ def test_synthetic_cli_start_uses_supplied_report_before_previous_ledger_record(
     )
     manifest_path = tmp_path / "manifest.json"
     manifest_path.write_text(json.dumps(manifest.to_json()), encoding="utf-8")
+    local_gold_dir = tmp_path / "owner-gold"
+    local_gold_dir.mkdir()
+    (local_gold_dir / "gold_v2.manifest.json").write_text(
+        json.dumps({"gold_version": 2, "content_sha256": "b" * 64}), encoding="utf-8"
+    )
+    monkeypatch.setattr(
+        leakcheck_module,
+        "DEFAULT_LOCAL_GOLD_MANIFEST_GLOB",
+        local_gold_dir / "gold_v*.manifest.json",
+    )
     salt_path = tmp_path / "salt"
     salt_path.write_bytes(salt)
     supplied_overall = {"items": 2, "tp": 1, "fp": 1, "fn": 1, "exact_items": 0}

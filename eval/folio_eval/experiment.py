@@ -1295,7 +1295,10 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - I/O or
         report = json.loads(args.synthetic_report.read_text(encoding="utf-8"))
         if not isinstance(report, Mapping):
             parser.error("synthetic report must be a JSON object")
-        manifest_checker = (load_manifest(args.leak_manifest), args.salt_file.read_bytes())
+        manifest_checker = (
+            load_manifest(args.leak_manifest, allow_stale=True),
+            args.salt_file.read_bytes(),
+        )
         synthetic = SliceOutcome.from_synthetic_report(report)
         corpus_version = str(report.get("corpus_version", ""))
         if not corpus_version:
