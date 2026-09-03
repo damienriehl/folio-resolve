@@ -137,6 +137,8 @@ def _as_text(value: object) -> str:
 # a candidate whose label is entirely extra words loses 40% of its score.
 SPECIFICITY_PENALTY_WEIGHT = 0.4
 
+DEFINITION_CONTEXT_RADIUS = 240
+
 
 def word_overlap(
     query_words: set[str],
@@ -196,6 +198,42 @@ def word_overlap(
         reverse = _directional_overlap(sorted(target_words), query_words) * 0.75
 
     return max(forward, reverse)
+
+
+def definition_context_score(
+    text: str | None,
+    definition: str | None,
+    *,
+    anchor: str | None = None,
+    radius: int = DEFINITION_CONTEXT_RADIUS,
+) -> float:
+    """Measure definition overlap near a matched surface, deterministically in ``[0, 1]``.
+
+    Whole-document overlap lets distant legal boilerplate win an exact-match tie. When the
+    matched surface is available, score only a bounded character window around its first
+    case-insensitive occurrence. Missing anchors fall back to the full supplied text. The
+    pipeline stores this value as ``rank_tiebreak_score``: it affects only equal-primary ordering
+    under ``(-score, -rank_tiebreak_score, iri)`` and never the score floor, calibration,
+    probability threshold, or top-k ordering across unequal primary scores.
+    """
+    checked_text = _as_text(text)
+    checked_definition = _as_text(definition)
+    checked_anchor = _as_text(anchor)
+    if not checked_text or not checked_definition:
+        return 0.0
+    if radius < 0:
+        raise ValueError("definition context radius must be nonnegative")
+    if checked_anchor:
+        start = checked_text.casefold().find(checked_anchor.casefold())
+        if start >= 0:
+            checked_text = checked_text[
+                max(0, start - radius) : min(
+                    len(checked_text), start + len(checked_anchor) + radius
+                )
+            ]
+    return round(
+        word_overlap(content_words(checked_text), content_words(checked_definition)), 6
+    )
 
 
 def compute_relevance_score(

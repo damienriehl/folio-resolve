@@ -1,0 +1,173 @@
+{
+  "answer_rule_config": {
+    "calibrated": false,
+    "calibration_steps": [],
+    "config_version": 1,
+    "rationale": "synthetic lane v1: top_k sized to corpus gold density (uncalibrated)",
+    "threshold": 0.5,
+    "top_k": 6
+  },
+  "answer_rule_config_sha256": "ac413db665602cdde841a7e7590adc4eba02cded82266df5e763d7be7dd87c03",
+  "content_sha256": "a417085a506ed52033c7aeb43d0868f1b7e7201064b8e37f03637e920afaac4d",
+  "corpus_version": 1,
+  "depth_probe": {
+    "1": {
+      "depth": 1,
+      "mean_candidate_count": 1.0,
+      "mean_raw_candidate_recall_at_k": 0.011111,
+      "micro_f1": 0.017007
+    },
+    "3": {
+      "depth": 3,
+      "mean_candidate_count": 3.0,
+      "mean_raw_candidate_recall_at_k": 0.022222,
+      "micro_f1": 0.019268
+    },
+    "6": {
+      "depth": 6,
+      "mean_candidate_count": 6.0,
+      "mean_raw_candidate_recall_at_k": 0.032593,
+      "micro_f1": 0.017513
+    }
+  },
+  "determinism_selftest": {
+    "deterministic": true,
+    "first_seed": "0",
+    "first_sha256": "72e6ba8bc470e6c682c0a8da89d4af9aa22b6ba0375196b9db0dd9427ddaaf89",
+    "second_seed": "1",
+    "second_sha256": "72e6ba8bc470e6c682c0a8da89d4af9aa22b6ba0375196b9db0dd9427ddaaf89",
+    "target": "folio_eval.selftest:synthetic_scoring_payload"
+  },
+  "kind": "synthetic_baseline",
+  "label": "synthetic-baseline-v1",
+  "nomatch_fp_rate": 1.0,
+  "ontology_cache_sha256": "b6ed82e6d17b7cb1d468453e4111ec08ca091d72a6849be2b58dd37692cb6ef9",
+  "overall": {
+    "empty_prediction_items": 0,
+    "exact_items": 0,
+    "f1": 0.017513,
+    "fn": 348,
+    "fp": 1335,
+    "gold": 363,
+    "items": 225,
+    "precision": 0.011111,
+    "predicted": 1350,
+    "recall": 0.041322,
+    "tp": 15
+  },
+  "raw_candidate_count": 792136,
+  "slices": {
+    "commercial agreement": {
+      "empty_prediction_items": 0,
+      "exact_items": 0,
+      "f1": 0.0,
+      "fn": 30,
+      "fp": 180,
+      "gold": 30,
+      "items": 30,
+      "precision": 0.0,
+      "predicted": 180,
+      "recall": 0.0,
+      "tp": 0
+    },
+    "corporate board materials": {
+      "empty_prediction_items": 0,
+      "exact_items": 0,
+      "f1": 0.0,
+      "fn": 63,
+      "fp": 180,
+      "gold": 63,
+      "items": 30,
+      "precision": 0.0,
+      "predicted": 180,
+      "recall": 0.0,
+      "tp": 0
+    },
+    "employment policy and notice": {
+      "empty_prediction_items": 0,
+      "exact_items": 0,
+      "f1": 0.0,
+      "fn": 30,
+      "fp": 180,
+      "gold": 30,
+      "items": 30,
+      "precision": 0.0,
+      "predicted": 180,
+      "recall": 0.0,
+      "tp": 0
+    },
+    "estate planning instrument": {
+      "empty_prediction_items": 0,
+      "exact_items": 0,
+      "f1": 0.035088,
+      "fn": 44,
+      "fp": 176,
+      "gold": 48,
+      "items": 30,
+      "precision": 0.022222,
+      "predicted": 180,
+      "recall": 0.083333,
+      "tp": 4
+    },
+    "intellectual property filing": {
+      "empty_prediction_items": 0,
+      "exact_items": 0,
+      "f1": 0.054054,
+      "fn": 18,
+      "fp": 87,
+      "gold": 21,
+      "items": 15,
+      "precision": 0.033333,
+      "predicted": 90,
+      "recall": 0.142857,
+      "tp": 3
+    },
+    "litigation brief": {
+      "empty_prediction_items": 0,
+      "exact_items": 0,
+      "f1": 0.032922,
+      "fn": 59,
+      "fp": 176,
+      "gold": 63,
+      "items": 30,
+      "precision": 0.022222,
+      "predicted": 180,
+      "recall": 0.063492,
+      "tp": 4
+    },
+    "real estate instrument": {
+      "empty_prediction_items": 0,
+      "exact_items": 0,
+      "f1": 0.035088,
+      "fn": 44,
+      "fp": 176,
+      "gold": 48,
+      "items": 30,
+      "precision": 0.022222,
+      "predicted": 180,
+      "recall": 0.083333,
+      "tp": 4
+    },
+    "regulatory submission": {
+      "empty_prediction_items": 0,
+      "exact_items": 0,
+      "f1": 0.0,
+      "fn": 60,
+      "fp": 180,
+      "gold": 60,
+      "items": 30,
+      "precision": 0.0,
+      "predicted": 180,
+      "recall": 0.0,
+      "tp": 0
+    }
+  },
+  "suppression_counters": {
+    "blocklist": 22,
+    "place_gate": 1525,
+    "score_floor": 305260,
+    "short_label_gate": 75586
+  },
+  "survivor_count": 409743,
+  "unscoreable_override": false
+}

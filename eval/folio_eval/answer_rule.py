@@ -11,8 +11,9 @@ Three properties this module exists to guarantee:
    count. :func:`commit_answers` takes candidates and a config; that is the whole input surface.
    Feeding the same candidates through the same config always commits the same set, whatever the
    item's gold happens to be.
-2. **Deterministic ordering.** Candidates sort by ``(score desc, iri asc)`` *before* any cutoff
-   (KTD7), so ties never depend on the pipeline's internal ordering or on hash randomization.
+2. **Deterministic ordering.** Candidates sort by primary score, an optional bounded secondary
+   rank key, then IRI *before* any cutoff (KTD7), so ties never depend on pipeline ordering or
+   hash randomization. Calibration and thresholding continue to read only the primary score.
 3. **Versioned and hashed.** :class:`AnswerRuleConfig` serializes to
    ``eval/data/gold/harness_config_v1.json`` and carries its own SHA-256, which every report
    cites. Changing threshold or k is a named iteration change under R9 -- never a silent tweak.
@@ -209,18 +210,28 @@ def load_or_create_config(path: Path) -> AnswerRuleConfig:
 def rank_candidates(
     candidates: Iterable[CandidateLike], config: AnswerRuleConfig
 ) -> list[RankedCandidate]:
-    """Dedupe by IRI (best score wins), sort by ``(score desc, IRI asc)``, attach probabilities.
+    """Dedupe by IRI, apply deterministic primary/secondary ranking, attach probabilities.
 
     This is the *threshold-free* ranked list: recall@k and the PR curve are computed from it, so
     it must never be filtered by the answer rule.
     """
+    def rank_key(candidate: CandidateLike) -> tuple[float, float]:
+        return candidate.score, float(getattr(candidate, "rank_tiebreak_score", 0.0))
+
     best: dict[str, CandidateLike] = {}
     for candidate in candidates:
         current = best.get(candidate.iri)
-        if current is None or candidate.score > current.score:
+        if current is None or rank_key(candidate) > rank_key(current):
             best[candidate.iri] = candidate
     calibration = config.calibration()
-    ordered = sorted(best.values(), key=lambda c: (-c.score, c.iri))
+    ordered = sorted(
+        best.values(),
+        key=lambda candidate: (
+            -candidate.score,
+            -rank_key(candidate)[1],
+            candidate.iri,
+        ),
+    )
     return [
         RankedCandidate(
             iri=candidate.iri,
