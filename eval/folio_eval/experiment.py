@@ -61,6 +61,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import tempfile
 from collections.abc import Callable, Iterable, Mapping, Sequence
@@ -474,6 +475,37 @@ def load_raw_records(path: Path) -> list[dict[str, object]]:
 
 
 ManifestChecker = tuple[Manifest, bytes]
+_SYNTHETIC_CORPUS_VERSION_RE = re.compile(r"synthetic-v[0-9]+")
+
+
+def _manifest_record_collisions(
+    value: object,
+    manifest: Manifest,
+    salt: bytes,
+    *,
+    path: tuple[str, ...] = (),
+) -> int:
+    """Scan record content while exempting exact, code-owned synthetic metadata.
+
+    JSON object keys are schema, not record content. The corpus-version token and determinism
+    target are likewise fixed public identities; every other string value remains leak-scanned.
+    """
+    if isinstance(value, str):
+        if path == ("corpus_version",) and _SYNTHETIC_CORPUS_VERSION_RE.fullmatch(value):
+            return 0
+        if path == ("determinism_selftest", "target") and value == DEFAULT_SELFTEST_TARGET:
+            return 0
+        return scan_text(value, manifest, salt)
+    if isinstance(value, Mapping):
+        return sum(
+            _manifest_record_collisions(nested, manifest, salt, path=(*path, str(key)))
+            for key, nested in value.items()
+        )
+    if isinstance(value, (list, tuple)):
+        return sum(
+            _manifest_record_collisions(nested, manifest, salt, path=path) for nested in value
+        )
+    return 0
 
 
 def append_record(
@@ -492,7 +524,7 @@ def append_record(
         assert_no_surfaces(text, surface_list, what=str(path))
     if manifest_checker is not None:
         manifest, salt = manifest_checker
-        collisions = scan_text(text, manifest, salt)
+        collisions = _manifest_record_collisions(payload, manifest, salt)
         if collisions:
             raise SurfaceLeakError(
                 f"{path} contains {collisions} manifest-matched firm surface(s) — refusing write"
@@ -1069,18 +1101,24 @@ def finish_attempt(
         pending.firm2_before_items, firm2_after_items, n_resamples=ci_resamples, seed=ci_seed
     )
 
-    synthetic_ci: BootstrapCI | None = None
+    synthetic_bootstrap: dict[str, object] | None = None
     synthetic_after_items = slice_items_from_scores_json(scores_after, "synthetic")
     if pending.lever_scope is not None:
         synthetic_before_items = slice_items_from_scores_json(pending.scores_before, "synthetic")
         paired_synthetic = pair_outcomes(synthetic_before_items, synthetic_after_items)
-        if not paired_synthetic:
-            raise ExperimentError(
-                "synthetic-lever attempt requires paired per-item data (n_units must be nonzero)"
+        if paired_synthetic:
+            synthetic_ci = bootstrap_ci(
+                paired_synthetic, f1_delta, n_resamples=ci_resamples, seed=ci_seed
             )
-        synthetic_ci = bootstrap_ci(
-            paired_synthetic, f1_delta, n_resamples=ci_resamples, seed=ci_seed
-        )
+            synthetic_bootstrap = {
+                **synthetic_ci.to_json(),
+                "width": round(synthetic_ci.high - synthetic_ci.low, 6),
+            }
+        else:
+            synthetic_bootstrap = {
+                "n_units": 0,
+                "reason": "paired per-item outcomes unavailable from aggregate-only reports",
+            }
 
     if decision == AUTO_DECISION:
         before_tune = pending.scores_before.get("tune")
@@ -1137,12 +1175,7 @@ def finish_attempt(
         answer_rule_config_sha256=pending.answer_rule_config_sha256,
         item_count=len(synthetic_after_items)
         or slice_item_count_from_scores_json(scores_after, "synthetic"),
-        bootstrap_ci={
-            **synthetic_ci.to_json(),
-            "width": round(synthetic_ci.high - synthetic_ci.low, 6),
-        }
-        if synthetic_ci is not None
-        else None,
+        bootstrap_ci=synthetic_bootstrap,
         disagreement_classes_seen=pending.disagreement_classes_seen,
     )
     append_record(
