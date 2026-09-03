@@ -35,6 +35,7 @@ from folio_eval.experiment import (
 )
 from folio_eval.grade import DISAGREEMENT_CLASSES
 from folio_eval.leakcheck import ScryptParams, build_manifest
+from folio_eval.selftest import DEFAULT_SELFTEST_TARGET
 
 GOLD_SURFACES = ("Fund Formation", "Escrow Services", "Carry Waterfall")
 
@@ -697,6 +698,98 @@ def test_append_record_refuses_empty_surfaces_without_manifest_checker(tmp_path:
         append_record(tmp_path / "log.jsonl", {"record_type": "attempt"}, surfaces=())
 
 
+def test_append_record_exempts_only_schema_owned_synthetic_metadata(tmp_path: Path) -> None:
+    salt = b"u9-test-salt"
+    manifest = build_manifest(
+        ["synthetic"],
+        salt,
+        gold_version="gold_v1",
+        gold_content_sha256="a" * 64,
+        scrypt_params=ScryptParams(n=2, r=1, p=1, dklen=8, test_params=True),
+    )
+    payload = {
+        "record_type": "attempt",
+        "corpus_version": "synthetic-v1",
+        "determinism_selftest": {"target": DEFAULT_SELFTEST_TARGET},
+        "scores_before": {"public_slice": {"aggregate": {"items": 2}, "items": []}},
+        "reason": "aggregate improvement",
+    }
+
+    append_record(
+        tmp_path / "metadata.jsonl",
+        payload,
+        surfaces=(),
+        manifest_checker=(manifest, salt),
+    )
+
+    with pytest.raises(experiment_module.SurfaceLeakError, match="manifest-matched"):
+        append_record(
+            tmp_path / "leak.jsonl",
+            {**payload, "reason": "synthetic"},
+            surfaces=(),
+            manifest_checker=(manifest, salt),
+        )
+
+
+def test_append_record_rejects_manifest_collision_in_top_level_mapping_key(
+    tmp_path: Path,
+) -> None:
+    salt = b"0123456789abcdef"
+    manifest = build_manifest(
+        ["synthetic"],
+        salt,
+        gold_version="gold_v1",
+        gold_content_sha256="a" * 64,
+        scrypt_params=ScryptParams(n=2, r=1, p=1, dklen=8, test_params=True),
+    )
+
+    with pytest.raises(experiment_module.SurfaceLeakError, match="manifest-matched"):
+        append_record(
+            tmp_path / "top-level-key-leak.jsonl",
+            {"synthetic": "safe value"},
+            surfaces=(),
+            manifest_checker=(manifest, salt),
+        )
+
+
+def test_append_record_rejects_manifest_collision_in_nested_mapping_key(tmp_path: Path) -> None:
+    salt = b"0123456789abcdef"
+    manifest = build_manifest(
+        ["synthetic"],
+        salt,
+        gold_version="gold_v1",
+        gold_content_sha256="a" * 64,
+        scrypt_params=ScryptParams(n=2, r=1, p=1, dklen=8, test_params=True),
+    )
+
+    with pytest.raises(experiment_module.SurfaceLeakError, match="manifest-matched"):
+        append_record(
+            tmp_path / "nested-key-leak.jsonl",
+            {"outer": {"synthetic": "safe value"}},
+            surfaces=(),
+            manifest_checker=(manifest, salt),
+        )
+
+
+def test_append_record_rejects_non_string_mapping_key(tmp_path: Path) -> None:
+    salt = b"0123456789abcdef"
+    manifest = build_manifest(
+        ["synthetic"],
+        salt,
+        gold_version="gold_v1",
+        gold_content_sha256="a" * 64,
+        scrypt_params=ScryptParams(n=2, r=1, p=1, dklen=8, test_params=True),
+    )
+
+    with pytest.raises(TypeError, match="mapping keys must be strings"):
+        append_record(
+            tmp_path / "non-string-key.jsonl",
+            {"record_type": "attempt", 7: "safe value"},  # type: ignore[dict-item]
+            surfaces=(),
+            manifest_checker=(manifest, salt),
+        )
+
+
 def test_synthetic_record_via_manifest_checker_round_trips(tmp_path: Path) -> None:
     salt = b"u9-test-salt"
     manifest = build_manifest(
@@ -783,7 +876,9 @@ def test_large_negative_delta_is_not_diminishing_returns() -> None:
     assert result.consecutive_sub_epsilon == 0
 
 
-def test_finish_synthetic_attempt_requires_paired_item_data(tmp_path: Path) -> None:
+def test_finish_synthetic_attempt_records_unavailable_ci_for_aggregate_reports(
+    tmp_path: Path,
+) -> None:
     log_path = tmp_path / "synthetic.jsonl"
     pending_path = tmp_path / "pending.json"
     aggregate = SliceOutcome.from_synthetic_report(
@@ -804,16 +899,22 @@ def test_finish_synthetic_attempt_requires_paired_item_data(tmp_path: Path) -> N
         experiments_log=log_path,
         pending_path=pending_path,
     )
-    with pytest.raises(ExperimentError, match="paired per-item data"):
-        finish_attempt(
-            decision="keep",
-            reason="aggregate only",
-            surfaces=GOLD_SURFACES,
-            after_scores={"synthetic": aggregate},
-            commit_sha="cafebabe",
-            experiments_log=log_path,
-            pending_path=pending_path,
-        )
+    record = finish_attempt(
+        decision="keep",
+        reason="aggregate only",
+        surfaces=GOLD_SURFACES,
+        after_scores={"synthetic": aggregate},
+        commit_sha="cafebabe",
+        experiments_log=log_path,
+        pending_path=pending_path,
+    )
+
+    assert record.bootstrap_ci == {
+        "n_units": 0,
+        "reason": "paired per-item outcomes unavailable from aggregate-only reports",
+    }
+    assert not pending_path.exists()
+    assert ExperimentRecord.from_json(load_raw_records(log_path)[0]) == record
 
 
 def test_finish_binds_synthetic_report_identity_at_start(tmp_path: Path) -> None:

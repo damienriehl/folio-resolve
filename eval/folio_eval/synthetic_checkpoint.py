@@ -25,8 +25,8 @@ from .synthesize import LoadedCorpus
 from .synthetic_contract import SUPPRESSION_CATEGORIES, SyntheticItemKind
 
 CHECKPOINT_KIND = "synthetic-scoring-checkpoint"
-CHECKPOINT_SCHEMA_VERSION = 2
-SCORING_SEMANTICS_VERSION = 1
+CHECKPOINT_SCHEMA_VERSION = 3
+SCORING_SEMANTICS_VERSION = 2
 SHA256_RE = re.compile(r"[0-9a-f]{64}")
 
 
@@ -258,10 +258,23 @@ class SyntheticCheckpointStore:
         existing = self.maybe_load_item(kind, item_id)
         if existing is not None:
             return existing
-        canonical = sorted(candidates, key=lambda candidate: (-candidate.score, candidate.iri))
+        canonical = sorted(
+            candidates,
+            key=lambda candidate: (
+                -candidate.score,
+                -float(getattr(candidate, "rank_tiebreak_score", 0.0)),
+                candidate.iri,
+            ),
+        )
         payload_without_digest: dict[str, object] = {
             "candidates": [
-                {"iri": candidate.iri, "score": candidate.score}
+                {
+                    "iri": candidate.iri,
+                    "rank_tiebreak_score": float(
+                        getattr(candidate, "rank_tiebreak_score", 0.0)
+                    ),
+                    "score": candidate.score,
+                }
                 for candidate in canonical[: self.retained_limit]
             ],
             "fingerprint_sha256": self.fingerprint.content_sha256(),
@@ -356,9 +369,14 @@ class SyntheticCheckpointStore:
         candidates: list[MatchCandidate] = []
         seen: set[str] = set()
         for raw_candidate in raw_candidates:
-            if not isinstance(raw_candidate, dict) or set(raw_candidate) != {"iri", "score"}:
+            if not isinstance(raw_candidate, dict) or set(raw_candidate) != {
+                "iri",
+                "rank_tiebreak_score",
+                "score",
+            }:
                 raise CheckpointError("checkpoint candidate fields are invalid")
             iri = raw_candidate["iri"]
+            rank_tiebreak_score = raw_candidate["rank_tiebreak_score"]
             score = raw_candidate["score"]
             if not isinstance(iri, str) or not iri:
                 raise CheckpointError("checkpoint candidate IRI is invalid")
@@ -370,11 +388,33 @@ class SyntheticCheckpointStore:
             numeric_score = float(score)
             if not math.isfinite(numeric_score):
                 raise CheckpointError("checkpoint candidate score must be finite")
-            candidates.append(MatchCandidate(iri=iri, label="", score=numeric_score))
-        if [(candidate.score, candidate.iri) for candidate in candidates] != [
-            (candidate.score, candidate.iri)
+            if isinstance(rank_tiebreak_score, bool) or not isinstance(
+                rank_tiebreak_score, (int, float)
+            ):
+                raise CheckpointError("checkpoint candidate rank tie-break must be finite")
+            numeric_tiebreak = float(rank_tiebreak_score)
+            if not math.isfinite(numeric_tiebreak) or not 0.0 <= numeric_tiebreak <= 1.0:
+                raise CheckpointError("checkpoint candidate rank tie-break must be in [0, 1]")
+            candidates.append(
+                MatchCandidate(
+                    iri=iri,
+                    label="",
+                    score=numeric_score,
+                    rank_tiebreak_score=numeric_tiebreak,
+                )
+            )
+        if [
+            (candidate.score, candidate.rank_tiebreak_score, candidate.iri)
+            for candidate in candidates
+        ] != [
+            (candidate.score, candidate.rank_tiebreak_score, candidate.iri)
             for candidate in sorted(
-                candidates, key=lambda candidate: (-candidate.score, candidate.iri)
+                candidates,
+                key=lambda candidate: (
+                    -candidate.score,
+                    -candidate.rank_tiebreak_score,
+                    candidate.iri,
+                ),
             )
         ]:
             raise CheckpointError("checkpoint candidates are not in canonical order")

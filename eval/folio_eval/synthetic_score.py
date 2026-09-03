@@ -18,10 +18,13 @@ from typing import Protocol
 from folio_resolve.blocklist import AliasBlocklist, load_seed_blocklist
 from folio_resolve.gates import PlaceNameGate, ShortLabelGate
 from folio_resolve.matching.aho_corasick import AhoCorasickMatcher
-from folio_resolve.ontology import FolioPythonProvider, RecallOntology
+from folio_resolve.ontology import Concept, FolioPythonProvider, RecallOntology
 from folio_resolve.pipeline import MatchCandidate
 from folio_resolve.recall import MultiStrategyRecall
-from folio_resolve.scoring import content_words
+from folio_resolve.scoring import (
+    content_words,
+    definition_context_score,
+)
 
 from .answer_rule import (
     AnswerRuleConfig,
@@ -191,12 +194,15 @@ class DocumentAdapter:
     recall_top_n: int = DEPTH_PROBE_MAX
     _matcher: AhoCorasickMatcher = field(init=False, repr=False)
     _recall: MultiStrategyRecall = field(init=False, repr=False)
+    _concepts: dict[str, Concept] = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         if not isinstance(self.ontology, RecallOntology):
             raise TypeError("DocumentAdapter requires a RecallOntology provider")
         self._matcher = AhoCorasickMatcher()
+        self._concepts = {}
         for surface, info in sorted(self.ontology.all_labels().items()):
+            self._concepts.setdefault(info.concept.iri, info.concept)
             self._matcher.add_pattern(
                 surface,
                 {"iri": info.concept.iri, "label": info.concept.label, "surface": surface},
@@ -204,13 +210,21 @@ class DocumentAdapter:
         self._matcher.build()
         self._recall = MultiStrategyRecall(self.ontology, top_n=self.recall_top_n)
 
+    def _concept(self, iri: str) -> Concept | None:
+        concept = self._concepts.get(iri)
+        if concept is None:
+            concept = self.ontology.get_concept(iri)
+            if concept is not None:
+                self._concepts[iri] = concept
+        return concept
+
     def _raw_candidates(
         self, passage: str, *, segments: Sequence[str] | None = None
     ) -> list[MatchCandidate]:
         raw: list[MatchCandidate] = []
         for match in self._matcher.search(passage):
             iri = str(match.value["iri"])
-            concept = self.ontology.get_concept(iri)
+            concept = self._concept(iri)
             raw.append(
                 MatchCandidate(
                     iri=iri,
@@ -332,7 +346,14 @@ class DocumentAdapter:
                     )
                 )
                 continue
+            concept = self._concept(candidate.iri)
+            context_score = definition_context_score(
+                passage,
+                concept.definition if concept is not None else None,
+                anchor=candidate.surface_term,
+            )
             candidate.score = short.score
+            candidate.rank_tiebreak_score = context_score
             candidate.gated = place.demoted or short.demoted
             candidate.gate_reason = "; ".join((place.reason, short.reason))
             survivors.append(candidate)
@@ -350,7 +371,13 @@ class DocumentAdapter:
                     gate_reason=candidate.gate_reason,
                 )
             )
-        survivors.sort(key=lambda candidate: (-candidate.score, candidate.iri))
+        survivors.sort(
+            key=lambda candidate: (
+                -candidate.score,
+                -candidate.rank_tiebreak_score,
+                candidate.iri,
+            )
+        )
         return AdapterResult(
             tuple(survivors),
             len(best),

@@ -23,6 +23,7 @@ from folio_eval.synthetic_checkpoint import (
     checkpoint_item_key,
     shard_for_item,
 )
+from folio_eval.synthetic_contract import SUPPRESSION_CATEGORIES
 from folio_eval.synthetic_score import (
     DEPTH_PROBE_MAX,
     AdapterResult,
@@ -34,7 +35,7 @@ from folio_eval.synthetic_score import (
     score_corpus_checkpointed,
 )
 
-from folio_resolve import Concept, InMemoryOntology
+from folio_resolve import Concept, InMemoryOntology, MatchCandidate
 
 
 def _ontology() -> InMemoryOntology:
@@ -121,6 +122,70 @@ def _report(
     )
 
 
+def test_checkpoint_round_trip_preserves_the_secondary_rank_key(tmp_path: Path) -> None:
+    config = AnswerRuleConfig()
+    store = SyntheticCheckpointStore.create(
+        tmp_path / "checkpoint",
+        fingerprint=_fingerprint(config),
+        shard_count=1,
+        expected_item_count=1,
+        retained_limit=1,
+    )
+
+    result = store.write_item(
+        "scoreable",
+        "item",
+        candidates=[
+            MatchCandidate(
+                iri="R-context",
+                label="Context",
+                score=100.0,
+                rank_tiebreak_score=0.75,
+            )
+        ],
+        raw_candidate_count=1,
+        suppression_counters=dict.fromkeys(SUPPRESSION_CATEGORIES, 0),
+    )
+
+    assert result.candidates[0].score == 100.0
+    assert result.candidates[0].rank_tiebreak_score == 0.75
+
+
+def test_prior_schema_and_scoring_semantics_manifest_is_rejected(tmp_path: Path) -> None:
+    config = AnswerRuleConfig()
+    fingerprint = _fingerprint(config)
+    prior_fingerprint = fingerprint.to_json()
+    prior_fingerprint["scoring_semantics_version"] = 1
+    prior_fingerprint_hash = hashlib.sha256(
+        checkpoint_module._canonical_json(prior_fingerprint)
+    ).hexdigest()
+    checkpoint_path = tmp_path / "checkpoint"
+    checkpoint_path.mkdir()
+    (checkpoint_path / "manifest.json").write_text(
+        json.dumps(
+            {
+                "expected_item_count": 1,
+                "fingerprint": prior_fingerprint,
+                "fingerprint_sha256": prior_fingerprint_hash,
+                "kind": checkpoint_module.CHECKPOINT_KIND,
+                "retained_limit": 1,
+                "schema_version": 2,
+                "shard_count": 1,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(CheckpointError, match="manifest or fingerprint"):
+        SyntheticCheckpointStore.create(
+            checkpoint_path,
+            fingerprint=fingerprint,
+            shard_count=1,
+            expected_item_count=1,
+            retained_limit=1,
+        )
+
+
 class CountingAdapter(DocumentAdapter):
     calls: int = 0
 
@@ -144,6 +209,14 @@ def _duplicate_candidate(payload: CheckpointPayload) -> None:
 
 def _nonfinite_score(payload: CheckpointPayload) -> None:
     payload["candidates"][0]["score"] = "NaN"
+
+
+def _nonfinite_rank_tiebreak(payload: CheckpointPayload) -> None:
+    payload["candidates"][0]["rank_tiebreak_score"] = "NaN"
+
+
+def _out_of_range_rank_tiebreak(payload: CheckpointPayload) -> None:
+    payload["candidates"][0]["rank_tiebreak_score"] = 1.25
 
 
 def _negative_raw_count(payload: CheckpointPayload) -> None:
@@ -170,6 +243,32 @@ def _refresh_payload_digest(payload: CheckpointPayload) -> None:
     unsigned = dict(payload)
     unsigned.pop("payload_sha256", None)
     payload["payload_sha256"] = checkpoint_module._payload_sha256(unsigned)
+
+
+def test_legacy_checkpoint_item_without_secondary_rank_key_is_rejected(tmp_path: Path) -> None:
+    config = AnswerRuleConfig()
+    store = SyntheticCheckpointStore.create(
+        tmp_path / "checkpoint",
+        fingerprint=_fingerprint(config),
+        shard_count=1,
+        expected_item_count=1,
+        retained_limit=1,
+    )
+    store.write_item(
+        "scoreable",
+        "item",
+        candidates=[MatchCandidate(iri="R-context", label="Context", score=100.0)],
+        raw_candidate_count=1,
+        suppression_counters=dict.fromkeys(SUPPRESSION_CATEGORIES, 0),
+    )
+    path = store.item_paths()[0]
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    del payload["candidates"][0]["rank_tiebreak_score"]
+    _refresh_payload_digest(payload)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(CheckpointError, match="candidate fields"):
+        store.load_item("scoreable", "item")
 
 
 def _clean_git_repo(tmp_path: Path) -> Path:
@@ -337,6 +436,8 @@ def test_checkpoint_payload_omits_passages_gold_and_candidate_surfaces(tmp_path:
         (_reverse_candidates, "canonical"),
         (_duplicate_candidate, "duplicate"),
         (_nonfinite_score, "finite"),
+        (_nonfinite_rank_tiebreak, "tie-break"),
+        (_out_of_range_rank_tiebreak, "tie-break"),
         (_negative_raw_count, "nonnegative"),
         (_remove_suppression_category, "categories"),
         (_break_count_invariant, "count invariant"),

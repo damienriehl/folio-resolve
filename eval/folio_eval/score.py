@@ -16,7 +16,10 @@ The headline metric is KD1's **strict exact-IRI set F1**. For one scoring item:
 Blank gold rows never enter the denominator (KD7 / AE2); the slice manifest already excludes
 them, and :func:`score_items` refuses them outright so no future caller can smuggle one in.
 
-Determinism (KTD7): candidates are ordered ``(score desc, IRI asc)`` before any cutoff, every
+Determinism (KTD7): candidates are ordered
+``(-score, -rank_tiebreak_score, iri)`` before any cutoff. ``full_text`` supplies the secondary
+definition-context key even without a judge, but score-floor filtering, calibration, threshold
+eligibility, and top-k ordering across unequal primary scores remain primary-score-only. Every
 aggregate iterates sorted keys, and every emitted structure is canonical JSON. The determinism
 self-test in :mod:`.selftest` re-runs a scoring pass under a different ``PYTHONHASHSEED`` and
 compares content hashes.
@@ -381,6 +384,7 @@ class PipelineAdapter:
         return self.pipeline.match(
             surface_term=item.leaf,
             heading_terms={part.lower() for part in item.ancestor_path},
+            full_text=item.input_text,
         )
 
 
