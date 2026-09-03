@@ -476,6 +476,12 @@ def load_raw_records(path: Path) -> list[dict[str, object]]:
 
 ManifestChecker = tuple[Manifest, bytes]
 _SYNTHETIC_CORPUS_VERSION_RE = re.compile(r"synthetic-v[0-9]+")
+_SYNTHETIC_SCORE_KEY_PATHS = frozenset(
+    {
+        ("scores_before", "synthetic"),
+        ("scores_after", "synthetic"),
+    }
+)
 
 
 def _manifest_record_collisions(
@@ -502,17 +508,20 @@ def _manifest_record_collisions(
         for key, nested in value.items():
             if not isinstance(key, str):
                 raise TypeError("manifest-scanned mapping keys must be strings")
-            collisions += scan_text(key, manifest, salt)
+            nested_path = (*path, key)
+            if nested_path not in _SYNTHETIC_SCORE_KEY_PATHS:
+                collisions += scan_text(key, manifest, salt)
             collisions += _manifest_record_collisions(
                 nested,
                 manifest,
                 salt,
-                path=(*path, key),
+                path=nested_path,
             )
         return collisions
     if isinstance(value, (list, tuple)):
         return sum(
-            _manifest_record_collisions(nested, manifest, salt, path=path) for nested in value
+            _manifest_record_collisions(nested, manifest, salt, path=(*path, "[]"))
+            for nested in value
         )
     return 0
 
@@ -1295,8 +1304,6 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - I/O or
         config_hash = str(report.get("answer_rule_config_sha256", ""))
         if not config_hash:
             parser.error("synthetic report requires answer_rule_config_sha256")
-        def score_synthetic() -> ScoreResult:
-            return {"synthetic": synthetic}
         if args.command == "start":
             pending = start_attempt(
                 hypothesis=args.hypothesis,
@@ -1307,7 +1314,7 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - I/O or
                 config_hash=config_hash,
                 surfaces=(),
                 manifest_checker=manifest_checker,
-                score_tune_firm2=score_synthetic,
+                prior_scores={"synthetic": synthetic},
                 lever_scope=args.lever_scope,
                 corpus_version=corpus_version,
                 answer_rule_config_sha256=config_hash,
@@ -1325,7 +1332,7 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - I/O or
             reason=args.reason,
             surfaces=(),
             manifest_checker=manifest_checker,
-            score_tune_firm2=score_synthetic,
+            after_scores={"synthetic": synthetic},
             corpus_version=corpus_version,
             answer_rule_config_sha256=config_hash,
             commit_sha=args.commit_sha,
