@@ -8,8 +8,10 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import folio_eval.experiment as experiment_module
+import folio_eval.leakcheck as leakcheck_module
 import pytest
 from folio_eval.experiment import (
     CHECK_IN_ATTEMPTS,
@@ -34,8 +36,7 @@ from folio_eval.experiment import (
     stop_status,
 )
 from folio_eval.grade import DISAGREEMENT_CLASSES
-from folio_eval.leakcheck import ScryptParams, build_manifest
-from folio_eval.selftest import DEFAULT_SELFTEST_TARGET
+from folio_eval.leakcheck import Manifest, ScryptParams, build_manifest
 
 GOLD_SURFACES = ("Fund Formation", "Escrow Services", "Carry Waterfall")
 
@@ -698,42 +699,7 @@ def test_append_record_refuses_empty_surfaces_without_manifest_checker(tmp_path:
         append_record(tmp_path / "log.jsonl", {"record_type": "attempt"}, surfaces=())
 
 
-def test_append_record_exempts_only_schema_owned_synthetic_metadata(tmp_path: Path) -> None:
-    salt = b"u9-test-salt"
-    manifest = build_manifest(
-        ["synthetic"],
-        salt,
-        gold_version="gold_v1",
-        gold_content_sha256="a" * 64,
-        scrypt_params=ScryptParams(n=2, r=1, p=1, dklen=8, test_params=True),
-    )
-    payload = {
-        "record_type": "attempt",
-        "corpus_version": "synthetic-v1",
-        "determinism_selftest": {"target": DEFAULT_SELFTEST_TARGET},
-        "scores_before": {"public_slice": {"aggregate": {"items": 2}, "items": []}},
-        "reason": "aggregate improvement",
-    }
-
-    append_record(
-        tmp_path / "metadata.jsonl",
-        payload,
-        surfaces=(),
-        manifest_checker=(manifest, salt),
-    )
-
-    with pytest.raises(experiment_module.SurfaceLeakError, match="manifest-matched"):
-        append_record(
-            tmp_path / "leak.jsonl",
-            {**payload, "reason": "synthetic"},
-            surfaces=(),
-            manifest_checker=(manifest, salt),
-        )
-
-
-def test_append_record_rejects_manifest_collision_in_top_level_mapping_key(
-    tmp_path: Path,
-) -> None:
+def synthetic_collision_checker() -> tuple[Manifest, bytes]:
     salt = b"0123456789abcdef"
     manifest = build_manifest(
         ["synthetic"],
@@ -742,6 +708,35 @@ def test_append_record_rejects_manifest_collision_in_top_level_mapping_key(
         gold_content_sha256="a" * 64,
         scrypt_params=ScryptParams(n=2, r=1, p=1, dklen=8, test_params=True),
     )
+    return manifest, salt
+
+
+def test_append_record_accepts_scores_before_synthetic_key(tmp_path: Path) -> None:
+    manifest, salt = synthetic_collision_checker()
+
+    append_record(
+        tmp_path / "scores-before.jsonl",
+        {"scores_before": {"synthetic": {"aggregate": {}, "items": []}}},
+        surfaces=(),
+        manifest_checker=(manifest, salt),
+    )
+
+
+def test_append_record_accepts_scores_after_synthetic_key(tmp_path: Path) -> None:
+    manifest, salt = synthetic_collision_checker()
+
+    append_record(
+        tmp_path / "scores-after.jsonl",
+        {"scores_after": {"synthetic": {"aggregate": {}, "items": []}}},
+        surfaces=(),
+        manifest_checker=(manifest, salt),
+    )
+
+
+def test_append_record_rejects_manifest_collision_in_top_level_mapping_key(
+    tmp_path: Path,
+) -> None:
+    manifest, salt = synthetic_collision_checker()
 
     with pytest.raises(experiment_module.SurfaceLeakError, match="manifest-matched"):
         append_record(
@@ -752,20 +747,81 @@ def test_append_record_rejects_manifest_collision_in_top_level_mapping_key(
         )
 
 
-def test_append_record_rejects_manifest_collision_in_nested_mapping_key(tmp_path: Path) -> None:
-    salt = b"0123456789abcdef"
-    manifest = build_manifest(
-        ["synthetic"],
-        salt,
-        gold_version="gold_v1",
-        gold_content_sha256="a" * 64,
-        scrypt_params=ScryptParams(n=2, r=1, p=1, dklen=8, test_params=True),
-    )
+def test_append_record_rejects_manifest_collision_under_triage(tmp_path: Path) -> None:
+    manifest, salt = synthetic_collision_checker()
 
     with pytest.raises(experiment_module.SurfaceLeakError, match="manifest-matched"):
         append_record(
-            tmp_path / "nested-key-leak.jsonl",
-            {"outer": {"synthetic": "safe value"}},
+            tmp_path / "triage-key-leak.jsonl",
+            {"triage": {"synthetic": "safe value"}},
+            surfaces=(),
+            manifest_checker=(manifest, salt),
+        )
+
+
+def test_append_record_rejects_manifest_collision_below_other_scores_before_key(
+    tmp_path: Path,
+) -> None:
+    manifest, salt = synthetic_collision_checker()
+
+    with pytest.raises(experiment_module.SurfaceLeakError, match="manifest-matched"):
+        append_record(
+            tmp_path / "other-score-key-leak.jsonl",
+            {"scores_before": {"other": {"synthetic": "safe value"}}},
+            surfaces=(),
+            manifest_checker=(manifest, salt),
+        )
+
+
+def test_append_record_rejects_manifest_collision_below_exempt_key(tmp_path: Path) -> None:
+    manifest, salt = synthetic_collision_checker()
+
+    with pytest.raises(experiment_module.SurfaceLeakError, match="manifest-matched"):
+        append_record(
+            tmp_path / "nested-exempt-key-leak.jsonl",
+            {"scores_before": {"synthetic": {"synthetic": "safe value"}}},
+            surfaces=(),
+            manifest_checker=(manifest, salt),
+        )
+
+
+def test_append_record_rejects_manifest_collision_in_list_under_score_field(
+    tmp_path: Path,
+) -> None:
+    manifest, salt = synthetic_collision_checker()
+
+    with pytest.raises(experiment_module.SurfaceLeakError, match="manifest-matched"):
+        append_record(
+            tmp_path / "list-key-leak.jsonl",
+            {"scores_before": [{"synthetic": "safe value"}]},
+            surfaces=(),
+            manifest_checker=(manifest, salt),
+        )
+
+
+def test_append_record_rejects_manifest_collision_in_tuple_under_score_field(
+    tmp_path: Path,
+) -> None:
+    manifest, salt = synthetic_collision_checker()
+
+    with pytest.raises(experiment_module.SurfaceLeakError, match="manifest-matched"):
+        append_record(
+            tmp_path / "tuple-key-leak.jsonl",
+            {"scores_after": ({"synthetic": "safe value"},)},
+            surfaces=(),
+            manifest_checker=(manifest, salt),
+        )
+
+
+def test_append_record_rejects_manifest_collision_value_below_exempt_key(
+    tmp_path: Path,
+) -> None:
+    manifest, salt = synthetic_collision_checker()
+
+    with pytest.raises(experiment_module.SurfaceLeakError, match="manifest-matched"):
+        append_record(
+            tmp_path / "exempt-key-value-leak.jsonl",
+            {"scores_before": {"synthetic": "synthetic"}},
             surfaces=(),
             manifest_checker=(manifest, salt),
         )
@@ -788,6 +844,108 @@ def test_append_record_rejects_non_string_mapping_key(tmp_path: Path) -> None:
             surfaces=(),
             manifest_checker=(manifest, salt),
         )
+
+
+def test_synthetic_cli_start_uses_supplied_report_before_previous_ledger_record(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    salt = b"u9-test-salt"
+    manifest = build_manifest(
+        ["private firm phrase"],
+        salt,
+        gold_version="gold_v1",
+        gold_content_sha256="a" * 64,
+        scrypt_params=ScryptParams(n=2, r=1, p=1, dklen=8, test_params=True),
+    )
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(json.dumps(manifest.to_json()), encoding="utf-8")
+    local_gold_dir = tmp_path / "owner-gold"
+    local_gold_dir.mkdir()
+    (local_gold_dir / "gold_v2.manifest.json").write_text(
+        json.dumps({"gold_version": 2, "content_sha256": "b" * 64}), encoding="utf-8"
+    )
+    monkeypatch.setattr(
+        leakcheck_module,
+        "DEFAULT_LOCAL_GOLD_MANIFEST_GLOB",
+        local_gold_dir / "gold_v*.manifest.json",
+    )
+    salt_path = tmp_path / "salt"
+    salt_path.write_bytes(salt)
+    supplied_overall = {"items": 2, "tp": 1, "fp": 1, "fn": 1, "exact_items": 0}
+    report_path = tmp_path / "baseline.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "overall": supplied_overall,
+                "corpus_version": "synthetic-v1",
+                "ontology_cache_sha256": "a" * 64,
+                "answer_rule_config_sha256": "b" * 64,
+            }
+        ),
+        encoding="utf-8",
+    )
+    log_path = tmp_path / "experiments.jsonl"
+    log_path.write_text(
+        json.dumps(
+            {
+                "record_type": "attempt",
+                "iteration": 1,
+                "gold_version": 0,
+                "ontology_hash": "a" * 64,
+                "scores_after": {
+                    "synthetic": {
+                        "aggregate": {
+                            "items": 9,
+                            "tp": 9,
+                            "fp": 0,
+                            "fn": 0,
+                            "exact_items": 9,
+                        },
+                        "items": [],
+                    }
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    pending_path = tmp_path / "pending.json"
+    monkeypatch.setattr(
+        experiment_module,
+        "run_determinism_selftest",
+        lambda _target: SimpleNamespace(to_json=lambda: {}),
+    )
+
+    assert (
+        experiment_module.main(
+            [
+                "start",
+                "--slice",
+                "synthetic",
+                "--synthetic-report",
+                str(report_path),
+                "--leak-manifest",
+                str(manifest_path),
+                "--salt-file",
+                str(salt_path),
+                "--experiments-log",
+                str(log_path),
+                "--pending",
+                str(pending_path),
+                "--hypothesis",
+                "shared normalization adjustment",
+                "--cluster-targeted",
+                "provider score scale",
+                "--cluster-size",
+                "0",
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+
+    pending = json.loads(pending_path.read_text(encoding="utf-8"))
+    assert pending["scores_before"]["synthetic"]["aggregate"] == supplied_overall
 
 
 def test_synthetic_record_via_manifest_checker_round_trips(tmp_path: Path) -> None:
