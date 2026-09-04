@@ -26,7 +26,7 @@ from .synthetic_contract import SUPPRESSION_CATEGORIES, SyntheticItemKind
 
 CHECKPOINT_KIND = "synthetic-scoring-checkpoint"
 CHECKPOINT_SCHEMA_VERSION = 3
-SCORING_SEMANTICS_VERSION = 3
+SCORING_SEMANTICS_VERSION = 4
 SHA256_RE = re.compile(r"[0-9a-f]{64}")
 
 

@@ -250,8 +250,98 @@ class DocumentAdapter:
                 )
         return raw
 
+    @staticmethod
+    def _candidate_key(candidate: MatchCandidate) -> tuple[float, float, str, str]:
+        return (
+            -candidate.score,
+            -candidate.rank_tiebreak_score,
+            candidate.extraction_path,
+            candidate.surface_term,
+        )
+
+    def _gate_candidate(
+        self, candidate: MatchCandidate
+    ) -> tuple[MatchCandidate | None, CandidateTrace]:
+        pre_gate_score = candidate.score
+        if self.blocklist.is_blocked(candidate.surface_term, candidate.iri):
+            return None, CandidateTrace(
+                iri=candidate.iri,
+                label=candidate.label,
+                branch=candidate.branch,
+                extraction_path=candidate.extraction_path,
+                surface_term=candidate.surface_term,
+                pre_gate_score=pre_gate_score,
+                post_gate_score=None,
+                gate_disposition="blocklist",
+                gated=False,
+                gate_reason="alias_blocklist",
+            )
+        place = self.place_gate.evaluate(
+            query=candidate.surface_term,
+            label=candidate.label,
+            branch=candidate.branch,
+            score=candidate.score,
+        )
+        if place.demoted and place.score < self.score_floor:
+            return None, CandidateTrace(
+                iri=candidate.iri,
+                label=candidate.label,
+                branch=candidate.branch,
+                extraction_path=candidate.extraction_path,
+                surface_term=candidate.surface_term,
+                pre_gate_score=pre_gate_score,
+                post_gate_score=place.score,
+                gate_disposition="place_gate",
+                gated=True,
+                gate_reason=place.reason,
+            )
+        short = self.short_gate.evaluate(
+            query=candidate.surface_term, label=candidate.label, score=place.score
+        )
+        if short.demoted and short.score < self.score_floor:
+            return None, CandidateTrace(
+                iri=candidate.iri,
+                label=candidate.label,
+                branch=candidate.branch,
+                extraction_path=candidate.extraction_path,
+                surface_term=candidate.surface_term,
+                pre_gate_score=pre_gate_score,
+                post_gate_score=short.score,
+                gate_disposition="short_label_gate",
+                gated=True,
+                gate_reason=short.reason,
+            )
+        if short.score < self.score_floor:
+            return None, CandidateTrace(
+                iri=candidate.iri,
+                label=candidate.label,
+                branch=candidate.branch,
+                extraction_path=candidate.extraction_path,
+                surface_term=candidate.surface_term,
+                pre_gate_score=pre_gate_score,
+                post_gate_score=short.score,
+                gate_disposition="score_floor",
+                gated=place.demoted or short.demoted,
+                gate_reason="; ".join((place.reason, short.reason)),
+            )
+        candidate.score = short.score
+        candidate.gated = place.demoted or short.demoted
+        candidate.gate_reason = "; ".join((place.reason, short.reason))
+        return candidate, CandidateTrace(
+            iri=candidate.iri,
+            label=candidate.label,
+            branch=candidate.branch,
+            extraction_path=candidate.extraction_path,
+            surface_term=candidate.surface_term,
+            pre_gate_score=pre_gate_score,
+            post_gate_score=candidate.score,
+            gate_disposition="survived",
+            gated=candidate.gated,
+            gate_reason=candidate.gate_reason,
+        )
+
     def adapt(self, passage: str, *, segments: Sequence[str] | None = None) -> AdapterResult:
-        best: dict[str, MatchCandidate] = {}
+        anchors_by_iri: dict[str, list[MatchCandidate]] = {}
         for candidate in self._raw_candidates(passage, segments=segments):
             concept = self._concept(candidate.iri)
             candidate.rank_tiebreak_score = definition_context_score(
@@ -259,127 +349,26 @@ class DocumentAdapter:
                 concept.definition if concept is not None else None,
                 anchor=candidate.surface_term,
             )
-            current = best.get(candidate.iri)
-            candidate_key = (
-                -candidate.score,
-                -candidate.rank_tiebreak_score,
-                candidate.extraction_path,
-                candidate.surface_term,
-            )
-            current_key = (
-                (
-                    -current.score,
-                    -current.rank_tiebreak_score,
-                    current.extraction_path,
-                    current.surface_term,
-                )
-                if current is not None
-                else None
-            )
-            if current_key is None or candidate_key < current_key:
-                best[candidate.iri] = candidate
+            anchors_by_iri.setdefault(candidate.iri, []).append(candidate)
 
         counters = dict.fromkeys(SUPPRESSION_CATEGORIES, 0)
         survivors: list[MatchCandidate] = []
         traces: list[CandidateTrace] = []
-        for iri in sorted(best):
-            candidate = best[iri]
-            pre_gate_score = candidate.score
-            if self.blocklist.is_blocked(candidate.surface_term, candidate.iri):
-                counters["blocklist"] += 1
-                traces.append(
-                    CandidateTrace(
-                        iri=candidate.iri,
-                        label=candidate.label,
-                        branch=candidate.branch,
-                        extraction_path=candidate.extraction_path,
-                        surface_term=candidate.surface_term,
-                        pre_gate_score=pre_gate_score,
-                        post_gate_score=None,
-                        gate_disposition="blocklist",
-                        gated=False,
-                        gate_reason="alias_blocklist",
-                    )
-                )
-                continue
-            place = self.place_gate.evaluate(
-                query=candidate.surface_term,
-                label=candidate.label,
-                branch=candidate.branch,
-                score=candidate.score,
-            )
-            if place.demoted and place.score < self.score_floor:
-                counters["place_gate"] += 1
-                traces.append(
-                    CandidateTrace(
-                        iri=candidate.iri,
-                        label=candidate.label,
-                        branch=candidate.branch,
-                        extraction_path=candidate.extraction_path,
-                        surface_term=candidate.surface_term,
-                        pre_gate_score=pre_gate_score,
-                        post_gate_score=place.score,
-                        gate_disposition="place_gate",
-                        gated=True,
-                        gate_reason=place.reason,
-                    )
-                )
-                continue
-            short = self.short_gate.evaluate(
-                query=candidate.surface_term, label=candidate.label, score=place.score
-            )
-            if short.demoted and short.score < self.score_floor:
-                counters["short_label_gate"] += 1
-                traces.append(
-                    CandidateTrace(
-                        iri=candidate.iri,
-                        label=candidate.label,
-                        branch=candidate.branch,
-                        extraction_path=candidate.extraction_path,
-                        surface_term=candidate.surface_term,
-                        pre_gate_score=pre_gate_score,
-                        post_gate_score=short.score,
-                        gate_disposition="short_label_gate",
-                        gated=True,
-                        gate_reason=short.reason,
-                    )
-                )
-                continue
-            if short.score < self.score_floor:
-                counters["score_floor"] += 1
-                traces.append(
-                    CandidateTrace(
-                        iri=candidate.iri,
-                        label=candidate.label,
-                        branch=candidate.branch,
-                        extraction_path=candidate.extraction_path,
-                        surface_term=candidate.surface_term,
-                        pre_gate_score=pre_gate_score,
-                        post_gate_score=short.score,
-                        gate_disposition="score_floor",
-                        gated=place.demoted or short.demoted,
-                        gate_reason="; ".join((place.reason, short.reason)),
-                    )
-                )
-                continue
-            candidate.score = short.score
-            candidate.gated = place.demoted or short.demoted
-            candidate.gate_reason = "; ".join((place.reason, short.reason))
-            survivors.append(candidate)
-            traces.append(
-                CandidateTrace(
-                    iri=candidate.iri,
-                    label=candidate.label,
-                    branch=candidate.branch,
-                    extraction_path=candidate.extraction_path,
-                    surface_term=candidate.surface_term,
-                    pre_gate_score=pre_gate_score,
-                    post_gate_score=candidate.score,
-                    gate_disposition="survived",
-                    gated=candidate.gated,
-                    gate_reason=candidate.gate_reason,
-                )
-            )
+        for iri in sorted(anchors_by_iri):
+            best_failure: CandidateTrace | None = None
+            for candidate in sorted(anchors_by_iri[iri], key=self._candidate_key):
+                survivor, trace = self._gate_candidate(candidate)
+                if best_failure is None:
+                    best_failure = trace
+                if survivor is not None:
+                    survivors.append(survivor)
+                    traces.append(trace)
+                    break
+            else:
+                if best_failure is None:
+                    raise AssertionError("candidate group must not be empty")
+                counters[best_failure.gate_disposition] += 1
+                traces.append(best_failure)
         survivors.sort(
             key=lambda candidate: (
                 -candidate.score,
@@ -389,7 +378,7 @@ class DocumentAdapter:
         )
         return AdapterResult(
             tuple(survivors),
-            len(best),
+            len(anchors_by_iri),
             MappingProxyType(dict(counters)),
             tuple(traces),
         )
