@@ -28,6 +28,7 @@ from folio_eval.synthetic_score import (
 
 from folio_resolve import AliasBlocklist, BlockedAlias, Concept, InMemoryOntology
 from folio_resolve.pipeline import MatchCandidate
+from folio_resolve.scoring import definition_context_score
 
 
 def _ontology() -> InMemoryOntology:
@@ -144,7 +145,6 @@ def test_adapter_is_deterministic_and_accounts_for_every_raw_candidate() -> None
     assert first.raw_candidate_count == len(first.candidates) + sum(
         first.suppression_counters.values()
     )
-    assert first.suppression_counters["blocklist"] >= 1
     assert len(first.traces) == first.raw_candidate_count
     assert [trace.iri for trace in first.traces] == sorted(trace.iri for trace in first.traces)
     dispositions = Counter(trace.gate_disposition for trace in first.traces)
@@ -187,6 +187,177 @@ def test_adapter_uses_local_definition_context_to_break_exact_match_ties() -> No
     assert [candidate.iri for candidate in ranked] == ["R-zulu", "R-alpha"]
     assert [candidate.score for candidate in ranked] == [100.0, 100.0]
     assert adapted.candidates[0].rank_tiebreak_score > adapted.candidates[1].rank_tiebreak_score
+
+
+def test_adapter_keeps_the_strongest_context_across_same_iri_anchors() -> None:
+    ontology = InMemoryOntology(
+        [
+            Concept(
+                iri="R-context",
+                label="Alpha Anchor",
+                definition="evidentiary burden",
+                alternative_labels=("Zulu Anchor",),
+            )
+        ]
+    )
+    passage = (
+        "Alpha Anchor applies. "
+        + "neutral filler " * 80
+        + "The evidentiary burden controls under Zulu Anchor."
+    )
+
+    adapted = DocumentAdapter(ontology).adapt(passage, segments=())
+
+    assert len(adapted.candidates) == 1
+    assert adapted.candidates[0].surface_term == "zulu anchor"
+    assert adapted.candidates[0].score == 100.0
+    assert adapted.candidates[0].rank_tiebreak_score == definition_context_score(
+        passage,
+        "evidentiary burden",
+        anchor="zulu anchor",
+    )
+    assert adapted.candidates[0].rank_tiebreak_score > definition_context_score(
+        passage,
+        "evidentiary burden",
+        anchor="alpha anchor",
+    )
+
+
+def test_adapter_keeps_eligible_anchor_when_stronger_same_iri_anchor_is_blocked() -> None:
+    ontology = InMemoryOntology(
+        [
+            Concept(
+                iri="R-context",
+                label="Alpha Anchor",
+                definition="evidentiary burden",
+                alternative_labels=("Zulu Anchor",),
+            )
+        ]
+    )
+    passage = (
+        "Alpha Anchor applies. "
+        + "neutral filler " * 80
+        + "The evidentiary burden controls under Zulu Anchor."
+    )
+    blocklist = AliasBlocklist([BlockedAlias("Zulu Anchor", "R-context")])
+
+    adapted = DocumentAdapter(ontology, blocklist=blocklist).adapt(passage, segments=())
+
+    assert [candidate.surface_term for candidate in adapted.candidates] == ["alpha anchor"]
+    assert adapted.raw_candidate_count == 1
+    assert sum(adapted.suppression_counters.values()) == 0
+    assert len(adapted.traces) == 1
+    assert adapted.traces[0].gate_disposition == "survived"
+
+
+def test_adapter_keeps_eligible_anchor_when_stronger_same_iri_anchor_fails_place_gate() -> None:
+    ontology = InMemoryOntology(
+        [
+            Concept(
+                iri="R-context",
+                label="Alpha Harbor",
+                definition="evidentiary burden",
+                alternative_labels=("Zulu Harbor",),
+                branch="Location",
+            )
+        ]
+    )
+    passage = (
+        "Alpha Harbor applies. "
+        + "neutral filler " * 80
+        + "The evidentiary burden controls under Zulu Harbor."
+    )
+
+    adapted = DocumentAdapter(ontology).adapt(passage, segments=())
+
+    assert [candidate.surface_term for candidate in adapted.candidates] == ["alpha harbor"]
+    assert adapted.raw_candidate_count == 1
+    assert sum(adapted.suppression_counters.values()) == 0
+    assert len(adapted.traces) == 1
+    assert adapted.traces[0].gate_disposition == "survived"
+
+
+def test_adapter_keeps_eligible_anchor_when_stronger_same_iri_anchor_fails_short_label_gate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ontology = InMemoryOntology(
+        [Concept(iri="R-context", label="Alpha", definition="evidentiary burden")]
+    )
+    adapter = DocumentAdapter(ontology)
+    monkeypatch.setattr(
+        adapter,
+        "_raw_candidates",
+        lambda _passage, *, segments=None: [
+            MatchCandidate(
+                iri="R-context",
+                label="Alpha",
+                score=94.0,
+                branch="",
+                extraction_path="multi_strategy_recall",
+                surface_term="Beta",
+            ),
+            MatchCandidate(
+                iri="R-context",
+                label="Alpha",
+                score=90.0,
+                branch="",
+                extraction_path="aho_corasick",
+                surface_term="Alpha",
+            ),
+        ],
+    )
+
+    adapted = adapter.adapt("Beta applies before Alpha.")
+
+    assert [candidate.surface_term for candidate in adapted.candidates] == ["Alpha"]
+    assert adapted.raw_candidate_count == 1
+    assert sum(adapted.suppression_counters.values()) == 0
+    assert len(adapted.traces) == 1
+    assert adapted.traces[0].gate_disposition == "survived"
+
+
+def test_adapter_emits_one_best_failure_when_no_same_iri_anchor_is_eligible(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ontology = InMemoryOntology(
+        [Concept(iri="R-context", label="Alpha", definition="evidentiary burden")]
+    )
+    adapter = DocumentAdapter(
+        ontology,
+        blocklist=AliasBlocklist([BlockedAlias("Zulu", "R-context")]),
+    )
+    monkeypatch.setattr(
+        adapter,
+        "_raw_candidates",
+        lambda _passage, *, segments=None: [
+            MatchCandidate(
+                iri="R-context",
+                label="Alpha",
+                score=90.0,
+                branch="",
+                extraction_path="multi_strategy_recall",
+                surface_term="Beta",
+            ),
+            MatchCandidate(
+                iri="R-context",
+                label="Alpha",
+                score=90.0,
+                branch="",
+                extraction_path="multi_strategy_recall",
+                surface_term="Zulu",
+            ),
+        ],
+    )
+    passage = "Beta applies. " + "neutral filler " * 80 + "Evidentiary burden: Zulu."
+
+    adapted = adapter.adapt(passage)
+
+    assert adapted.candidates == ()
+    assert adapted.raw_candidate_count == 1
+    assert sum(adapted.suppression_counters.values()) == 1
+    assert adapted.suppression_counters["blocklist"] == 1
+    assert len(adapted.traces) == 1
+    assert adapted.traces[0].gate_disposition == "blocklist"
 
 
 def test_adapter_does_not_retain_candidates_for_identical_passage(

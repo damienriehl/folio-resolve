@@ -155,7 +155,7 @@ def test_prior_schema_and_scoring_semantics_manifest_is_rejected(tmp_path: Path)
     config = AnswerRuleConfig()
     fingerprint = _fingerprint(config)
     prior_fingerprint = fingerprint.to_json()
-    prior_fingerprint["scoring_semantics_version"] = 1
+    prior_fingerprint["scoring_semantics_version"] = 2
     prior_fingerprint_hash = hashlib.sha256(
         checkpoint_module._canonical_json(prior_fingerprint)
     ).hexdigest()

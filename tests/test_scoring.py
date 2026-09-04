@@ -6,6 +6,7 @@ import pytest
 
 from folio_resolve.scoring import (
     SEARCH_STOPWORDS,
+    _casefolded_span,
     compute_relevance_score,
     content_words,
     definition_context_score,
@@ -13,6 +14,27 @@ from folio_resolve.scoring import (
     tokenize,
     word_overlap,
 )
+
+
+@pytest.mark.parametrize(
+    ("text", "needle", "expected"),
+    [
+        ("o\ufb03ce", "office", (0, 4)),
+        ("\u0130stanbul", "i\u0307s", (0, 2)),
+        ("ordinary text", "", None),
+        ("ordinary text", "missing", None),
+        ("Stra\u00dfe", "SSE", (4, 6)),
+    ],
+    ids=("ligature-expansion", "dotted-capital-i", "empty", "absent", "bounded-end"),
+)
+def test_casefolded_span_maps_matches_to_original_offsets(
+    text: str, needle: str, expected: tuple[int, int] | None
+) -> None:
+    span = _casefolded_span(text, needle)
+
+    assert span == expected
+    if span is not None:
+        assert span[1] <= len(text)
 
 
 def test_definition_context_score_prefers_the_definition_near_the_matched_anchor() -> None:
@@ -30,6 +52,17 @@ def test_definition_context_score_prefers_the_definition_near_the_matched_anchor
     )
 
     assert relevant > distant
+
+
+def test_definition_context_score_maps_casefolded_offsets_to_the_original_text() -> None:
+    passage = "ßdefinition Anchor"
+
+    assert definition_context_score(
+        passage,
+        "definition anchor",
+        anchor="anchor",
+        radius=len("definition "),
+    ) == 1.0
 
 
 def test_word_order_invariant() -> None:
