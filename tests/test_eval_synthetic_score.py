@@ -277,6 +277,45 @@ def test_adapter_keeps_eligible_anchor_when_stronger_same_iri_anchor_fails_place
     assert adapted.traces[0].gate_disposition == "survived"
 
 
+def test_adapter_keeps_eligible_anchor_when_stronger_same_iri_anchor_fails_short_label_gate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ontology = InMemoryOntology(
+        [Concept(iri="R-context", label="Alpha", definition="evidentiary burden")]
+    )
+    adapter = DocumentAdapter(ontology)
+    monkeypatch.setattr(
+        adapter,
+        "_raw_candidates",
+        lambda _passage, *, segments=None: [
+            MatchCandidate(
+                iri="R-context",
+                label="Alpha",
+                score=94.0,
+                branch="",
+                extraction_path="multi_strategy_recall",
+                surface_term="Beta",
+            ),
+            MatchCandidate(
+                iri="R-context",
+                label="Alpha",
+                score=90.0,
+                branch="",
+                extraction_path="aho_corasick",
+                surface_term="Alpha",
+            ),
+        ],
+    )
+
+    adapted = adapter.adapt("Beta applies before Alpha.")
+
+    assert [candidate.surface_term for candidate in adapted.candidates] == ["Alpha"]
+    assert adapted.raw_candidate_count == 1
+    assert sum(adapted.suppression_counters.values()) == 0
+    assert len(adapted.traces) == 1
+    assert adapted.traces[0].gate_disposition == "survived"
+
+
 def test_adapter_emits_one_best_failure_when_no_same_iri_anchor_is_eligible(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
