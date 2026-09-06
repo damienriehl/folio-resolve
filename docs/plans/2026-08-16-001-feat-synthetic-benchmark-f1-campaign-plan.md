@@ -198,6 +198,13 @@ This plan owns the F1 campaign inside folio-resolve. The surrounding rounds are 
 - KTD10. **Consumer entry points for the comparison.** Each consumer gains a small items-file seam. The incumbent lane installs the released `folio-resolve==0.4.0` wheel — never the editable working tree, which would make the baseline track in-development code — and asserts the resolved version and file location before running. mapper's `scripts/demos/run_probe.py` is never the incumbent (it bypasses the mapper pipeline and calls folio-python directly). enrich's `backend/migration/compare.py` is never invoked (it writes tracked files). Cites R15.
 - KTD11. **Suppression counters in every synthetic scoring run.** Count items vetoed per gate/blocklist category so a low synthetic F1 attributes to the matcher, not an invisible veto. Cites R7.
 - KTD12. **Stop-rule defaults, statistically guarded.** A sub-epsilon iteration requires the delta below 0.005 micro-F1 AND inside a bootstrap 95% confidence interval computed over the scored items (`report.py` already carries the bootstrap machinery); two consecutive such iterations on the same corpus version with no novel disagreement class stop the loop. Iteration records carry the item count, interval width, a `lever_scope` field (`shared` for changes in `src/folio_resolve/` reachable by the firm exam; `adapter_only` for U8-local changes), and a `disagreement_class` from a fixed, versioned vocabulary — the stop counter reads shared-scope iterations only, and novelty means a class absent from prior iteration records. Before the stop rule may fire, one interim owner-run firm-exam checkpoint (tune/Firm-2, frozen 79 excluded per R13) is recorded against the synthetic trajectory; a non-corroborating result routes to Damien as a stop/redirect decision. Damien can override any constant. Cites R12, R13.
+
+> **Amendment 2026-09-06 (owner ruling).** The U6/KTD12 diminishing-returns rule is a firm-lane instrument.
+> On the synthetic slice, a `park` ledger record is the stop signal for that lever; the campaign terminates through U13's report and adoption verdict, not this counter.
+> `start_attempt` preserves caller-supplied prior scores as the recorded baseline, so a lever flat against the kept state can retain a +0.010508 delta against baseline-v1 and miss the epsilon condition.
+> The aggregate-only synthetic records also carry zero-unit bootstrap intervals, which `stop_status` rejects before its in-band test.
+> This ruling applies to `synthetic_experiments.jsonl` attempts 0001–0004 (`keep`, `park`, `park`, `park`). No code change is authorized.
+
 - KTD13. **Worker outputs are proposals until owner review.** Scoring and report generation run from a clean pinned checkout with read-only gold and manifest inputs; worker-authored corpus rows, manifests, scorer changes, and committed reports reach `main` only through the repo's normal review path. U11 provider keys are owner-held (owner's `folio-enrich/backend/.env` pattern) and never provisioned into Codex worker environments. Cites R7, R20.
 
 ### High-Level Technical Design
@@ -388,6 +395,12 @@ U1 unblocks everything in Stage 1 and the sitting UX in Stage 2. U2–U3 are the
 - **Verification:** Gates green; `eval/reports/synthetic-baseline-v1.json` committed with slices keyed by `stratum_id`, the probe result recorded.
 
 ### U9. Iteration loop and guarded stop rule
+
+> **Amendment 2026-09-06 (owner ruling).** The U6/KTD12 diminishing-returns gate governs the firm lane, not the synthetic slice.
+> For synthetic work, `park` in the experiment ledger stops that lever, and U13's report plus adoption verdict terminates the campaign.
+> Caller-supplied prior scores become the attempt's recorded baseline, so a flat lever can remain +0.010508 against baseline-v1 instead of becoming sub-epsilon.
+> Synthetic aggregate-only records independently have zero bootstrap units, and `stop_status` resets rather than advances the counter for them.
+> Attempts 0001–0004 (`keep`, `park`, `park`, `park`) are the record governed by this amendment. The implementation remains unchanged.
 
 - **Goal:** Synthetic iterations record through the existing experiment protocol with lever-scope and noise guards, and stop only on corroborated diminishing returns.
 - **Requirements:** R9, R12, R13 (KTD9, KTD12).
