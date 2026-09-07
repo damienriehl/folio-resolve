@@ -146,6 +146,15 @@ U1 → U2 (canary) → U3 (full run, ~21h) → U4 (verify + commit) → U5 (U13 
   `folio-resolve==0.4.0` resolved in both consumer venvs. Write the launcher with the v8 command
   from the retired reboot handoff (recoverable via `git show 315871c^:docs/handoffs/2026-08-29-u10-v8-reboot-handoff.md`),
   substituting `pilot-checkpoint-v9` and `synthetic-comparison-v2.json`.
+
+> **Execution note (2026-09-07, from the run).** Two launches failed before any shard ran.
+> `_assert_write_paths_are_safe` requires every candidate-repository output to be Git-ignored; its
+> only published-report exemption is the hardcoded v1 path. Use
+> `--out eval/data/reports/synthetic-comparison-v2.json` for the working launcher. A fresh worktree's
+> plain `uv sync` also omits the optional `folio-python` dependency that the fingerprint queries;
+> prepare it with `uv sync --extra folio`. With that shape, the third, one-item canary completed
+> shard 1/90 in 11 minutes.
+
 - **Verification:** Preflight report lists every assertion with its output.
 
 ### U2. Canary
@@ -169,6 +178,9 @@ U1 → U2 (canary) → U3 (full run, ~21h) → U4 (verify + commit) → U5 (U13 
 - **Requirements:** R4, R5.
 - **Approach:** `--finalize-only` replay to a scratch path; byte-compare; leak scan; add the
   `.gitattributes` line; PR with a Codex review receipt.
+  Produce the committed copy by copying the byte-verified ignored-path report to
+  `eval/reports/synthetic-comparison-v2.json` and add the mirrored LFS line
+  `eval/reports/synthetic-comparison-v2.json filter=lfs diff=lfs merge=lfs -text` to `.gitattributes`.
 - **Verification:** AE2, AE3.
 
 ### U5. U13 campaign report
