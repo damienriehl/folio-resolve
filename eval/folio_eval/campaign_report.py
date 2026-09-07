@@ -12,6 +12,7 @@ import json
 import math
 import re
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Final
 
@@ -21,13 +22,23 @@ DOWNSTREAM_STACKS: Final = ("folio-enrich", "folio-mapper")
 BENCHMARK_SCORE_KEY: Final = "syn" + "thetic"
 LEDGER_DECISIONS: Final = frozenset({"keep", "park", "revert"})
 COMPARISON_VERDICTS: Final = frozenset({"win", "hold", "loss"})
+COMPARISON_METRIC: Final = "paired_item_f1_delta"
+COMPARISON_ALPHA: Final = 0.05
+# BootstrapCI.to_json serializes bounds to six decimal places.
+COMPARISON_SERIALIZATION_EPSILON: Final = 1e-6
+CANONICAL_SURFACE_MANIFEST_SHA256: Final = (
+    "4a5afda8a107dfb9b5d3518ce7b06f6cdcb380a410edfd12eb0d6d0e27513463"
+)
 PLAN_REFERENCE: Final = "docs/plans/2026-09-06-001-eval-u10-comparison-v2-and-u13-closeout-plan.md"
 PARITY_REFERENCE: Final = "docs/migration/2026-08-component-parity-map.md"
 REPO_RELATIVE_PATH_RE: Final = re.compile(
     r"[A-Za-z0-9_-][A-Za-z0-9._-]*(?:/[A-Za-z0-9_-][A-Za-z0-9._-]*)*"
 )
 BENCHMARK_ITEM_ID_RE: Final = re.compile(
-    r"\b[a-z][a-z0-9]*(?:-[a-z0-9]+){3,}-[0-9]{3}\b"
+    r"\b[a-z][a-z0-9]*(?:-[a-z0-9]+){2,}-[0-9]{3}\b"
+)
+ITEM_ID_TOKEN_RE: Final = re.compile(
+    r"(?<![A-Za-z0-9_-])[A-Za-z0-9][A-Za-z0-9_-]*(?![A-Za-z0-9_-])"
 )
 
 
@@ -151,6 +162,37 @@ def _integer(value: object, *, context: str) -> int:
     return value
 
 
+def _positive_integer(value: object, *, context: str) -> int:
+    integer = _integer(value, context=context)
+    if integer <= 0:
+        raise CampaignReportError(f"{context} must be a positive integer")
+    return integer
+
+
+@lru_cache(maxsize=1)
+def _committed_benchmark_item_ids() -> frozenset[str]:
+    item_ids: set[str] = set()
+    corpus_dir = Path(__file__).resolve().parents[1] / BENCHMARK_SCORE_KEY
+    for filename in ("corpus_v1.jsonl", "nomatch_v1.jsonl"):
+        path = corpus_dir / filename
+        _raw, text = _read_required(path)
+        for line_number, line in enumerate(text.splitlines(), start=1):
+            if not line.strip():
+                continue
+            try:
+                payload = _mapping(json.loads(line), context=f"{path}:{line_number}")
+            except json.JSONDecodeError as error:
+                raise CampaignReportError(
+                    f"malformed benchmark JSON at {path}:{line_number}: {error.msg}"
+                ) from error
+            item_ids.add(
+                _string(payload.get("item_id"), context=f"{path}:{line_number}.item_id")
+            )
+    if not item_ids:
+        raise CampaignReportError("committed benchmark item-ID set is empty")
+    return frozenset(item_ids)
+
+
 def _nested_f1(record: dict[str, object], field: str, *, context: str) -> float:
     scores = _mapping(record.get(field), context=f"{context}.{field}")
     benchmark = _mapping(scores.get(BENCHMARK_SCORE_KEY), context=f"{context}.{field}.benchmark")
@@ -247,7 +289,20 @@ def _parse_comparison(text: str, *, path: Path) -> tuple[ComparisonVerdict, ...]
             raise CampaignReportError(
                 f"{context}.escalate must equal whether verdict is hold"
             )
+        metric = _string(entry.get("metric"), context=f"{context}.metric")
+        if metric != COMPARISON_METRIC:
+            raise CampaignReportError(
+                f"{context}.metric must be {COMPARISON_METRIC!r}; got {metric!r}"
+            )
         ci = _mapping(entry.get("ci"), context=f"{context}.ci")
+        alpha = _number(ci.get("alpha"), context=f"{context}.ci.alpha")
+        if alpha != COMPARISON_ALPHA:
+            raise CampaignReportError(
+                f"{context}.ci.alpha must be {COMPARISON_ALPHA}; got {alpha}"
+            )
+        _positive_integer(ci.get("n_units"), context=f"{context}.ci.n_units")
+        _positive_integer(ci.get("n_resamples"), context=f"{context}.ci.n_resamples")
+        _integer(ci.get("seed"), context=f"{context}.ci.seed")
         excludes_zero = ci.get("excludes_zero")
         if not isinstance(excludes_zero, bool):
             raise CampaignReportError(f"{context}.ci.excludes_zero must be a boolean")
@@ -261,15 +316,26 @@ def _parse_comparison(text: str, *, path: Path) -> tuple[ComparisonVerdict, ...]
         if not low <= point <= high:
             raise CampaignReportError(f"{context}.ci bounds must contain point")
         interval_excludes_zero = high < 0 or low > 0
-        if excludes_zero != interval_excludes_zero:
+        rounded_zero_boundary = (
+            excludes_zero
+            and not interval_excludes_zero
+            and (
+                abs(low) <= COMPARISON_SERIALIZATION_EPSILON
+                or abs(high) <= COMPARISON_SERIALIZATION_EPSILON
+            )
+        )
+        if excludes_zero != interval_excludes_zero and not rounded_zero_boundary:
             raise CampaignReportError(
                 f"{context}.ci.excludes_zero does not agree with the interval bounds"
             )
-        if verdict == "win" and low <= 0:
+        if verdict == "win" and low < -COMPARISON_SERIALIZATION_EPSILON:
             raise CampaignReportError(f"{context}.verdict win requires ci.low > 0")
-        if verdict == "loss" and high >= 0:
+        if verdict == "loss" and high > COMPARISON_SERIALIZATION_EPSILON:
             raise CampaignReportError(f"{context}.verdict loss requires ci.high < 0")
-        if verdict == "hold" and not low <= 0 <= high:
+        if verdict == "hold" and not (
+            low <= COMPARISON_SERIALIZATION_EPSILON
+            and high >= -COMPARISON_SERIALIZATION_EPSILON
+        ):
             raise CampaignReportError(
                 f"{context}.verdict hold requires ci.low <= 0 <= ci.high"
             )
@@ -389,13 +455,19 @@ def load_campaign_inputs(
 def derive_adoption_verdict(verdict: ComparisonVerdict) -> str:
     """Map the comparison vocabulary to the owner-settled per-stack adoption vocabulary."""
     if verdict.verdict == "loss":
-        if not verdict.excludes_zero or verdict.high >= 0:
+        if (
+            not verdict.excludes_zero
+            or verdict.high > COMPARISON_SERIALIZATION_EPSILON
+        ):
             raise CampaignReportError(
                 f"loss verdict for {verdict.stack} does not have a CI strictly below zero"
             )
-        return "no-adopt"
+        return "no-adopt" if verdict.high < 0 else "owner-decision-required"
     if verdict.verdict == "win":
-        if not verdict.excludes_zero or verdict.low <= 0:
+        if (
+            not verdict.excludes_zero
+            or verdict.low < -COMPARISON_SERIALIZATION_EPSILON
+        ):
             raise CampaignReportError(
                 f"win verdict for {verdict.stack} does not have a CI strictly above zero"
             )
@@ -491,6 +563,13 @@ def _scan_rendered_report(
     report: str, *, surface_manifest_path: Path, salt_file_path: Path
 ) -> None:
     try:
+        manifest_raw = surface_manifest_path.read_bytes()
+        manifest_sha256 = hashlib.sha256(manifest_raw).hexdigest()
+        if manifest_sha256 != CANONICAL_SURFACE_MANIFEST_SHA256:
+            raise CampaignReportError(
+                "surface manifest digest mismatch: "
+                f"expected {CANONICAL_SURFACE_MANIFEST_SHA256}, got {manifest_sha256}"
+            )
         manifest = load_manifest(surface_manifest_path)
     except (OSError, json.JSONDecodeError, LeakcheckError) as error:
         raise CampaignReportError(
@@ -510,6 +589,9 @@ def _scan_rendered_report(
         raise CampaignReportError(
             f"rendered report failed firm-surface leak scan with {collision_count} collision(s)"
         )
+    item_ids = _committed_benchmark_item_ids()
+    if any(match.group(0) in item_ids for match in ITEM_ID_TOKEN_RE.finditer(report)):
+        raise CampaignReportError("rendered report contains a benchmark item ID")
     if BENCHMARK_ITEM_ID_RE.search(report) is not None:
         raise CampaignReportError("rendered report contains a benchmark item ID")
 

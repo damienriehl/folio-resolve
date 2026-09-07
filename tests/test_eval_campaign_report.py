@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import re
+from dataclasses import replace
 from pathlib import Path
 
 import build_campaign_report as campaign_cli
+import folio_eval.campaign_report as campaign_report
 import pytest
 from folio_eval.campaign_report import (
     CampaignReportError,
@@ -22,6 +25,43 @@ PROTECTED_SURFACES = (
 RENDERED_PROTECTED_SURFACE = "rendered confidential gamma phrase"
 SALT = b"campaign-report-test-salt"
 FAST_SCRYPT = ScryptParams(n=2**4, r=1, p=1, dklen=16, test_params=True)
+REPO_ROOT = Path(__file__).resolve().parents[1]
+PRODUCTION_SURFACE_MANIFEST_SHA256 = campaign_report.CANONICAL_SURFACE_MANIFEST_SHA256
+COMMITTED_ITEM_PATHS = tuple(
+    REPO_ROOT / "eval" / BENCHMARK_SCORE_KEY / filename
+    for filename in ("corpus_v1.jsonl", "nomatch_v1.jsonl")
+)
+
+
+def _committed_item_ids() -> tuple[str, ...]:
+    item_ids: set[str] = set()
+    for path in COMMITTED_ITEM_PATHS:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            item_id = json.loads(line)["item_id"]
+            assert isinstance(item_id, str)
+            item_ids.add(item_id)
+    return tuple(sorted(item_ids))
+
+
+COMMITTED_ITEM_IDS = _committed_item_ids()
+
+
+@pytest.fixture(autouse=True)
+def _pin_test_manifest_digest(monkeypatch: pytest.MonkeyPatch) -> None:
+    manifest = build_manifest(
+        (RENDERED_PROTECTED_SURFACE,),
+        SALT,
+        gold_version="gold_v7",
+        gold_content_sha256="a" * 64,
+        scrypt_params=FAST_SCRYPT,
+    )
+    raw = canonical_json(manifest.to_json()).encode()
+    monkeypatch.setattr(
+        campaign_report,
+        "CANONICAL_SURFACE_MANIFEST_SHA256",
+        hashlib.sha256(raw).hexdigest(),
+        raising=False,
+    )
 
 
 def _ledger_record(index: int, *, decision: str | None = None) -> dict[str, object]:
@@ -75,6 +115,10 @@ def _comparison(verdicts: dict[str, str] | None = None) -> dict[str, object]:
                 "low": low,
                 "high": high,
                 "excludes_zero": excludes_zero,
+                "n_units": 225,
+                "n_resamples": 10_000,
+                "seed": 17,
+                "alpha": 0.05,
             },
         }
     return {"verdicts": entries, "ignored_rows": list(PROTECTED_SURFACES)}
@@ -332,6 +376,75 @@ def test_malformed_comparison_ci_raises(
         )
 
 
+def test_rounded_to_zero_win_is_accepted(tmp_path: Path) -> None:
+    ledger, v1, v2, parity = _write_inputs(tmp_path)
+    payload = _comparison({"folio-enrich": "win", "folio-mapper": "loss"})
+    entry = payload["verdicts"]["folio-enrich"]  # type: ignore[index]
+    ci = entry["ci"]  # type: ignore[index]
+    ci.update(  # type: ignore[union-attr]
+        {"low": 0.0, "point": 0.01, "high": 0.02, "excludes_zero": True}
+    )
+    v2.write_text(json.dumps(payload), encoding="utf-8")
+
+    report = _render(ledger, v1, parity, v2=v2)
+
+    assert (
+        "| folio-enrich | win | 0.010000 | [0.000000, 0.020000] | false | "
+        "`owner-decision-required` |" in report
+    )
+
+
+def test_rounded_to_zero_loss_requires_owner_decision(tmp_path: Path) -> None:
+    ledger, v1, v2, parity = _write_inputs(tmp_path)
+    payload = _comparison()
+    entry = payload["verdicts"]["folio-enrich"]  # type: ignore[index]
+    ci = entry["ci"]  # type: ignore[index]
+    ci.update(  # type: ignore[union-attr]
+        {"low": -0.02, "point": -0.01, "high": 0.0, "excludes_zero": True}
+    )
+    v2.write_text(json.dumps(payload), encoding="utf-8")
+
+    report = _render(ledger, v1, parity, v2=v2)
+
+    assert (
+        "| folio-enrich | loss | -0.010000 | [-0.020000, 0.000000] | false | "
+        "`owner-decision-required` |" in report
+    )
+
+
+@pytest.mark.parametrize(
+    ("entry_update", "ci_update", "message"),
+    [
+        ({"metric": "another_metric"}, {}, "metric"),
+        ({}, {"alpha": 0.9}, "alpha"),
+        ({}, {"n_units": 0}, "n_units"),
+        ({}, {"n_resamples": 0}, "n_resamples"),
+        ({}, {"seed": 1.5}, "seed"),
+    ],
+)
+def test_comparison_provenance_is_validated(
+    tmp_path: Path,
+    entry_update: dict[str, object],
+    ci_update: dict[str, object],
+    message: str,
+) -> None:
+    ledger, v1, v2, parity = _write_inputs(tmp_path)
+    payload = _comparison()
+    entry = payload["verdicts"]["folio-enrich"]  # type: ignore[index]
+    entry.update(entry_update)  # type: ignore[union-attr]
+    ci = entry["ci"]  # type: ignore[index]
+    ci.update(ci_update)  # type: ignore[union-attr]
+    v2.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(CampaignReportError, match=message):
+        load_campaign_inputs(
+            ledger_path=ledger,
+            comparison_v1_path=v1,
+            comparison_v2_path=v2,
+            parity_map_path=parity,
+        )
+
+
 @pytest.mark.parametrize(
     ("field", "value"),
     [
@@ -432,6 +545,26 @@ def test_protected_fixture_surfaces_are_absent_from_report(tmp_path: Path) -> No
         assert protected_surface not in report
 
 
+def test_bootstrap_reason_is_scanned_and_rendered(tmp_path: Path) -> None:
+    ledger, v1, v2, parity = _write_inputs(tmp_path)
+    records = [_ledger_record(index) for index in range(1, 5)]
+    records[0]["bootstrap_ci"] = {
+        "point": 0.0,
+        "low": None,
+        "high": None,
+        "n_units": 0,
+        "reason": "No paired units remained after filtering.",
+    }
+    ledger.write_text(
+        "".join(json.dumps(record) + "\n" for record in records),
+        encoding="utf-8",
+    )
+
+    report = _render(ledger, v1, parity, v2=v2)
+
+    assert "unavailable (No paired units remained after filtering.; n=0)" in report
+
+
 def test_final_scan_rejects_protected_surface_in_rendered_hypothesis(tmp_path: Path) -> None:
     ledger, v1, v2, parity = _write_inputs(tmp_path)
     records = [_ledger_record(index) for index in range(1, 5)]
@@ -448,14 +581,10 @@ def test_final_scan_rejects_protected_surface_in_rendered_hypothesis(tmp_path: P
     assert not output.exists()
 
 
-def test_final_scan_rejects_benchmark_item_id_in_rendered_hypothesis(tmp_path: Path) -> None:
+def test_final_scan_rejects_every_committed_item_id_in_rendered_hypothesis(
+    tmp_path: Path,
+) -> None:
     ledger, v1, v2, parity = _write_inputs(tmp_path)
-    records = [_ledger_record(index) for index in range(1, 5)]
-    records[0]["hypothesis"] = "Investigate litigation-brief-us-federal-016 next."
-    ledger.write_text(
-        "".join(json.dumps(record) + "\n" for record in records),
-        encoding="utf-8",
-    )
     manifest, salt = _write_leakcheck_inputs(tmp_path)
     inputs = load_campaign_inputs(
         ledger_path=ledger,
@@ -464,13 +593,81 @@ def test_final_scan_rejects_benchmark_item_id_in_rendered_hypothesis(tmp_path: P
         parity_map_path=parity,
     )
 
-    with pytest.raises(CampaignReportError, match="benchmark item ID"):
-        render_campaign_report(
+    assert len(COMMITTED_ITEM_IDS) == 270
+    assert all(campaign_report.BENCHMARK_ITEM_ID_RE.search(item_id) for item_id in COMMITTED_ITEM_IDS)
+    for item_id in COMMITTED_ITEM_IDS:
+        planted = replace(
             inputs,
-            generator_command="uv run python eval/build_campaign_report.py --fixture",
+            ledger=(
+                replace(inputs.ledger[0], hypothesis=f"Investigate {item_id} next."),
+                *inputs.ledger[1:],
+            ),
+        )
+        with pytest.raises(CampaignReportError, match="benchmark item ID"):
+            render_campaign_report(
+                planted,
+                generator_command="uv run python eval/build_campaign_report.py --fixture",
+                surface_manifest_path=manifest,
+                salt_file_path=salt,
+            )
+
+
+def test_scan_helper_rejects_a_protected_surface(tmp_path: Path) -> None:
+    manifest, salt = _write_leakcheck_inputs(tmp_path)
+
+    with pytest.raises(CampaignReportError, match="firm-surface leak scan"):
+        campaign_report._scan_rendered_report(
+            f"A document containing {RENDERED_PROTECTED_SURFACE}.",
             surface_manifest_path=manifest,
             salt_file_path=salt,
         )
+
+
+def test_scan_helper_rejects_a_three_hyphen_committed_item_id(tmp_path: Path) -> None:
+    manifest, salt = _write_leakcheck_inputs(tmp_path)
+    item_id = next(item_id for item_id in COMMITTED_ITEM_IDS if item_id.count("-") == 3)
+
+    with pytest.raises(CampaignReportError, match="benchmark item ID"):
+        campaign_report._scan_rendered_report(
+            f"A document containing {item_id}.",
+            surface_manifest_path=manifest,
+            salt_file_path=salt,
+        )
+
+
+def test_scan_helper_accepts_a_clean_document(tmp_path: Path) -> None:
+    manifest, salt = _write_leakcheck_inputs(tmp_path)
+
+    campaign_report._scan_rendered_report(
+        "A clean aggregate-only document.",
+        surface_manifest_path=manifest,
+        salt_file_path=salt,
+    )
+
+
+def test_scan_helper_rejects_noncanonical_manifest_digest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manifest, salt = _write_leakcheck_inputs(tmp_path)
+    monkeypatch.setattr(campaign_report, "CANONICAL_SURFACE_MANIFEST_SHA256", "f" * 64)
+
+    with pytest.raises(
+        CampaignReportError,
+        match=r"manifest digest.*expected f{64}.*got [0-9a-f]{64}",
+    ):
+        campaign_report._scan_rendered_report(
+            "A clean aggregate-only document.",
+            surface_manifest_path=manifest,
+            salt_file_path=salt,
+        )
+
+
+def test_pinned_manifest_digest_matches_committed_manifest() -> None:
+    manifest_path = REPO_ROOT / "eval" / BENCHMARK_SCORE_KEY / "firm-surface-manifest-v1.json"
+
+    assert hashlib.sha256(manifest_path.read_bytes()).hexdigest() == (
+        PRODUCTION_SURFACE_MANIFEST_SHA256
+    )
 
 
 def test_cli_uses_atomic_writer_and_comparison_v2_is_optional(
@@ -509,7 +706,7 @@ def test_cli_comparison_v2_success(tmp_path: Path) -> None:
     assert "| folio-mapper | loss |" in report
 
 
-def test_cli_requires_surface_manifest_and_salt_file(tmp_path: Path) -> None:
+def test_cli_requires_surface_manifest_when_salt_is_supplied(tmp_path: Path) -> None:
     ledger, v1, _v2, parity = _write_inputs(tmp_path)
 
     with pytest.raises(SystemExit) as error:
@@ -521,6 +718,30 @@ def test_cli_requires_surface_manifest_and_salt_file(tmp_path: Path) -> None:
                 str(v1),
                 "--parity-map",
                 str(parity),
+                "--salt-file",
+                str(tmp_path / "salt"),
+                "--out",
+                str(tmp_path / "campaign.md"),
+            ]
+        )
+
+    assert error.value.code == 2
+
+
+def test_cli_requires_salt_file_when_surface_manifest_is_supplied(tmp_path: Path) -> None:
+    ledger, v1, _v2, parity = _write_inputs(tmp_path)
+
+    with pytest.raises(SystemExit) as error:
+        campaign_cli._parser().parse_args(
+            [
+                "--ledger",
+                str(ledger),
+                "--comparison-v1",
+                str(v1),
+                "--parity-map",
+                str(parity),
+                "--surface-manifest",
+                str(tmp_path / "manifest.json"),
                 "--out",
                 str(tmp_path / "campaign.md"),
             ]
@@ -564,6 +785,30 @@ def test_footer_canonicalizes_output_path(tmp_path: Path) -> None:
     assert str(first_output) not in report
     assert str(second_output) not in report
     assert "--out <OUTPUT_PATH>" in report
+
+
+def test_footer_canonicalizes_every_absolute_input_path(tmp_path: Path) -> None:
+    ledger, v1, v2, parity = _write_inputs(tmp_path)
+    output = tmp_path / "campaign.md"
+
+    assert campaign_cli.main(_cli_args(ledger, v1, parity, output, v2=v2)) == 0
+
+    footer = output.read_text(encoding="utf-8").rsplit("\n---\n", 1)[1]
+    for path in (ledger, v1, v2, parity, tmp_path / "surface-manifest.json"):
+        assert str(path) not in footer
+    assert "/home/" not in footer
+    assert Path.home().name not in footer
+    assert re.search(r"--[a-z0-9-]+ (?:['\"])?/", footer) is None
+    for placeholder in (
+        "<OWNER_LOCAL_EXPERIMENT_LEDGER>",
+        "<OWNER_LOCAL_COMPARISON_V1>",
+        "<OWNER_LOCAL_COMPARISON_V2>",
+        "<OWNER_LOCAL_PARITY_MAP>",
+        "<OWNER_LOCAL_SURFACE_MANIFEST>",
+        "<OWNER_LOCAL_LEAKCHECK_SALT_FILE>",
+        "<OUTPUT_PATH>",
+    ):
+        assert placeholder in footer
 
 
 @pytest.mark.parametrize("salt_subpath", ["leakcheck-salt", "owner local/leakcheck salt"])

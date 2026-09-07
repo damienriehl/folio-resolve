@@ -17,6 +17,15 @@ from folio_eval.campaign_report import (
 )
 from folio_eval.report import _atomic_write_text
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def _provenance_path(path: Path, *, placeholder: str) -> str:
+    try:
+        return path.resolve().relative_to(REPO_ROOT).as_posix()
+    except ValueError:
+        return placeholder
+
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -39,18 +48,27 @@ def _generator_command(args: argparse.Namespace) -> str:
         "python",
         "eval/build_campaign_report.py",
         "--ledger",
-        str(args.ledger),
+        _provenance_path(args.ledger, placeholder="<OWNER_LOCAL_EXPERIMENT_LEDGER>"),
         "--comparison-v1",
-        str(args.comparison_v1),
+        _provenance_path(args.comparison_v1, placeholder="<OWNER_LOCAL_COMPARISON_V1>"),
     ]
     if args.comparison_v2 is not None:
-        command.extend(("--comparison-v2", str(args.comparison_v2)))
+        command.extend(
+            (
+                "--comparison-v2",
+                _provenance_path(
+                    args.comparison_v2, placeholder="<OWNER_LOCAL_COMPARISON_V2>"
+                ),
+            )
+        )
     command.extend(
         (
             "--parity-map",
-            str(args.parity_map),
+            _provenance_path(args.parity_map, placeholder="<OWNER_LOCAL_PARITY_MAP>"),
             "--surface-manifest",
-            str(args.surface_manifest),
+            _provenance_path(
+                args.surface_manifest, placeholder="<OWNER_LOCAL_SURFACE_MANIFEST>"
+            ),
         )
     )
     return (
