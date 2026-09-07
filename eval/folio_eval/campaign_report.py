@@ -24,8 +24,6 @@ LEDGER_DECISIONS: Final = frozenset({"keep", "park", "revert"})
 COMPARISON_VERDICTS: Final = frozenset({"win", "hold", "loss"})
 COMPARISON_METRIC: Final = "paired_item_f1_delta"
 COMPARISON_ALPHA: Final = 0.05
-# BootstrapCI.to_json serializes bounds to six decimal places.
-COMPARISON_SERIALIZATION_EPSILON: Final = 1e-6
 CANONICAL_SURFACE_MANIFEST_SHA256: Final = (
     "4a5afda8a107dfb9b5d3518ce7b06f6cdcb380a410edfd12eb0d6d0e27513463"
 )
@@ -316,26 +314,20 @@ def _parse_comparison(text: str, *, path: Path) -> tuple[ComparisonVerdict, ...]
         if not low <= point <= high:
             raise CampaignReportError(f"{context}.ci bounds must contain point")
         interval_excludes_zero = high < 0 or low > 0
-        rounded_zero_boundary = (
+        serialized_zero_boundary = (
             excludes_zero
             and not interval_excludes_zero
-            and (
-                abs(low) <= COMPARISON_SERIALIZATION_EPSILON
-                or abs(high) <= COMPARISON_SERIALIZATION_EPSILON
-            )
+            and (low == 0.0 or high == 0.0)
         )
-        if excludes_zero != interval_excludes_zero and not rounded_zero_boundary:
+        if excludes_zero != interval_excludes_zero and not serialized_zero_boundary:
             raise CampaignReportError(
                 f"{context}.ci.excludes_zero does not agree with the interval bounds"
             )
-        if verdict == "win" and low < -COMPARISON_SERIALIZATION_EPSILON:
-            raise CampaignReportError(f"{context}.verdict win requires ci.low > 0")
-        if verdict == "loss" and high > COMPARISON_SERIALIZATION_EPSILON:
-            raise CampaignReportError(f"{context}.verdict loss requires ci.high < 0")
-        if verdict == "hold" and not (
-            low <= COMPARISON_SERIALIZATION_EPSILON
-            and high >= -COMPARISON_SERIALIZATION_EPSILON
-        ):
+        if verdict == "win" and low < 0:
+            raise CampaignReportError(f"{context}.verdict win requires ci.low >= 0")
+        if verdict == "loss" and high > 0:
+            raise CampaignReportError(f"{context}.verdict loss requires ci.high <= 0")
+        if verdict == "hold" and not (low <= 0 and high >= 0):
             raise CampaignReportError(
                 f"{context}.verdict hold requires ci.low <= 0 <= ci.high"
             )
@@ -455,19 +447,13 @@ def load_campaign_inputs(
 def derive_adoption_verdict(verdict: ComparisonVerdict) -> str:
     """Map the comparison vocabulary to the owner-settled per-stack adoption vocabulary."""
     if verdict.verdict == "loss":
-        if (
-            not verdict.excludes_zero
-            or verdict.high > COMPARISON_SERIALIZATION_EPSILON
-        ):
+        if not verdict.excludes_zero or verdict.high > 0:
             raise CampaignReportError(
                 f"loss verdict for {verdict.stack} does not have a CI strictly below zero"
             )
         return "no-adopt" if verdict.high < 0 else "owner-decision-required"
     if verdict.verdict == "win":
-        if (
-            not verdict.excludes_zero
-            or verdict.low < -COMPARISON_SERIALIZATION_EPSILON
-        ):
+        if not verdict.excludes_zero or verdict.low < 0:
             raise CampaignReportError(
                 f"win verdict for {verdict.stack} does not have a CI strictly above zero"
             )

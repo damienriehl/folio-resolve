@@ -310,12 +310,12 @@ def test_contradictory_verdict_escalation_raises(
         (
             "win",
             {"low": -0.01, "point": 0.01, "high": 0.04, "excludes_zero": False},
-            r"verdict win requires ci\.low > 0",
+            r"verdict win requires ci\.low >= 0",
         ),
         (
             "loss",
             {"low": -0.04, "point": -0.01, "high": 0.01, "excludes_zero": False},
-            r"verdict loss requires ci\.high < 0",
+            r"verdict loss requires ci\.high <= 0",
         ),
         (
             "hold",
@@ -338,6 +338,40 @@ def test_comparison_verdict_must_agree_with_ci_bounds(
     v2.write_text(json.dumps(payload), encoding="utf-8")
 
     with pytest.raises(CampaignReportError, match=message):
+        load_campaign_inputs(
+            ledger_path=ledger,
+            comparison_v1_path=v1,
+            comparison_v2_path=v2,
+            parity_map_path=parity,
+        )
+
+
+@pytest.mark.parametrize(
+    ("verdict", "ci_update"),
+    [
+        (
+            "win",
+            {"low": -1e-6, "point": -1e-6, "high": -1e-6, "excludes_zero": True},
+        ),
+        (
+            "loss",
+            {"low": 1e-6, "point": 1e-6, "high": 1e-6, "excludes_zero": True},
+        ),
+    ],
+)
+def test_comparison_verdict_rejects_sign_contradictory_micro_bound(
+    tmp_path: Path,
+    verdict: str,
+    ci_update: dict[str, object],
+) -> None:
+    ledger, v1, v2, parity = _write_inputs(tmp_path)
+    payload = _comparison({"folio-enrich": verdict, "folio-mapper": "loss"})
+    entry = payload["verdicts"]["folio-enrich"]  # type: ignore[index]
+    ci = entry["ci"]  # type: ignore[index]
+    ci.update(ci_update)  # type: ignore[union-attr]
+    v2.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(CampaignReportError):
         load_campaign_inputs(
             ledger_path=ledger,
             comparison_v1_path=v1,
@@ -376,38 +410,40 @@ def test_malformed_comparison_ci_raises(
         )
 
 
-def test_rounded_to_zero_win_is_accepted(tmp_path: Path) -> None:
+@pytest.mark.parametrize("low", [0.0, -0.0], ids=["positive-zero", "negative-zero"])
+def test_rounded_to_zero_win_is_accepted(tmp_path: Path, low: float) -> None:
     ledger, v1, v2, parity = _write_inputs(tmp_path)
     payload = _comparison({"folio-enrich": "win", "folio-mapper": "loss"})
     entry = payload["verdicts"]["folio-enrich"]  # type: ignore[index]
     ci = entry["ci"]  # type: ignore[index]
     ci.update(  # type: ignore[union-attr]
-        {"low": 0.0, "point": 0.01, "high": 0.02, "excludes_zero": True}
+        {"low": low, "point": 0.01, "high": 0.02, "excludes_zero": True}
     )
     v2.write_text(json.dumps(payload), encoding="utf-8")
 
     report = _render(ledger, v1, parity, v2=v2)
 
     assert (
-        "| folio-enrich | win | 0.010000 | [0.000000, 0.020000] | false | "
+        f"| folio-enrich | win | 0.010000 | [{low:.6f}, 0.020000] | false | "
         "`owner-decision-required` |" in report
     )
 
 
-def test_rounded_to_zero_loss_requires_owner_decision(tmp_path: Path) -> None:
+@pytest.mark.parametrize("high", [0.0, -0.0], ids=["positive-zero", "negative-zero"])
+def test_rounded_to_zero_loss_requires_owner_decision(tmp_path: Path, high: float) -> None:
     ledger, v1, v2, parity = _write_inputs(tmp_path)
     payload = _comparison()
     entry = payload["verdicts"]["folio-enrich"]  # type: ignore[index]
     ci = entry["ci"]  # type: ignore[index]
     ci.update(  # type: ignore[union-attr]
-        {"low": -0.02, "point": -0.01, "high": 0.0, "excludes_zero": True}
+        {"low": -0.02, "point": -0.01, "high": high, "excludes_zero": True}
     )
     v2.write_text(json.dumps(payload), encoding="utf-8")
 
     report = _render(ledger, v1, parity, v2=v2)
 
     assert (
-        "| folio-enrich | loss | -0.010000 | [-0.020000, 0.000000] | false | "
+        f"| folio-enrich | loss | -0.010000 | [-0.020000, {high:.6f}] | false | "
         "`owner-decision-required` |" in report
     )
 
@@ -610,6 +646,37 @@ def test_final_scan_rejects_every_committed_item_id_in_rendered_hypothesis(
                 surface_manifest_path=manifest,
                 salt_file_path=salt,
             )
+
+
+def test_final_scan_exact_item_id_set_rejects_when_regex_never_matches(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ledger, v1, v2, parity = _write_inputs(tmp_path)
+    manifest, salt = _write_leakcheck_inputs(tmp_path)
+    inputs = load_campaign_inputs(
+        ledger_path=ledger,
+        comparison_v1_path=v1,
+        comparison_v2_path=v2,
+        parity_map_path=parity,
+    )
+    item_id = next(iter(COMMITTED_ITEM_IDS))
+    planted = replace(
+        inputs,
+        ledger=(
+            replace(inputs.ledger[0], hypothesis=f"Investigate {item_id} next."),
+            *inputs.ledger[1:],
+        ),
+    )
+    monkeypatch.setattr(campaign_report, "BENCHMARK_ITEM_ID_RE", re.compile(r"(?!x)x"))
+
+    with pytest.raises(CampaignReportError, match="benchmark item ID"):
+        render_campaign_report(
+            planted,
+            generator_command="uv run python eval/build_campaign_report.py --fixture",
+            surface_manifest_path=manifest,
+            salt_file_path=salt,
+        )
 
 
 def test_scan_helper_rejects_a_protected_surface(tmp_path: Path) -> None:
