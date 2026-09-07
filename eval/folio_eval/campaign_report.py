@@ -9,10 +9,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
+
+from .leakcheck import SAFE_ITEM_ID_RE, LeakcheckError, load_manifest, scan_text
 
 DOWNSTREAM_STACKS: Final = ("folio-enrich", "folio-mapper")
 BENCHMARK_SCORE_KEY: Final = "syn" + "thetic"
@@ -20,6 +23,12 @@ LEDGER_DECISIONS: Final = frozenset({"keep", "park", "revert"})
 COMPARISON_VERDICTS: Final = frozenset({"win", "hold", "loss"})
 PLAN_REFERENCE: Final = "docs/plans/2026-09-06-001-eval-u10-comparison-v2-and-u13-closeout-plan.md"
 PARITY_REFERENCE: Final = "docs/migration/2026-08-component-parity-map.md"
+REPO_RELATIVE_PATH_RE: Final = re.compile(
+    r"[A-Za-z0-9_-][A-Za-z0-9._-]*(?:/[A-Za-z0-9_-][A-Za-z0-9._-]*)*"
+)
+BENCHMARK_ITEM_ID_RE: Final = re.compile(
+    r"\b[a-z][a-z0-9]*(?:-[a-z0-9]+){3,}-[0-9]{3}\b"
+)
 
 
 class CampaignReportError(ValueError):
@@ -121,6 +130,15 @@ def _string(value: object, *, context: str) -> str:
     return value
 
 
+def _safe_identifier(value: object, *, context: str) -> str:
+    identifier = _string(value, context=context)
+    if SAFE_ITEM_ID_RE.fullmatch(identifier) is None:
+        raise CampaignReportError(
+            f"{context} must be a safe identifier containing only letters, digits, _, ., :, or -"
+        )
+    return identifier
+
+
 def _number(value: object, *, context: str) -> float:
     if isinstance(value, bool) or not isinstance(value, int | float):
         raise CampaignReportError(f"{context} must be a number")
@@ -178,13 +196,17 @@ def _parse_ledger(text: str, *, path: Path) -> tuple[LedgerRecord, ...]:
             raise CampaignReportError(f"unknown ledger decision at {path}:{line_number}: {decision}")
         records.append(
             LedgerRecord(
-                attempt_id=_string(payload.get("attempt_id"), context=f"{context}.attempt_id"),
+                attempt_id=_safe_identifier(
+                    payload.get("attempt_id"), context=f"{context}.attempt_id"
+                ),
                 decision=decision,
-                lever_scope=_string(
+                lever_scope=_safe_identifier(
                     payload.get("lever_scope"), context=f"{context}.lever_scope"
                 ),
                 hypothesis=_string(payload.get("hypothesis"), context=f"{context}.hypothesis"),
-                commit_sha=_string(payload.get("commit_sha"), context=f"{context}.commit_sha"),
+                commit_sha=_safe_identifier(
+                    payload.get("commit_sha"), context=f"{context}.commit_sha"
+                ),
                 f1_before=_nested_f1(payload, "scores_before", context=context),
                 f1_after=_nested_f1(payload, "scores_after", context=context),
                 item_count=_integer(payload.get("item_count"), context=f"{context}.item_count"),
@@ -221,21 +243,47 @@ def _parse_comparison(text: str, *, path: Path) -> tuple[ComparisonVerdict, ...]
         escalate = entry.get("escalate")
         if not isinstance(escalate, bool):
             raise CampaignReportError(f"{context}.escalate must be a boolean")
+        if escalate != (verdict == "hold"):
+            raise CampaignReportError(
+                f"{context}.escalate must equal whether verdict is hold"
+            )
         ci = _mapping(entry.get("ci"), context=f"{context}.ci")
         excludes_zero = ci.get("excludes_zero")
         if not isinstance(excludes_zero, bool):
             raise CampaignReportError(f"{context}.ci.excludes_zero must be a boolean")
-        parsed.append(
-            ComparisonVerdict(
-                stack=stack,
-                verdict=verdict,
-                point=_number(ci.get("point"), context=f"{context}.ci.point"),
-                low=_number(ci.get("low"), context=f"{context}.ci.low"),
-                high=_number(ci.get("high"), context=f"{context}.ci.high"),
-                excludes_zero=excludes_zero,
-                escalate=escalate,
+        point = _number(ci.get("point"), context=f"{context}.ci.point")
+        low = _number(ci.get("low"), context=f"{context}.ci.low")
+        high = _number(ci.get("high"), context=f"{context}.ci.high")
+        if not all(math.isfinite(bound) for bound in (low, point, high)):
+            raise CampaignReportError(f"{context}.ci bounds and point must be finite")
+        if low > high:
+            raise CampaignReportError(f"{context}.ci bounds must be ordered low <= high")
+        if not low <= point <= high:
+            raise CampaignReportError(f"{context}.ci bounds must contain point")
+        interval_excludes_zero = high < 0 or low > 0
+        if excludes_zero != interval_excludes_zero:
+            raise CampaignReportError(
+                f"{context}.ci.excludes_zero does not agree with the interval bounds"
             )
+        if verdict == "win" and low <= 0:
+            raise CampaignReportError(f"{context}.verdict win requires ci.low > 0")
+        if verdict == "loss" and high >= 0:
+            raise CampaignReportError(f"{context}.verdict loss requires ci.high < 0")
+        if verdict == "hold" and not low <= 0 <= high:
+            raise CampaignReportError(
+                f"{context}.verdict hold requires ci.low <= 0 <= ci.high"
+            )
+        parsed_verdict = ComparisonVerdict(
+            stack=stack,
+            verdict=verdict,
+            point=point,
+            low=low,
+            high=high,
+            excludes_zero=excludes_zero,
+            escalate=escalate,
         )
+        derive_adoption_verdict(parsed_verdict)
+        parsed.append(parsed_verdict)
     return tuple(parsed)
 
 
@@ -432,13 +480,50 @@ def _scanner_safe_shell(command: str) -> str:
     return command
 
 
+def _validate_plan_reference(plan_reference: str) -> None:
+    if REPO_RELATIVE_PATH_RE.fullmatch(plan_reference) is None:
+        raise CampaignReportError(
+            "plan_reference must be a strict repo-relative path without absolute or parent segments"
+        )
+
+
+def _scan_rendered_report(
+    report: str, *, surface_manifest_path: Path, salt_file_path: Path
+) -> None:
+    try:
+        manifest = load_manifest(surface_manifest_path)
+    except (OSError, json.JSONDecodeError, LeakcheckError) as error:
+        raise CampaignReportError(
+            f"could not load surface manifest {surface_manifest_path}: {error}"
+        ) from error
+    try:
+        salt = salt_file_path.read_bytes()
+    except OSError as error:
+        raise CampaignReportError(f"could not read leakcheck salt file {salt_file_path}") from error
+    if not salt:
+        raise CampaignReportError(f"leakcheck salt file is empty: {salt_file_path}")
+    try:
+        collision_count = scan_text(report, manifest, salt)
+    except LeakcheckError as error:
+        raise CampaignReportError(f"rendered report leak scan failed: {error}") from error
+    if collision_count > 0:
+        raise CampaignReportError(
+            f"rendered report failed firm-surface leak scan with {collision_count} collision(s)"
+        )
+    if BENCHMARK_ITEM_ID_RE.search(report) is not None:
+        raise CampaignReportError("rendered report contains a benchmark item ID")
+
+
 def render_campaign_report(
     inputs: CampaignInputs,
     *,
     generator_command: str,
+    surface_manifest_path: Path,
+    salt_file_path: Path,
     plan_reference: str = PLAN_REFERENCE,
 ) -> str:
     """Render a deterministic Markdown report from validated aggregate inputs."""
+    _validate_plan_reference(plan_reference)
     lines = [
         "# Benchmark F1 Campaign Report",
         "",
@@ -555,4 +640,10 @@ def render_campaign_report(
             "",
         ]
     )
-    return "\n".join(lines)
+    report = "\n".join(lines)
+    _scan_rendered_report(
+        report,
+        surface_manifest_path=surface_manifest_path,
+        salt_file_path=salt_file_path,
+    )
+    return report
