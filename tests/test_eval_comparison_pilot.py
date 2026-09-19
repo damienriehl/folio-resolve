@@ -1913,10 +1913,15 @@ def test_environment_probe_ignores_inactive_base_package_trees(tmp_path: Path) -
     assert json.loads(completed.stdout)["stdlib_file_count"] > 0
 
 
-def test_environment_probe_rejects_active_base_site_packages(tmp_path: Path) -> None:
-    runtime = tmp_path / "runtime"
-    venv.EnvBuilder(with_pip=False, system_site_packages=True).create(runtime)
-    interpreter = runtime / "bin" / "python"
+def test_environment_probe_rejects_active_base_site_packages(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    interpreter, _ = _isolated_python_site(tmp_path)
+    # Exercise an active site root outside the venv without loading the host's
+    # packages, whose startup hooks or stale caches can fail an earlier guard.
+    base_site = tmp_path / "base" / "site-packages"
+    base_site.mkdir(parents=True)
+    monkeypatch.setenv("PYTHONPATH", str(base_site))
 
     completed = _execute_consumer_probe(interpreter, check=False)
 
