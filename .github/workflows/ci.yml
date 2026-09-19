@@ -9,6 +9,10 @@ on:
 permissions:
   contents: read
 
+env:
+  # Probe tests reject startup customization in the runner's preinstalled Python.
+  UV_MANAGED_PYTHON: "true"
+
 jobs:
   core:
     name: Core (Python ${{ matrix.python-version }})
