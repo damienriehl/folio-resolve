@@ -8,6 +8,7 @@ from pathlib import Path
 
 import build_campaign_report as campaign_cli
 import folio_eval.campaign_report as campaign_report
+import folio_eval.leakcheck as leakcheck
 import pytest
 from folio_eval.campaign_report import (
     CampaignReportError,
@@ -44,6 +45,21 @@ def _committed_item_ids() -> tuple[str, ...]:
 
 
 COMMITTED_ITEM_IDS = _committed_item_ids()
+
+
+@pytest.fixture(autouse=True)
+def local_gold_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Exercise real freshness checks against fixture gold, independent of host data."""
+    gold_dir = tmp_path / "gold"
+    gold_dir.mkdir()
+    (gold_dir / "gold_v7.manifest.json").write_text(
+        json.dumps({"gold_version": "gold_v7", "content_sha256": "a" * 64}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        leakcheck, "DEFAULT_LOCAL_GOLD_MANIFEST_GLOB", gold_dir / "gold_v*.manifest.json"
+    )
+    return gold_dir
 
 
 @pytest.fixture(autouse=True)
@@ -245,6 +261,27 @@ def test_happy_path_losses_are_no_adopt_and_render_is_deterministic(tmp_path: Pa
     assert "owner-run: pending" in first
     assert "--slice frozen" in first
     assert "--frozen-final" in first
+
+
+@pytest.mark.parametrize(
+    ("gold_version", "content_sha256"),
+    [("gold_v8", "a" * 64), ("gold_v7", "b" * 64)],
+    ids=["newer-version", "same-version-different-content"],
+)
+def test_render_rejects_stale_surface_manifest(
+    tmp_path: Path, local_gold_dir: Path, gold_version: str, content_sha256: str
+) -> None:
+    ledger, v1, v2, parity = _write_inputs(tmp_path)
+    (local_gold_dir / f"{gold_version}.manifest.json").write_text(
+        json.dumps({"gold_version": gold_version, "content_sha256": content_sha256}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        CampaignReportError,
+        match="manifest stale: local gold identity does not match surface manifest",
+    ):
+        _render(ledger, v1, parity, v2=v2)
 
 
 def test_pending_v2_succeeds_without_an_adoption_verdict(tmp_path: Path) -> None:
