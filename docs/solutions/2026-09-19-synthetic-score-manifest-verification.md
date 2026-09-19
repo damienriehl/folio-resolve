@@ -74,3 +74,26 @@ The review prompt, complete reviewer output, and extracted verdict are retained 
 that gitignored local directory as `prompt.md`, `review.txt`, and `verdict.txt`.
 These are machine-local artifacts, not part of the commit. Review prose is excluded
 from this repository artifact under the project's review-retention convention.
+
+## Follow-up: campaign-report fixture isolation
+
+After PR #46 merged, the campaign-report suite still reproduced
+`22 failed, 33 passed in 0.33s`. Its test manifest had a fabricated gold identity,
+but local gold discovery still read the developer checkout's real manifests.
+
+The separate test-only follow-up supplies matching temporary gold and redirects
+only `DEFAULT_LOCAL_GOLD_MANIFEST_GLOB`. The real loader, freshness comparison,
+manifest digest pin, salt validation, and collision scan remain active. Two new
+cases confirm rejection of newer gold and same-version content drift. Production
+code and U10 triage are unchanged.
+
+Observed results:
+
+- Campaign-report and leakcheck tests: `88 passed in 0.51s`.
+- Full core suite: `1298 passed, 4 skipped in 58.86s`.
+- Changed-file Ruff: `All checks passed!`; `git diff --check`: exit 0.
+
+ce-code-review receipt: Codex review `.codex-out/reviews/campaign-fixtures-2026-09-19/verdict.txt`, verdict `merge`
+
+The prompt and full reviewer output are retained beside that machine-local verdict
+as `prompt.md` and `review.txt`; review prose is not committed.
