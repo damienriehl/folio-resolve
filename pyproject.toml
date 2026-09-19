@@ -83,8 +83,9 @@ ignore = ["E501"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
-addopts = "--strict-markers"
+addopts = "--strict-markers -m 'not embedding_integration'"
 pythonpath = ["eval"]
 markers = [
     "uat: persona-driven user acceptance tests",
+    "embedding_integration: explicit offline tests requiring the pinned local model snapshot",
 ]

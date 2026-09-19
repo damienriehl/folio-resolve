@@ -3,7 +3,7 @@
 Ch02 finding 005: semantic recall is mandatory for "no shared label token" maps (Presumptions ->
 Burdens of Proof). ``HashingEmbeddingProvider`` + ``BruteForceIndex`` are the pure-Python default
 that makes that path exercisable with no model download and no network. ``LocalEmbeddingProvider``
-needs the ``embedding`` extra and is therefore only checked for its lazy-import contract.
+is checked here with a fake adapter; real-model checks live in the opt-in integration module.
 """
 
 from __future__ import annotations
@@ -247,14 +247,66 @@ def test_the_index_accepts_any_provider_satisfying_the_protocol() -> None:
 # -- LocalEmbeddingProvider (optional `embedding` extra) -----------------
 
 
-def test_the_sentence_transformers_import_is_deferred_to_construction() -> None:
-    """Importing the module must never pull in sentence-transformers (the core is dep-light)."""
+def test_the_sentence_transformers_import_is_deferred_to_construction(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Test the import boundary independently of earlier real-model tests."""
+    import subprocess
     import sys
+    from types import ModuleType
 
-    import folio_resolve.embedding as mod
+    monkeypatch.setitem(sys.modules, "sentence_transformers", ModuleType("sentence_transformers"))
+    result = subprocess.run(
+        [sys.executable, "-I", "-c", """
+import sys
+assert 'sentence_transformers' not in sys.modules
+import folio_resolve.embedding as mod
+assert 'sentence_transformers' not in sys.modules
+assert hasattr(mod, 'LocalEmbeddingProvider')
+"""],
+        capture_output=True, text=True, check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
 
-    assert "sentence_transformers" not in sys.modules
-    assert hasattr(mod, "LocalEmbeddingProvider")
+
+def test_local_model_adapter_converts_values_and_requests_normalization(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import sys
+    from decimal import Decimal
+    from types import SimpleNamespace
+
+    calls: list[tuple[object, dict[str, object]]] = []
+
+    class TinyModel:
+        def __init__(self, model_name: str) -> None:
+            assert model_name == "/local/model"
+
+        def get_sentence_embedding_dimension(self) -> int:
+            return 2
+
+        def encode(self, texts: Any, **kwargs: object) -> Any:
+            calls.append((texts, kwargs))
+            vector = [Decimal("0.6"), Decimal("0.8")]
+            return vector if isinstance(texts, str) else [vector for _ in texts]
+
+    monkeypatch.setitem(sys.modules, "sentence_transformers", SimpleNamespace(SentenceTransformer=TinyModel))
+    from folio_resolve.embedding import LocalEmbeddingProvider
+
+    provider = LocalEmbeddingProvider("/local/model")
+    assert provider.dimension() == 2
+    single = provider.embed("one")
+    assert single == [0.6, 0.8]
+    assert all(type(component) is float for component in single)
+    batch = provider.embed_batch(("one", "two"))
+    assert batch == [single, single]
+    assert all(type(component) is float for vector in batch for component in vector)
+    assert provider.embed_batch(()) == []
+    assert calls == [
+        ("one", {"normalize_embeddings": True}),
+        (["one", "two"], {"normalize_embeddings": True, "batch_size": 64}),
+        ([], {"normalize_embeddings": True, "batch_size": 64}),
+    ]
 
 
 def test_local_embedding_provider_fails_clearly_when_dimension_is_unknown(
