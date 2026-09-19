@@ -242,11 +242,26 @@ pipe.match("Defenses", domain_prior=prior)
 ## Development
 
 ```bash
-uv sync --extra dev
-uv run pytest          # full suite, pure-Python, no network
-uv run mypy src        # strict
-uv run ruff check
+uv sync --frozen --extra dev
+uv run --no-sync pytest -ra --junitxml=test-results/core.xml
+uv run --no-sync mypy   # strict library scope from pyproject.toml
+uv run --no-sync ruff check .
 ```
+
+Pull requests run these checks on Python 3.11 and 3.12 (the type check runs on
+3.11). Core CI installs only the development extra; it needs no private gold data,
+provider credentials, or model downloads. Pytest's `-ra` output explains skips:
+the private audit packet is absent from a clean checkout, the spreadsheet test
+requires optional `openpyxl`, and real-ontology UAT requires the `folio` extra and
+`FOLIO_RESOLVE_UAT_REAL_ONTOLOGY=1`. The skip count depends on the local environment.
+JUnit reports remain available as workflow artifacts after test failures.
+
+CI also builds a wheel and installs it into a separate virtual environment outside
+the checkout. Its isolated Python process imports the installed package and checks
+that the bundled alias-blocklist JSON is present and loads through the public
+loader. This catches packaging omissions that editable-install tests can miss.
+The [core verification workflow](.github/workflows/ci.yml) contains the exact smoke
+commands and supports manual dispatch; release publishing remains separate.
 
 ## License & attribution
 

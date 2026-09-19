@@ -1,0 +1,76 @@
+name: Core verification
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  core:
+    name: Core (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install core and development dependencies
+        run: uv sync --frozen --extra dev
+
+      - name: Run core tests
+        run: uv run --no-sync pytest -ra --junitxml=test-results/core.xml
+
+      - name: Retain test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: core-results-python-${{ matrix.python-version }}
+          path: test-results/core.xml
+          if-no-files-found: warn
+
+      - name: Lint
+        run: uv run --no-sync ruff check .
+
+      - name: Check library types
+        if: matrix.python-version == '3.11'
+        run: uv run --no-sync mypy
+
+      - name: Build wheel
+        run: uv build --wheel --out-dir "$RUNNER_TEMP/wheel-dist"
+
+      - name: Verify installed wheel outside checkout
+        shell: bash
+        run: |
+          uv venv "$RUNNER_TEMP/wheel-smoke"
+          uv pip install --python "$RUNNER_TEMP/wheel-smoke/bin/python" "$RUNNER_TEMP"/wheel-dist/*.whl
+          cd "$RUNNER_TEMP"
+          "$RUNNER_TEMP/wheel-smoke/bin/python" -I - <<'PY'
+          import json
+          import sys
+          from importlib import resources
+          from pathlib import Path
+
+          import folio_resolve
+          from folio_resolve.blocklist import load_seed_blocklist
+
+          package_path = Path(folio_resolve.__file__).resolve()
+          assert package_path.is_relative_to(Path(sys.prefix).resolve()), package_path
+          seed = resources.files("folio_resolve.data").joinpath("alias_blocklist.json")
+          rows = json.loads(seed.read_text(encoding="utf-8"))["blocked_aliases"]
+          assert rows, "Packaged blocklist must not be empty"
+          loaded = load_seed_blocklist().entries()
+          assert len(loaded) == len(rows), (len(loaded), len(rows))
+          print(f"Installed wheel: {package_path}; loaded {len(loaded)} seed entries")
+          PY
