@@ -9,6 +9,8 @@ needs the ``embedding`` extra and is therefore only checked for its lazy-import 
 from __future__ import annotations
 
 import math
+from collections.abc import Sequence
+from typing import Any
 
 import pytest
 
@@ -279,3 +281,131 @@ def test_local_embedding_provider_fails_clearly_when_dimension_is_unknown(
     provider = LocalEmbeddingProvider()
     with pytest.raises(RuntimeError, match="does not report an embedding dimension"):
         provider.dimension()
+
+
+class FaultyProvider:
+    """Controllable provider; failures cross the actual index boundary."""
+
+    def __init__(self) -> None:
+        self.dim: Any = 2
+        self.vector: Any = [1.0, 0.0]
+        self.batch: Any = None
+        self.error: Exception | None = None
+
+    def dimension(self) -> int:
+        return self.dim
+
+    def embed(self, text: str) -> list[float]:
+        return self.vector
+
+    def embed_batch(self, texts: Sequence[str]) -> list[list[float]]:
+        if self.error is not None:
+            raise self.error
+        return self.batch if self.batch is not None else [self.embed(t) for t in texts]
+
+
+def _call_index_operation(idx: BruteForceIndex, operation: str) -> None:
+    if operation == "build":
+        idx.build(["R-a"], ["A"], [None])
+    elif operation == "query":
+        idx.query("private query text")
+    elif operation == "score_candidates":
+        idx.score_candidates("private query text", ["R-a"])
+    else:
+        idx.similarity_batch([("private query text", "another private text")])
+
+
+@pytest.mark.parametrize("batch", [[], [[1.0, 0.0], [0.0, 1.0]]])
+def test_build_rejects_provider_vector_count(batch: list[list[float]]) -> None:
+    provider = FaultyProvider()
+    provider.batch = batch
+    with pytest.raises(ValueError, match=r"build.*count"):
+        BruteForceIndex(provider).build(["R-a"], ["A"], [None])
+
+
+@pytest.mark.parametrize("dimension", [0, -1, 2.5, True, None])
+@pytest.mark.parametrize("operation", ["build", "query", "score_candidates", "similarity_batch"])
+def test_index_rejects_invalid_declared_dimension(dimension: Any, operation: str) -> None:
+    provider = FaultyProvider()
+    idx = BruteForceIndex(provider)
+    idx.build(["R-a"], ["A"], [None])
+    provider.dim = dimension
+    with pytest.raises(ValueError, match=f"{operation}.*dimension"):
+        _call_index_operation(idx, operation)
+
+
+@pytest.mark.parametrize(
+    "vector",
+    [
+        [1.0],
+        [1.0, 0.0, 0.0],
+        [float("nan"), 0.0],
+        [0.0, float("inf")],
+        [float("-inf"), 0.0],
+        ["1", 0.0],
+        [True, 0.0],
+        [None, 0.0],
+    ],
+)
+@pytest.mark.parametrize("operation", ["build", "query", "score_candidates", "similarity_batch"])
+def test_index_rejects_malformed_vectors(vector: Any, operation: str) -> None:
+    provider = FaultyProvider()
+    idx = BruteForceIndex(provider)
+    idx.build(["R-a"], ["A"], [None])
+    provider.vector = vector
+    with pytest.raises(ValueError, match=f"{operation}.*vector") as exc:
+        _call_index_operation(idx, operation)
+    assert "private" not in str(exc.value)
+
+
+@pytest.mark.parametrize("failure", ["exception", "count", "ragged", "nonfinite"])
+def test_failed_rebuild_preserves_previous_index(failure: str) -> None:
+    provider = FaultyProvider()
+    idx = BruteForceIndex(provider)
+    idx.build(["R-old"], ["Old"], [None])
+    before = idx.query("anything")
+    if failure == "exception":
+        provider.error = RuntimeError("provider failed")
+    elif failure == "count":
+        provider.batch = [[1.0, 0.0]]
+    elif failure == "ragged":
+        provider.batch = [[1.0, 0.0], [1.0]]
+    else:
+        provider.batch = [[1.0, 0.0], [float("nan"), 0.0]]
+    with pytest.raises((RuntimeError, ValueError)):
+        idx.build(["R-new", "R-other"], ["New", "Other"], [None, None])
+    assert idx.num_concepts == 1
+    assert idx.query("anything") == before
+    assert idx.score_candidates("anything", ["R-old", "R-new"]) == {"R-old": 1.0}
+
+
+def test_index_accepts_zero_vectors_and_empty_rebuild() -> None:
+    provider = FaultyProvider()
+    provider.vector = [0.0, 0.0]
+    idx = BruteForceIndex(provider)
+    idx.build(["R-a"], ["A"], [None])
+    assert idx.query("anything") == [("R-a", "A", 0.0)]
+    assert idx.score_candidates("anything", ["R-a"]) == {"R-a": 0.0}
+    assert idx.similarity_batch([("a", "b")]) == [0.0]
+    idx.build([], [], [])
+    assert idx.num_concepts == 0
+    assert idx.query("anything") == []
+
+
+def test_similarity_batch_validates_the_second_vector() -> None:
+    class SecondVectorInvalid(FaultyProvider):
+        def embed(self, text: str) -> list[float]:
+            return [float("nan"), 0.0] if text == "second" else [1.0, 0.0]
+
+    with pytest.raises(ValueError, match=r"similarity_batch.*vector"):
+        BruteForceIndex(SecondVectorInvalid()).similarity_batch([("first", "second")])
+
+
+def test_query_rejects_provider_dimension_changed_since_build() -> None:
+    provider = FaultyProvider()
+    idx = BruteForceIndex(provider)
+    idx.build(["R-a"], ["A"], [None])
+    provider.dim = 3
+    provider.vector = [1.0, 0.0, 0.0]
+    with pytest.raises(ValueError, match=r"query.*dimension"):
+        idx.query("anything")
