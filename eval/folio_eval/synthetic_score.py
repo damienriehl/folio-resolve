@@ -791,7 +791,7 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - I/O or
     selftest = run_determinism_selftest()
     config = load_config(args.config)
     _assert_config(corpus, config)
-    leak_manifest = load_manifest(args.leak_manifest)
+    leak_manifest = load_manifest(args.leak_manifest, allow_stale=True)
     salt = args.salt_file.read_bytes()
     public_metadata = load_public_report_metadata(args.public_metadata)
     preflight_report_publication(

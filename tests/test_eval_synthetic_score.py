@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from collections import Counter
 from dataclasses import replace
 from pathlib import Path
@@ -8,6 +9,7 @@ from types import SimpleNamespace
 from typing import cast
 
 import pytest
+from folio_eval import leakcheck as leakcheck_module
 from folio_eval import synthetic_score as synthetic_score_module
 from folio_eval.answer_rule import AnswerRuleConfig, commit_answers, load_config, rank_candidates
 from folio_eval.leakcheck import ScryptParams, build_manifest
@@ -744,7 +746,9 @@ def test_main_runs_publication_preflight_before_adapter_construction(
         ),
     )
     monkeypatch.setattr(synthetic_score_module, "load_config", lambda _path: config)
-    monkeypatch.setattr(synthetic_score_module, "load_manifest", lambda _path: leak_manifest)
+    monkeypatch.setattr(
+        synthetic_score_module, "load_manifest", lambda _path, **_kwargs: leak_manifest
+    )
     monkeypatch.setattr(synthetic_score_module, "DocumentAdapter", fail_if_constructed)
 
     with pytest.raises(SyntheticScoringError, match="leak check"):
@@ -770,6 +774,84 @@ def test_main_runs_publication_preflight_before_adapter_construction(
     assert adapter_constructed is False
 
 
+@pytest.mark.parametrize("has_collision", [False, True], ids=["benign", "collision"])
+def test_main_ignores_local_firm_gold_freshness(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, has_collision: bool
+) -> None:
+    config = AnswerRuleConfig()
+    corpus = _corpus(config)
+    metadata_path = _public_metadata(tmp_path, config).source_path
+    salt = b"tiny-test-salt"
+    salt_path = tmp_path / "salt"
+    salt_path.write_bytes(salt)
+    manifest = build_manifest(
+        ["planted collision"],
+        salt=salt,
+        scrypt_params=ScryptParams(n=2, r=1, p=1, dklen=8, test_params=True),
+        gold_version="0",
+        gold_content_sha256="d" * 64,
+    )
+    manifest_path = tmp_path / "leak.json"
+    manifest_path.write_text(json.dumps(manifest.to_json()), encoding="utf-8")
+    local_gold_dir = tmp_path / "owner-gold"
+    local_gold_dir.mkdir()
+    (local_gold_dir / "gold_v2.manifest.json").write_text(
+        json.dumps({"gold_version": 2, "content_sha256": "b" * 64}), encoding="utf-8"
+    )
+    # Keep the real loader and freshness check; only isolate local gold discovery.
+    monkeypatch.setattr(
+        leakcheck_module,
+        "DEFAULT_LOCAL_GOLD_MANIFEST_GLOB",
+        local_gold_dir / "gold_v*.manifest.json",
+    )
+    monkeypatch.setattr(synthetic_score_module, "ensure_hash_seed", lambda: None)
+    monkeypatch.setattr(synthetic_score_module, "load_corpus", lambda _path: corpus)
+    monkeypatch.setattr(
+        synthetic_score_module,
+        "assert_ontology_pin",
+        lambda _sha: SimpleNamespace(sha256=corpus.manifest.ontology_cache_sha256),
+    )
+    monkeypatch.setattr(synthetic_score_module, "load_config", lambda _path: config)
+    monkeypatch.setattr(
+        synthetic_score_module,
+        "run_determinism_selftest",
+        lambda: SimpleNamespace(
+            to_json=lambda: {
+                "target": "folio_eval.selftest:synthetic_scoring_payload",
+                "note": "planted collision" if has_collision else "public result",
+            }
+        ),
+    )
+
+    class PublicationPreflightPassed(Exception):
+        pass
+
+    def stop_before_ontology_load() -> None:
+        raise PublicationPreflightPassed("publication preflight passed")
+
+    monkeypatch.setitem(sys.modules, "folio", SimpleNamespace(FOLIO=stop_before_ontology_load))
+    expected_error = SyntheticScoringError if has_collision else PublicationPreflightPassed
+    expected_message = "leak check failed: collisions=1" if has_collision else "preflight passed"
+    with pytest.raises(expected_error, match=expected_message):
+        synthetic_score_module.main(
+            [
+                "--corpus-manifest",
+                str(tmp_path / "corpus.json"),
+                "--config",
+                str(tmp_path / "config.json"),
+                "--out",
+                str(tmp_path / "report.json"),
+                "--leak-manifest",
+                str(manifest_path),
+                "--salt-file",
+                str(salt_path),
+                "--public-metadata",
+                str(metadata_path),
+            ]
+        )
+    assert not (tmp_path / "report.json").exists()
+
+
 def _stub_checkpoint_main_dependencies(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -777,6 +859,8 @@ def _stub_checkpoint_main_dependencies(
     config: AnswerRuleConfig,
     corpus: LoadedCorpus,
 ) -> Path:
+    # Checkpoint scoring is stubbed below; no optional ontology package is needed.
+    monkeypatch.setitem(sys.modules, "folio", SimpleNamespace(FOLIO=object))
     salt_path = tmp_path / "salt"
     salt_path.write_bytes(b"tiny-test-salt")
     monkeypatch.setattr(synthetic_score_module, "ensure_hash_seed", lambda: None)
@@ -792,7 +876,9 @@ def _stub_checkpoint_main_dependencies(
         lambda: SimpleNamespace(to_json=lambda: {"matched": True}),
     )
     monkeypatch.setattr(synthetic_score_module, "load_config", lambda _path: config)
-    monkeypatch.setattr(synthetic_score_module, "load_manifest", lambda _path: object())
+    monkeypatch.setattr(
+        synthetic_score_module, "load_manifest", lambda _path, **_kwargs: object()
+    )
     monkeypatch.setattr(
         synthetic_score_module,
         "load_public_report_metadata",
