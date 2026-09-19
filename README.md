@@ -263,6 +263,30 @@ loader. This catches packaging omissions that editable-install tests can miss.
 The [core verification workflow](.github/workflows/ci.yml) contains the exact smoke
 commands and supports manual dispatch; release publishing remains separate.
 
+### Optional real-model tests
+
+The default pytest command excludes `embedding_integration` tests and never loads
+sentence-transformers. The manual [embedding workflow](.github/workflows/embedding.yml)
+installs a separate Python 3.12 CPU environment, downloads the immutable revision
+in [the model pin](tests/embedding_model.json), then tests offline. Its artifacts
+record the model revision, installed package versions, commit, and JUnit results.
+This is an adapter and pipeline smoke test, not a retrieval-quality benchmark.
+
+For a local run, use the workflow's separate environment and acquisition commands,
+then point to the downloaded snapshot directory (whose basename is the pinned
+revision):
+
+```bash
+HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 \
+FOLIO_RESOLVE_EMBEDDING_MODEL_PATH=/path/to/snapshots/1110a243fdf4706b3f48f1d95db1a4f5529b4d41 \
+/path/to/embedding-venv/bin/python -m pytest tests/test_embedding_integration.py \
+  -m embedding_integration -ra
+```
+
+The explicit `-m` overrides the default marker exclusion. A missing snapshot,
+missing optional dependency, or disabled offline mode fails this explicit run;
+none is silently skipped. Model acquisition remains a separate network step.
+
 ## License & attribution
 
 MIT — see [LICENSE](LICENSE). Every extracted component and dependency is logged in

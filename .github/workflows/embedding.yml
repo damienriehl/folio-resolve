@@ -1,0 +1,80 @@
+name: Optional embedding verification
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  UV_MANAGED_PYTHON: "true"
+
+jobs:
+  embedding:
+    name: Real model (Python 3.12, CPU)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install optional CPU environment
+        run: |
+          uv venv "$RUNNER_TEMP/embedding-venv"
+          echo "$RUNNER_TEMP/embedding-venv/bin" >> "$GITHUB_PATH"
+          uv pip install --python "$RUNNER_TEMP/embedding-venv/bin/python" torch==2.13.0 --index-url https://download.pytorch.org/whl/cpu
+          uv pip install --python "$RUNNER_TEMP/embedding-venv/bin/python" -e '.[embedding]' sentence-transformers==3.4.1 transformers==4.57.6 huggingface-hub==0.36.2 faiss-cpu==1.14.3 pytest pytest-asyncio
+
+      - name: Acquire pinned model snapshot
+        env:
+          HF_HOME: ${{ runner.temp }}/model-cache
+        run: |
+          mkdir -p test-results
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          from huggingface_hub import snapshot_download
+
+          pin = json.loads(Path("tests/embedding_model.json").read_text())
+          snapshot = snapshot_download(
+              repo_id=pin["repo_id"], revision=pin["revision"],
+              allow_patterns=["*.json", "*.txt", "*.safetensors"],
+          )
+          Path("test-results/model.json").write_text(json.dumps({**pin, "snapshot": snapshot}, indent=2))
+          with open(os.environ["GITHUB_ENV"], "a") as env:
+              env.write(f"FOLIO_RESOLVE_EMBEDDING_MODEL_PATH={snapshot}\n")
+          PY
+
+      - name: Record runtime provenance
+        if: always()
+        run: |
+          mkdir -p test-results
+          python --version > test-results/python.txt
+          uv pip freeze --python "$RUNNER_TEMP/embedding-venv/bin/python" > test-results/packages.txt
+          git rev-parse HEAD > test-results/commit.txt
+
+      - name: Run real model tests offline
+        env:
+          HF_HUB_OFFLINE: "1"
+          TRANSFORMERS_OFFLINE: "1"
+          HF_HOME: ${{ runner.temp }}/model-cache
+        run: |
+          python -m pytest tests/test_embedding_integration.py -m embedding_integration -ra --junitxml=test-results/embedding.xml
+          python - <<'PY'
+          import xml.etree.ElementTree as ET
+          cases = ET.parse("test-results/embedding.xml").findall(".//testcase")
+          assert cases, "The integration job must execute real tests"
+          assert all(case.find("skipped") is None for case in cases), "Integration skips are not success"
+          print(f"Executed {len(cases)} real-model tests without skips")
+          PY
+
+      - name: Retain model, package, and test evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: embedding-evidence
+          path: test-results/
+          if-no-files-found: warn
