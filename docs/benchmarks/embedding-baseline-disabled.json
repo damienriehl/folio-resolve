@@ -22,12 +22,12 @@
       "judge": false,
       "context": null
     },
-    "git_revision": "74527f773feb1c419879fa0ea750484adb4faaa5",
-    "benchmark_source_sha256": "60701f222ee7420f9447ab6a3c643adee326e0913e2f5b56d2214cebfaf4c1a3",
+    "git_revision": "2cb7899ec080b04f382d8cdcfcbb3e7f44f9680e",
+    "benchmark_source_sha256": "0af9b56a8f4512e1ea3acd06f01a845397873471e7f47133410f1378a88ca0d0",
     "library_source_sha256": "3f1682970e0cd62535777946e38c8776687ca355cb7ac81f70aa87fb615e1e44",
     "model_files_sha256": null
   },
-  "configuration_sha256": "8388c763551c353bececbd541ed8b4c6be7f4b06a5f82728a54c3ebbeb6216e0",
+  "configuration_sha256": "36777bef7b485f60e2ed0f90be71804ec76685ee7e3688ec72d69a142d9b9df8",
   "machine": {
     "platform": "Linux-7.0.0-31-generic-x86_64-with-glibc2.43",
     "python": "3.12.12",
@@ -91,11 +91,11 @@
     "recall_at_5": 0.3333333333333333
   },
   "runtime": {
-    "build_seconds": 0.5868507020641118,
+    "build_seconds": 0.5584028799785301,
     "warm_repeats_per_query": 3,
-    "warm_query_p50_seconds": 1.1294205815065652,
-    "warm_query_p95_seconds": 1.3789813860319555,
-    "peak_process_rss_bytes": 154857472,
+    "warm_query_p50_seconds": 1.118038191460073,
+    "warm_query_p95_seconds": 1.3402707070461475,
+    "peak_process_rss_bytes": 155959296,
     "timing_policy": "build includes parse/validation/model/index; one untimed warmup per query; pooled linear percentiles; RSS fresh process through queries before provenance hashing"
   },
   "positive_results": [
@@ -211,9 +211,9 @@
         }
       ],
       "warm_seconds": [
-        0.7826244460884482,
-        0.7867656609741971,
-        0.789071714039892
+        0.7886027600616217,
+        0.770300820004195,
+        0.7804429730167612
       ]
     },
     {
@@ -262,9 +262,9 @@
         }
       ],
       "warm_seconds": [
-        0.5466077669989318,
-        0.5546024539507926,
-        0.5571383599890396
+        0.5394820249639452,
+        0.5380313389468938,
+        0.5192271460546181
       ]
     },
     {
@@ -279,9 +279,9 @@
       },
       "candidates": [],
       "warm_seconds": [
-        1.287824047030881,
-        1.2706539349164814,
-        1.2805492300540209
+        1.230778755969368,
+        1.2139848570805043,
+        1.2502690049586818
       ]
     },
     {
@@ -296,9 +296,9 @@
       },
       "candidates": [],
       "warm_seconds": [
-        1.1298630409874022,
-        1.122728905058466,
-        1.1329364720731974
+        1.102449447964318,
+        1.0984448450617492,
+        1.0793137300061062
       ]
     },
     {
@@ -313,9 +313,9 @@
       },
       "candidates": [],
       "warm_seconds": [
-        1.3812024589860812,
-        1.3663953059585765,
-        1.4089403259567916
+        1.3309511879924685,
+        1.3472768999636173,
+        1.3033494570991024
       ]
     },
     {
@@ -330,9 +330,9 @@
       },
       "candidates": [],
       "warm_seconds": [
-        1.0390947619453073,
-        0.9935948809143156,
-        1.0248627560213208
+        0.9826003350317478,
+        1.0262253560358658,
+        1.0265843400266021
       ]
     }
   ],
@@ -345,9 +345,9 @@
       "expected_labels": {},
       "candidates": [],
       "warm_seconds": [
-        1.115554887917824,
-        1.1289781220257282,
-        1.1518842269433662
+        1.133626934955828,
+        1.1602092600660399,
+        1.2049116200068966
       ]
     },
     {
@@ -358,9 +358,9 @@
       "expected_labels": {},
       "candidates": [],
       "warm_seconds": [
-        1.356535168015398,
-        1.2605678150430322,
-        1.2567591860424727
+        1.3121213889680803,
+        1.3419153280556202,
+        1.2774422660004348
       ]
     }
   ]

@@ -24,6 +24,7 @@ import xml.etree.ElementTree as ET
 from dataclasses import asdict
 from pathlib import Path
 
+import folio_resolve
 from folio_resolve import Concept, InMemoryOntology, MatchPipeline
 from folio_resolve.embedding import (
     BruteForceIndex,
@@ -32,6 +33,7 @@ from folio_resolve.embedding import (
 )
 
 FIXTURE_PATH = Path(__file__).parent / "fixtures/embedding_recall.json"
+MODEL_FILES_PATH = Path(__file__).parent / "fixtures/embedding_model_files.json"
 NS = {
     "rdf": "http://www.w3.org/1999/02/22-rdf-syntax-ns#",
     "owl": "http://www.w3.org/2002/07/owl#",
@@ -50,6 +52,33 @@ def stable_digest(value: object) -> str:
 def file_digest(path: Path) -> str:
     with path.open("rb") as stream:
         return hashlib.file_digest(stream, "sha256").hexdigest()
+
+
+def verified_library_source() -> Path:
+    source = Path(folio_resolve.__file__).resolve().parent
+    expected = (Path(__file__).parents[1] / "src/folio_resolve").resolve()
+    if source != expected:
+        raise ValueError(
+            "Benchmark requires imported folio_resolve from this checkout's src directory"
+        )
+    return source
+
+
+def verify_model_files(model_path: Path, model: dict) -> dict[str, str]:
+    manifest = json.loads(MODEL_FILES_PATH.read_text())
+    if any(manifest[key] != model[key] for key in ("repo_id", "revision")):
+        raise ValueError("Model manifest identity differs from fixture pin")
+    expected = manifest["files"]
+    actual = {p.relative_to(model_path).as_posix(): p for p in model_path.rglob("*") if p.is_file()}
+    if actual.keys() != expected.keys():
+        raise ValueError(
+            f"Model file set differs from manifest: missing={sorted(expected.keys() - actual.keys())}; "
+            f"extra={sorted(actual.keys() - expected.keys())}"
+        )
+    for name, digest in expected.items():
+        if file_digest(actual[name]) != digest:
+            raise ValueError(f"Model file SHA-256 differs from manifest: {name}")
+    return expected
 
 
 def corpus_digest(concepts: list[Concept]) -> str:
@@ -163,6 +192,7 @@ def build_pipeline(
             raise ValueError("Local model requires the existing pinned snapshot directory")
         if any(os.environ.get(key) != "1" for key in ("HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE")):
             raise ValueError("Local model requires HF_HUB_OFFLINE=1 and TRANSFORMERS_OFFLINE=1")
+        verify_model_files(model_path, model)
         provider = LocalEmbeddingProvider(str(model_path))
         if provider.dimension() != model["dimension"]:
             raise ValueError("Local model dimension differs from fixture pin")
@@ -202,6 +232,7 @@ def run_benchmark(owl: Path, variant: str, model_path: Path | None, repeats: int
         raise ValueError("repeats must be positive")
     if platform.system() != "Linux":
         raise ValueError("Peak RSS measurement is defined for Linux only")
+    library_source = verified_library_source()
     fixture = load_fixtures()
     start = time.perf_counter()
     concepts = load_corpus(owl, fixture["ontology"]["sha256"])
@@ -261,17 +292,13 @@ def run_benchmark(owl: Path, variant: str, model_path: Path | None, repeats: int
         "benchmark_source_sha256": file_digest(Path(__file__)),
         "library_source_sha256": stable_digest(
             {
-                str(p.relative_to(Path(__file__).parents[1])): file_digest(p)
-                for p in sorted((Path(__file__).parents[1] / "src/folio_resolve").rglob("*"))
+                str(p.relative_to(library_source.parent.parent)): file_digest(p)
+                for p in sorted(library_source.rglob("*"))
                 if p.is_file() and p.suffix in {".py", ".json"}
             }
         ),
-        "model_files_sha256": {
-            str(p.relative_to(model_path)): file_digest(p)
-            for p in sorted(model_path.rglob("*"))
-            if p.is_file()
-        }
-        if variant == "local" and model_path
+        "model_files_sha256": json.loads(MODEL_FILES_PATH.read_text())["files"]
+        if variant == "local"
         else None,
     }
     return {

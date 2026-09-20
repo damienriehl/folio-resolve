@@ -22,9 +22,9 @@ Recall means the fraction of positive queries with **any acceptable target** amo
 
 | Variant | Recall@1 | Recall@5 | Build (s) | Warm p50 (s) | Warm p95 (s) | Peak RSS (MiB) |
 |---|---:|---:|---:|---:|---:|---:|
-| disabled | 2/6 (33.3%) | 2/6 (33.3%) | 0.587 | 1.129 | 1.379 | 147.7 |
-| hashing | 1/6 (16.7%) | 2/6 (33.3%) | 2.385 | 1.422 | 1.649 | 335.5 |
-| local | 2/6 (33.3%) | 2/6 (33.3%) | 203.450 | 1.559 | 1.783 | 993.1 |
+| disabled | 2/6 (33.3%) | 2/6 (33.3%) | 0.558 | 1.118 | 1.340 | 148.7 |
+| hashing | 1/6 (16.7%) | 2/6 (33.3%) | 2.419 | 1.431 | 1.666 | 335.7 |
+| local | 2/6 (33.3%) | 2/6 (33.3%) | 212.267 | 1.659 | 1.959 | 993.2 |
 
 | Query / approved target | Disabled rank | Hashing rank | Local rank |
 |---|---:|---:|---:|
@@ -62,7 +62,7 @@ Raw ranked survivors, scores, extraction paths, gate fields, per-query timing sa
 
 ## Reproduce
 
-Run from a Git checkout on Linux. The runner reads only the public OWL file and pinned local model; it never loads private gold or campaign artifacts. Acquisition is separate from the offline measurement. The OWL digest is checked before any variant builds. For another machine, retain its new JSON outputs rather than replacing this recorded baseline without explanation.
+Run from a Git checkout on Linux. The runner reads only the public OWL file and pinned local model; it never loads private gold or campaign artifacts. Acquisition is separate from the offline measurement. The OWL digest is checked before any variant builds. The runner rejects a `folio_resolve` import outside this checkout and verifies the local model’s exact file set and contents against the frozen manifest before constructing it. For another machine, retain its new JSON outputs rather than replacing this recorded baseline without explanation.
 
 ```bash
 uv venv --python 3.12 /tmp/folio-embedding-venv
@@ -94,4 +94,4 @@ for variant in disabled hashing local; do
 done
 ```
 
-The recorded JSON files include the complete installed package inventory, model-file hashes, library source/data digest, benchmark source digest, canonical fixture digest, and normalized corpus digest. The Git revision identifies the base checkout; the benchmark itself was new uncommitted code during the first run, so its source hash is the exact implementation identifier. Optional packages listed in the shared environment do not imply they were imported by every variant. No FAISS backend is used.
+The recorded JSON files include the complete installed package inventory, model-file hashes, library source/data digest, benchmark source digest, canonical fixture digest, and normalized corpus digest. The Git revision identifies the base checkout; each recorded run included uncommitted benchmark changes, so its source hash is the exact implementation identifier. The [frozen model-file manifest](../../benchmarks/fixtures/embedding_model_files.json) covers 11 snapshot files. Its hashes were independently verified against the immutable Hugging Face revision metadata: SHA-256 for LFS content and Git blob identities for other files. All 11 matched the initial run’s recorded hashes; the provenance checks therefore tighten future runs without changing the selected model. Optional packages listed in the shared environment do not imply they were imported by every variant. No FAISS backend is used.

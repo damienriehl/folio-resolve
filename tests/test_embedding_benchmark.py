@@ -143,3 +143,98 @@ def test_missing_targets_and_paraphrase_token_overlap_fail():
 def test_local_variant_requires_pinned_existing_offline_model(tmp_path):
     with pytest.raises(ValueError, match="pinned snapshot"):
         build_pipeline([], "local", tmp_path, {"revision": "absent", "dimension": 384})
+
+
+@pytest.fixture
+def tiny_model_snapshot(tmp_path, monkeypatch):
+    model = {"repo_id": "test/model", "revision": "frozen-revision", "dimension": 3}
+    snapshot = tmp_path / model["revision"]
+    snapshot.mkdir()
+    (snapshot / "config.json").write_text('{"dimension": 3}')
+    (snapshot / "weights.bin").write_bytes(b"frozen model weights")
+    manifest = {
+        "repo_id": model["repo_id"],
+        "revision": model["revision"],
+        "files": {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in snapshot.iterdir()},
+    }
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(json.dumps(manifest))
+    monkeypatch.setattr(benchmark, "MODEL_FILES_PATH", manifest_path, raising=False)
+    monkeypatch.setenv("HF_HUB_OFFLINE", "1")
+    monkeypatch.setenv("TRANSFORMERS_OFFLINE", "1")
+    constructed = []
+
+    def fake_provider(path):
+        constructed.append(path)
+        return benchmark.HashingEmbeddingProvider(dim=model["dimension"])
+
+    monkeypatch.setattr(benchmark, "LocalEmbeddingProvider", fake_provider)
+    return model, snapshot, manifest_path, constructed
+
+
+@pytest.mark.parametrize("mutation", ["altered", "missing", "extra", "repo_id", "revision"])
+def test_local_pipeline_rejects_unverified_model_before_provider(tiny_model_snapshot, mutation):
+    model, snapshot, manifest_path, constructed = tiny_model_snapshot
+    if mutation == "altered":
+        (snapshot / "weights.bin").write_bytes(b"different model with the same dimension")
+    elif mutation == "missing":
+        (snapshot / "weights.bin").unlink()
+    elif mutation == "extra":
+        (snapshot / "extra-config.json").write_text("{}")
+    else:
+        manifest = json.loads(manifest_path.read_text())
+        manifest[mutation] = "another-model"
+        manifest_path.write_text(json.dumps(manifest))
+    with pytest.raises(ValueError, match=r"[Mm]odel (file|manifest)"):
+        build_pipeline([], "local", snapshot, model)
+    assert constructed == []
+
+
+def test_local_pipeline_accepts_verified_model_bytes(tiny_model_snapshot):
+    model, snapshot, _, constructed = tiny_model_snapshot
+    pipeline = build_pipeline([Concept(iri="x", label="Example")], "local", snapshot, model)
+    assert pipeline.semantic_index is not None
+    assert constructed == [str(snapshot)]
+
+
+def test_benchmark_rejects_imported_distribution_before_loading_corpus(tmp_path, monkeypatch):
+    import folio_resolve
+
+    monkeypatch.setattr(
+        folio_resolve, "__file__", str(tmp_path / "site-packages/folio_resolve/__init__.py")
+    )
+    loaded = []
+
+    def unexpected_corpus(*args):
+        loaded.append(args)
+        raise AssertionError("Corpus loading must follow imported-source validation")
+
+    monkeypatch.setattr(benchmark, "load_corpus", unexpected_corpus)
+    with pytest.raises(ValueError, match="imported folio_resolve"):
+        benchmark.run_benchmark(tmp_path / "unused.owl", "disabled", None, 1)
+    assert loaded == []
+
+
+def test_benchmark_records_verified_manifest_and_imported_source(tiny_model_snapshot, monkeypatch):
+    model, snapshot, manifest_path, _ = tiny_model_snapshot
+    fixture = {
+        "model": model,
+        "ontology": {"sha256": "unused-test-digest"},
+        "cases": [{"id": "n", "kind": "negative", "query": "Example", "acceptable_iris": []}],
+    }
+    monkeypatch.setattr(benchmark, "load_fixtures", lambda: fixture)
+    monkeypatch.setattr(benchmark, "load_corpus", lambda *_: [Concept(iri="x", label="Example")])
+    result = benchmark.run_benchmark(snapshot / "unused.owl", "local", snapshot, 1)
+    source = benchmark.verified_library_source()
+    assert source == (Path(__file__).parents[1] / "src/folio_resolve").resolve()
+    assert (
+        result["provenance"]["model_files_sha256"] == json.loads(manifest_path.read_text())["files"]
+    )
+    expected_source_digest = stable_digest(
+        {
+            str(p.relative_to(source.parent.parent)): benchmark.file_digest(p)
+            for p in sorted(source.rglob("*"))
+            if p.is_file() and p.suffix in {".py", ".json"}
+        }
+    )
+    assert result["provenance"]["library_source_sha256"] == expected_source_digest
