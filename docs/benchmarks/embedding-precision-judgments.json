@@ -2,9 +2,15 @@
   "schema_version": 1,
   "collection_sha256": "b85a3a456a7ed5dac3d4bc2721d878bb0ec2ff4ef5c1dfde20be0b7d5d8b74f7",
   "pool_sha256": "dc29b51fda4307ae300ff4d81a1f4ed49bc50b0895422e5df707a16a0a7a4144",
-  "rubric_sha256": "9f9b1d15c146dd4f9b82b36addb1fbec723fe97abdce07f04112ec7b0e2990ea",
-  "rubric": "Assess each query/IRI pair for whether the concept directly expresses the query's requested meaning. Use the pinned label, definition, aliases, and parents as evidence. Do not infer a legal application merely because a query could occur in a legal document. A shared word or embedding similarity alone is insufficient.\n\nUse three judgments: relevant, irrelevant, or uncertain. Missing judgments also remain unjudged. Intended targets are proposed relevant examples; the table does not automatically make other concepts irrelevant. Broader/narrower concepts and related roles may require a judgment specific to the query.\n\nIn particular, decide Judgment for Summary Judgment, Bid for Auction, and Ratification for the existing P4 query from the actual definitions and query meaning. Seller for Auction is rank six in the prior local result, outside the initial top-five pool; its relevance remains unjudged unless separately reviewed. Those relationships are not resolved by this proposal. Geography is not automatically irrelevant: Denmark for Denmark is an intended positive, while a geographic admission to a nonsense query needs its own judgment.\n\nAfter case approval, pool the union of the original and selective local-model top-five results for the existing eight and accepted new cases. Present each unique query/IRI once, with ontology evidence and without arm names, scores, ranks, or extraction paths in the judgment view. Retain those fields separately for audit. Newly collected pairs start unjudged; do not prefill an assistant's relevance guesses as owner decisions.",
-  "approval": null,
+  "rubric_sha256": "df4badd1bdbb3df5e695f85bf7deba86982c593f9078a317c81e24f67f8e76cf",
+  "rubric": "Owner annotations: direct_match means a direct match; child, parent, and relationship describe the owner's query-specific classification, not verified ontology edges. Strict P@5 counts only direct_match; expanded P@5 counts direct_match, child, parent, and relationship. Explicit irrelevant counts in neither. Missing (null) and uncertain stay unjudged in both metrics. Unlisted candidates remain null because the owner found them too ambiguous. Both metrics use five slots and withhold paired point estimates and complete-group macros while returned candidates remain unjudged.",
+  "approval": {
+    "owner": "Damien Riehl",
+    "date": "2026-09-20",
+    "decision": "Approve strict (direct matches only) and expanded (direct + child + parent + relationship) precision; preserve the supplied 29 categories and leave the other 26 unjudged as too ambiguous.",
+    "decision_reference": "docs/benchmarks/embedding-precision-owner-review.md",
+    "payload_sha256": "19162921a64a9906a954f055f89051d03baff07ace4319c0b9b7b4148cbe49f2"
+  },
   "judgments": [
     {
       "query_id": "E1",
@@ -27,7 +33,7 @@
         "https://folio.openlegalstandard.org/R8zijLH2GH0SxOhIdzeDOs3"
       ],
       "judgment": null,
-      "rationale": null
+      "rationale": "Owner explicitly left this unlisted candidate unjudged: too ambiguous."
     },
     {
       "query_id": "E1",
@@ -50,8 +56,8 @@
       "parents": [
         "https://folio.openlegalstandard.org/R9jpIjzc10qdgl78jXOZtfm"
       ],
-      "judgment": null,
-      "rationale": null
+      "judgment": "direct_match",
+      "rationale": "Owner classified blinded candidate 2 as direct_match."
     },
     {
       "query_id": "E1",
@@ -72,8 +78,8 @@
       "parents": [
         "https://folio.openlegalstandard.org/RBKpy2Nyht27CqaMOeeTx1N"
       ],
-      "judgment": null,
-      "rationale": null
+      "judgment": "child",
+      "rationale": "Owner classified blinded candidate 3 as child."
     },
     {
       "query_id": "E1",
@@ -96,8 +102,8 @@
       "parents": [
         "https://folio.openlegalstandard.org/RDBXUrFP9mCZLCxzqy8nbEX"
       ],
-      "judgment": null,
-      "rationale": null
+      "judgment": "parent",
+      "rationale": "Owner classified blinded candidate 4 as parent."
     },
     {
       "query_id": "E1",
@@ -124,8 +130,8 @@
         "https://folio.openlegalstandard.org/RUM0A3dwvk0A2dp3WHxNrj",
         "https://folio.openlegalstandard.org/Rj3K3GgCUDFW3WWZSB8nsL"
       ],
-      "judgment": null,
-      "rationale": null
+      "judgment": "relationship",
+      "rationale": "Owner classified blinded candidate 5 as relationship."
     },
     {
       "query_id": "E1",
@@ -138,7 +144,7 @@
         "https://folio.openlegalstandard.org/RwD7QSyU5m2So0AXqivp9q"
       ],
       "judgment": null,
-      "rationale": null
+      "rationale": "Owner explicitly left this unlisted candidate unjudged: too ambiguous."
     },
     {
       "query_id": "E2",
@@ -162,7 +168,7 @@
         "https://folio.openlegalstandard.org/R9aw3d42PAXE6t5QYbR7Vru"
       ],
       "judgment": null,
-      "rationale": null
+      "rationale": "Owner explicitly left this unlisted candidate unjudged: too ambiguous."
     },
     {
       "query_id": "E2",
@@ -183,8 +189,8 @@
       "parents": [
         "https://folio.openlegalstandard.org/RBI5p2rdv7JzHTtGyObrIcl"
       ],
-      "judgment": null,
-      "rationale": null
+      "judgment": "direct_match",
+      "rationale": "Owner classified blinded candidate 8 as direct_match."
     },
     {
       "query_id": "E2",
@@ -199,8 +205,8 @@
       "parents": [
         "https://folio.openlegalstandard.org/R8ZlXt0J1JMbXm6T0xEg2SO"
       ],
-      "judgment": null,
-      "rationale": null
+      "judgment": "relationship",
+      "rationale": "Owner classified blinded candidate 9 as relationship."
     },
     {
       "query_id": "E2",
@@ -221,8 +227,8 @@
       "parents": [
         "https://folio.openlegalstandard.org/R8t7u58Bmu2hmFFto8S64nx"
       ],
-      "judgment": null,
-      "rationale": null
+      "judgment": "relationship",
+      "rationale": "Owner classified blinded candidate 10 as relationship."
     },
     {
       "query_id": "E2",
@@ -239,8 +245,8 @@
       "parents": [
         "https://folio.openlegalstandard.org/RdfKnWpXsG2eBmnS3oJNTF"
       ],
-      "judgment": null,
-      "rationale": null
+      "judgment": "relationship",
+      "rationale": "Owner classified blinded candidate 11 as relationship."
     },
     {
       "query_id": "P1",
@@ -258,8 +264,8 @@
       "parents": [
         "https://folio.openlegalstandard.org/RCfunX4u69LUQ3gbhckE0oI"
       ],
-      "judgment": null,
-      "rationale": null
+      "judgment": "direct_match",
+      "rationale": "Owner classified blinded candidate 12 as direct_match."
     },
     {
       "query_id": "P1",
@@ -281,7 +287,7 @@
         "https://folio.openlegalstandard.org/R9IldpgAfUyz3upHKvXdn8y"
       ],
       "judgment": null,
-      "rationale": null
+      "rationale": "Owner explicitly left this unlisted candidate unjudged: too ambiguous."
     },
     {
       "query_id": "P1",
@@ -306,7 +312,7 @@
         "https://folio.openlegalstandard.org/RCfunX4u69LUQ3gbhckE0oI"
       ],
       "judgment": null,
-      "rationale": null
+      "rationale": "Owner explicitly left this unlisted candidate unjudged: too ambiguous."
     },
     {
       "query_id": "P1",
@@ -330,7 +336,7 @@
         "https://folio.openlegalstandard.org/RCSRe5gA8rHlqeKGEVst9Z9"
       ],
       "judgment": null,
-      "rationale": null
+      "rationale": "Owner explicitly left this unlisted candidate unjudged: too ambiguous."
     },
     {
       "query_id": "P1",
@@ -352,7 +358,7 @@
         "https://folio.openlegalstandard.org/R9pC5rYhFMiLaQiSZETyftd"
       ],
       "judgment": null,
-      "rationale": null
+      "rationale": "Owner explicitly left this unlisted candidate unjudged: too ambiguous."
     },
     {
       "query_id": "P3",
@@ -374,8 +380,8 @@
       "parents": [
         "https://folio.openlegalstandard.org/R9Ii4OzSADsjS0VegX12oQJ"
       ],
-      "judgment": null,
-      "rationale": null
+      "judgment": "direct_match",
+      "rationale": "Owner classified blinded candidate 17 as direct_match."
     },
     {
       "query_id": "P3",
@@ -398,7 +404,7 @@
         "https://folio.openlegalstandard.org/R7QiKeEkci1FYlRMv6nDRnv"
       ],
       "judgment": null,
-      "rationale": null
+      "rationale": "Owner explicitly left this unlisted candidate unjudged: too ambiguous."
     },
     {
       "query_id": "P4",
@@ -422,7 +428,7 @@
         "https://folio.openlegalstandard.org/RCUXIdFpIxrgm2u6Xlk9ywc"
       ],
       "judgment": null,
-      "rationale": null
+      "rationale": "Owner explicitly left this unlisted candidate unjudged: too ambiguous."
     },
     {
       "query_id": "P4",
@@ -451,7 +457,7 @@
         "https://folio.openlegalstandard.org/RpNOHS1FAVVJkNXIN6L6y7"
       ],
       "judgment": null,
-      "rationale": null
+      "rationale": "Owner explicitly left this unlisted candidate unjudged: too ambiguous."
     },
     {
       "query_id": "P4",
@@ -472,7 +478,7 @@
         "https://folio.openlegalstandard.org/RCzs34uEQI9f4cuWp3bQO0P"
       ],
       "judgment": null,
-      "rationale": null
+      "rationale": "Owner explicitly left this unlisted candidate unjudged: too ambiguous."
     },
     {
       "query_id": "P4",
@@ -495,7 +501,7 @@
         "https://folio.openlegalstandard.org/RDe0RKU39BlhcyACJW30ZLc"
       ],
       "judgment": null,
-      "rationale": null
+      "rationale": "Owner explicitly left this unlisted candidate unjudged: too ambiguous."
     },
     {
       "query_id": "P4",
@@ -514,7 +520,7 @@
         "https://folio.openlegalstandard.org/R73hoH1RXYjBTYiGfolpsAF"
       ],
       "judgment": null,
-      "rationale": null
+      "rationale": "Owner explicitly left this unlisted candidate unjudged: too ambiguous."
     },
     {
       "query_id": "S1",
@@ -537,8 +543,8 @@
         "https://folio.openlegalstandard.org/R8oBTLovip7JQGJ9AeOmmCD",
         "https://folio.openlegalstandard.org/R9aw3d42PAXE6t5QYbR7Vru"
       ],
-      "judgment": null,
-      "rationale": null
+      "judgment": "relationship",
+      "rationale": "Owner classified blinded candidate 24 as relationship."
     },
     {
       "query_id": "S1",
@@ -559,8 +565,8 @@
       "parents": [
         "https://folio.openlegalstandard.org/RBI5p2rdv7JzHTtGyObrIcl"
       ],
-      "judgment": null,
-      "rationale": null
+      "judgment": "relationship",
+      "rationale": "Owner classified blinded candidate 25 as relationship."
     },
     {
       "query_id": "S1",
@@ -575,8 +581,8 @@
       "parents": [
         "https://folio.openlegalstandard.org/R9YxIkGNEnotiOtItG96PxY"
       ],
-      "judgment": null,
-      "rationale": null
+      "judgment": "relationship",
+      "rationale": "Owner classified blinded candidate 26 as relationship."
     },
     {
       "query_id": "S1",
@@ -593,8 +599,8 @@
       "parents": [
         "https://folio.openlegalstandard.org/RdfKnWpXsG2eBmnS3oJNTF"
       ],
-      "judgment": null,
-      "rationale": null
+      "judgment": "direct_match",
+      "rationale": "Owner classified blinded candidate 27 as direct_match."
     },
     {
       "query_id": "S2",
@@ -616,8 +622,8 @@
       "parents": [
         "https://folio.openlegalstandard.org/RCEDL3kMYgjFUEOhOyGp3IE"
       ],
-      "judgment": null,
-      "rationale": null
+      "judgment": "direct_match",
+      "rationale": "Owner classified blinded candidate 28 as direct_match."
     },
     {
       "query_id": "S2",
@@ -639,7 +645,7 @@
         "https://folio.openlegalstandard.org/RDSBerlLWg1ntpLqDQn1eVn"
       ],
       "judgment": null,
-      "rationale": null
+      "rationale": "Owner explicitly left this unlisted candidate unjudged: too ambiguous."
     },
     {
       "query_id": "S2",
@@ -660,8 +666,8 @@
       "parents": [
         "https://folio.openlegalstandard.org/R7kkf8NvitG8hubZUnTwevG"
       ],
-      "judgment": null,
-      "rationale": null
+      "judgment": "relationship",
+      "rationale": "Owner classified blinded candidate 30 as relationship."
     },
     {
       "query_id": "S2",
@@ -683,7 +689,7 @@
         "https://folio.openlegalstandard.org/R8t5CSqYvG6L6Cl86vQeMRA"
       ],
       "judgment": null,
-      "rationale": null
+      "rationale": "Owner explicitly left this unlisted candidate unjudged: too ambiguous."
     },
     {
       "query_id": "S2",
@@ -705,7 +711,7 @@
         "https://folio.openlegalstandard.org/RZ1dOPJ6HH6lMJGSLNxfwV"
       ],
       "judgment": null,
-      "rationale": null
+      "rationale": "Owner explicitly left this unlisted candidate unjudged: too ambiguous."
     },
     {
       "query_id": "S3",
@@ -727,8 +733,8 @@
       "parents": [
         "https://folio.openlegalstandard.org/R8zijLH2GH0SxOhIdzeDOs3"
       ],
-      "judgment": null,
-      "rationale": null
+      "judgment": "relationship",
+      "rationale": "Owner classified blinded candidate 33 as relationship."
     },
     {
       "query_id": "S3",
@@ -749,8 +755,8 @@
       "parents": [
         "https://folio.openlegalstandard.org/RD078pnidakfOC1UdhDigqn"
       ],
-      "judgment": null,
-      "rationale": null
+      "judgment": "relationship",
+      "rationale": "Owner classified blinded candidate 34 as relationship."
     },
     {
       "query_id": "S3",
@@ -771,8 +777,8 @@
       "parents": [
         "https://folio.openlegalstandard.org/R9jpIjzc10qdgl78jXOZtfm"
       ],
-      "judgment": null,
-      "rationale": null
+      "judgment": "child",
+      "rationale": "Owner classified blinded candidate 35 as child."
     },
     {
       "query_id": "S3",
@@ -793,8 +799,8 @@
       "parents": [
         "https://folio.openlegalstandard.org/R9jpIjzc10qdgl78jXOZtfm"
       ],
-      "judgment": null,
-      "rationale": null
+      "judgment": "child",
+      "rationale": "Owner classified blinded candidate 36 as child."
     },
     {
       "query_id": "S3",
@@ -817,8 +823,8 @@
       "parents": [
         "https://folio.openlegalstandard.org/RDBXUrFP9mCZLCxzqy8nbEX"
       ],
-      "judgment": null,
-      "rationale": null
+      "judgment": "direct_match",
+      "rationale": "Owner classified blinded candidate 37 as direct_match."
     },
     {
       "query_id": "S4",
@@ -840,8 +846,8 @@
         "https://folio.openlegalstandard.org/RCfunX4u69LUQ3gbhckE0oI",
         "https://folio.openlegalstandard.org/RDFS05TC0KeQMxUVL41hffR"
       ],
-      "judgment": null,
-      "rationale": null
+      "judgment": "child",
+      "rationale": "Owner classified blinded candidate 38 as child."
     },
     {
       "query_id": "S4",
@@ -863,8 +869,8 @@
       "parents": [
         "https://folio.openlegalstandard.org/RWNAwJemBq0gDs7LXfCjnE"
       ],
-      "judgment": null,
-      "rationale": null
+      "judgment": "child",
+      "rationale": "Owner classified blinded candidate 39 as child."
     },
     {
       "query_id": "S4",
@@ -886,8 +892,8 @@
       "parents": [
         "https://folio.openlegalstandard.org/R7Zbqfhemxs6PR7r2Fk6NeY"
       ],
-      "judgment": null,
-      "rationale": null
+      "judgment": "child",
+      "rationale": "Owner classified blinded candidate 40 as child."
     },
     {
       "query_id": "S4",
@@ -905,8 +911,8 @@
       "parents": [
         "https://folio.openlegalstandard.org/RCfunX4u69LUQ3gbhckE0oI"
       ],
-      "judgment": null,
-      "rationale": null
+      "judgment": "direct_match",
+      "rationale": "Owner classified blinded candidate 41 as direct_match."
     },
     {
       "query_id": "S4",
@@ -928,8 +934,8 @@
       "parents": [
         "https://folio.openlegalstandard.org/R7Zbqfhemxs6PR7r2Fk6NeY"
       ],
-      "judgment": null,
-      "rationale": null
+      "judgment": "child",
+      "rationale": "Owner classified blinded candidate 42 as child."
     },
     {
       "query_id": "G1",
@@ -941,8 +947,8 @@
       "parents": [
         "https://folio.openlegalstandard.org/R5E0c679BE29e3F86383A5bc"
       ],
-      "judgment": null,
-      "rationale": null
+      "judgment": "direct_match",
+      "rationale": "Owner classified blinded candidate 43 as direct_match."
     },
     {
       "query_id": "G1",
@@ -957,7 +963,7 @@
         "https://folio.openlegalstandard.org/R5E0c679BE29e3F86383A5bc"
       ],
       "judgment": null,
-      "rationale": null
+      "rationale": "Owner explicitly left this unlisted candidate unjudged: too ambiguous."
     },
     {
       "query_id": "G1",
@@ -970,7 +976,7 @@
         "https://folio.openlegalstandard.org/R5E0c679BE29e3F86383A5bc"
       ],
       "judgment": null,
-      "rationale": null
+      "rationale": "Owner explicitly left this unlisted candidate unjudged: too ambiguous."
     },
     {
       "query_id": "G1",
@@ -983,7 +989,7 @@
         "https://folio.openlegalstandard.org/R5E0c679BE29e3F86383A5bc"
       ],
       "judgment": null,
-      "rationale": null
+      "rationale": "Owner explicitly left this unlisted candidate unjudged: too ambiguous."
     },
     {
       "query_id": "G1",
@@ -996,7 +1002,7 @@
         "https://folio.openlegalstandard.org/R5E0c679BE29e3F86383A5bc"
       ],
       "judgment": null,
-      "rationale": null
+      "rationale": "Owner explicitly left this unlisted candidate unjudged: too ambiguous."
     },
     {
       "query_id": "G2",
@@ -1009,7 +1015,7 @@
         "https://folio.openlegalstandard.org/R286f5eC097e5DCE808BD672"
       ],
       "judgment": null,
-      "rationale": null
+      "rationale": "Owner explicitly left this unlisted candidate unjudged: too ambiguous."
     },
     {
       "query_id": "G2",
@@ -1022,7 +1028,7 @@
         "https://folio.openlegalstandard.org/R5E0c679BE29e3F86383A5bc"
       ],
       "judgment": null,
-      "rationale": null
+      "rationale": "Owner explicitly left this unlisted candidate unjudged: too ambiguous."
     },
     {
       "query_id": "G2",
@@ -1034,8 +1040,8 @@
       "parents": [
         "https://folio.openlegalstandard.org/R22C1a9E9De3f8DDc1fDFf70"
       ],
-      "judgment": null,
-      "rationale": null
+      "judgment": "direct_match",
+      "rationale": "Owner classified blinded candidate 50 as direct_match."
     },
     {
       "query_id": "G2",
@@ -1048,7 +1054,7 @@
         "https://folio.openlegalstandard.org/R286f5eC097e5DCE808BD672"
       ],
       "judgment": null,
-      "rationale": null
+      "rationale": "Owner explicitly left this unlisted candidate unjudged: too ambiguous."
     },
     {
       "query_id": "G2",
@@ -1061,7 +1067,7 @@
         "https://folio.openlegalstandard.org/R5E0c679BE29e3F86383A5bc"
       ],
       "judgment": null,
-      "rationale": null
+      "rationale": "Owner explicitly left this unlisted candidate unjudged: too ambiguous."
     },
     {
       "query_id": "G2",
@@ -1073,8 +1079,8 @@
       "parents": [
         "https://folio.openlegalstandard.org/RHeTIR9eQOrgyI8yvIZXQr"
       ],
-      "judgment": null,
-      "rationale": null
+      "judgment": "relationship",
+      "rationale": "Owner classified blinded candidate 53 as relationship."
     },
     {
       "query_id": "G2",
@@ -1087,7 +1093,7 @@
         "https://folio.openlegalstandard.org/R5E0c679BE29e3F86383A5bc"
       ],
       "judgment": null,
-      "rationale": null
+      "rationale": "Owner explicitly left this unlisted candidate unjudged: too ambiguous."
     },
     {
       "query_id": "G2",
@@ -1100,7 +1106,7 @@
         "https://folio.openlegalstandard.org/2G-DBFLDQJysTddcCjBaIA"
       ],
       "judgment": null,
-      "rationale": null
+      "rationale": "Owner explicitly left this unlisted candidate unjudged: too ambiguous."
     }
   ]
 }
