@@ -1,0 +1,183 @@
+{
+  "schema_version": 1,
+  "ontology": {
+    "revision": "e36f3f8e7e7ecc8e081b78ababc3daca149fcaf2",
+    "sha256": "44657b4ed844f5f9c9c48869184606b4fc671471a8263d79d241de87809fa239",
+    "url": "https://raw.githubusercontent.com/alea-institute/FOLIO/e36f3f8e7e7ecc8e081b78ababc3daca149fcaf2/FOLIO.owl"
+  },
+  "model": {
+    "repo_id": "sentence-transformers/all-MiniLM-L6-v2",
+    "revision": "1110a243fdf4706b3f48f1d95db1a4f5529b4d41",
+    "dimension": 384
+  },
+  "cases": [
+    {
+      "id": "E1",
+      "kind": "exact",
+      "query": "Summary Judgment",
+      "acceptable_iris": [
+        "https://folio.openlegalstandard.org/R8K6VFq9c39kbQouame6Onf"
+      ],
+      "expected_labels": {
+        "https://folio.openlegalstandard.org/R8K6VFq9c39kbQouame6Onf": "Summary Judgment"
+      }
+    },
+    {
+      "id": "E2",
+      "kind": "exact",
+      "query": "Auction",
+      "acceptable_iris": [
+        "https://folio.openlegalstandard.org/R8kOvHwkY6TrQmB7RnYiWNO"
+      ],
+      "expected_labels": {
+        "https://folio.openlegalstandard.org/R8kOvHwkY6TrQmB7RnYiWNO": "Auction"
+      }
+    },
+    {
+      "id": "P1",
+      "kind": "paraphrase",
+      "query": "careless conduct injures someone",
+      "acceptable_iris": [
+        "https://folio.openlegalstandard.org/R7nqxxlAfhYqqSA2UQ5UxpX"
+      ],
+      "expected_labels": {
+        "https://folio.openlegalstandard.org/R7nqxxlAfhYqqSA2UQ5UxpX": "Negligence"
+      }
+    },
+    {
+      "id": "P3",
+      "kind": "paraphrase",
+      "query": "expired deadline bars suing",
+      "acceptable_iris": [
+        "https://folio.openlegalstandard.org/RDKJ7nEqeDxNDRxI2Wqil1N"
+      ],
+      "expected_labels": {
+        "https://folio.openlegalstandard.org/RDKJ7nEqeDxNDRxI2Wqil1N": "Statute of Limitations"
+      }
+    },
+    {
+      "id": "P4",
+      "kind": "paraphrase",
+      "query": "previously resolved dispute barred anew",
+      "acceptable_iris": [
+        "https://folio.openlegalstandard.org/R8OsGCPOsihiJLtbFkIbRfx"
+      ],
+      "expected_labels": {
+        "https://folio.openlegalstandard.org/R8OsGCPOsihiJLtbFkIbRfx": "Res Judicata"
+      }
+    },
+    {
+      "id": "P6",
+      "kind": "paraphrase",
+      "query": "bargained reciprocal benefit",
+      "acceptable_iris": [
+        "https://folio.openlegalstandard.org/RBKXEdlGEMzeuinxEdRGBF5"
+      ],
+      "expected_labels": {
+        "https://folio.openlegalstandard.org/RBKXEdlGEMzeuinxEdRGBF5": "Consideration"
+      }
+    },
+    {
+      "id": "N1",
+      "kind": "negative",
+      "query": "purple nebula hums a lullaby",
+      "acceptable_iris": [],
+      "expected_labels": {}
+    },
+    {
+      "id": "N2",
+      "kind": "negative",
+      "query": "my sourdough starter smells fruity",
+      "acceptable_iris": [],
+      "expected_labels": {}
+    },
+    {
+      "id": "S1",
+      "kind": "exact",
+      "query": "Bid",
+      "acceptable_iris": [
+        "https://folio.openlegalstandard.org/RiQHdRDZfaAIOlPy9vfwB8"
+      ],
+      "expected_labels": {
+        "https://folio.openlegalstandard.org/RiQHdRDZfaAIOlPy9vfwB8": "Bid"
+      }
+    },
+    {
+      "id": "S2",
+      "kind": "exact",
+      "query": "Seller",
+      "acceptable_iris": [
+        "https://folio.openlegalstandard.org/R7kkf8NvitG8hubZUnTwevG"
+      ],
+      "expected_labels": {
+        "https://folio.openlegalstandard.org/R7kkf8NvitG8hubZUnTwevG": "Seller"
+      }
+    },
+    {
+      "id": "S3",
+      "kind": "exact",
+      "query": "Judgment",
+      "acceptable_iris": [
+        "https://folio.openlegalstandard.org/R9jpIjzc10qdgl78jXOZtfm"
+      ],
+      "expected_labels": {
+        "https://folio.openlegalstandard.org/R9jpIjzc10qdgl78jXOZtfm": "Judgment"
+      }
+    },
+    {
+      "id": "S4",
+      "kind": "exact",
+      "query": "Negligence",
+      "acceptable_iris": [
+        "https://folio.openlegalstandard.org/R7nqxxlAfhYqqSA2UQ5UxpX"
+      ],
+      "expected_labels": {
+        "https://folio.openlegalstandard.org/R7nqxxlAfhYqqSA2UQ5UxpX": "Negligence"
+      }
+    },
+    {
+      "id": "G1",
+      "kind": "geographic",
+      "query": "Denmark",
+      "acceptable_iris": [
+        "https://folio.openlegalstandard.org/R1ABd0796Ff01FF7573A211f"
+      ],
+      "expected_labels": {
+        "https://folio.openlegalstandard.org/R1ABd0796Ff01FF7573A211f": "Denmark"
+      }
+    },
+    {
+      "id": "G2",
+      "kind": "geographic",
+      "query": "Riga",
+      "acceptable_iris": [
+        "https://folio.openlegalstandard.org/R2311533686ac96916eE33cd"
+      ],
+      "expected_labels": {
+        "https://folio.openlegalstandard.org/R2311533686ac96916eE33cd": "Riga"
+      }
+    },
+    {
+      "id": "N3",
+      "kind": "negative",
+      "query": "velvet comet hums softly",
+      "acceptable_iris": [],
+      "expected_labels": {}
+    },
+    {
+      "id": "N4",
+      "kind": "negative",
+      "query": "polka-dot moon tastes fizzy",
+      "acceptable_iris": [],
+      "expected_labels": {}
+    }
+  ],
+  "rubric": "Assess each query/IRI pair for whether the concept directly expresses the query's requested meaning. Use the pinned label, definition, aliases, and parents as evidence. Do not infer a legal application merely because a query could occur in a legal document. A shared word or embedding similarity alone is insufficient.\n\nUse three judgments: relevant, irrelevant, or uncertain. Missing judgments also remain unjudged. Intended targets are proposed relevant examples; the table does not automatically make other concepts irrelevant. Broader/narrower concepts and related roles may require a judgment specific to the query.\n\nIn particular, decide Judgment for Summary Judgment, Bid for Auction, and Ratification for the existing P4 query from the actual definitions and query meaning. Seller for Auction is rank six in the prior local result, outside the initial top-five pool; its relevance remains unjudged unless separately reviewed. Those relationships are not resolved by this proposal. Geography is not automatically irrelevant: Denmark for Denmark is an intended positive, while a geographic admission to a nonsense query needs its own judgment.\n\nAfter case approval, pool the union of the original and selective local-model top-five results for the existing eight and accepted new cases. Present each unique query/IRI once, with ontology evidence and without arm names, scores, ranks, or extraction paths in the judgment view. Retain those fields separately for audit. Newly collected pairs start unjudged; do not prefill an assistant's relevance guesses as owner decisions.",
+  "approval": {
+    "owner": "Damien Riehl",
+    "date": "2026-09-20",
+    "decision": "approve all eight",
+    "context": "Inline response to the eight-case query/expected-target table and direct-meaning relevance rubric; authorizes collection and intended targets, not unseen candidate judgments.",
+    "payload_sha256": "e3f759281c767bf6cb5e375db76c72e8e795963625feed475e37c38e8a421be9"
+  }
+}
