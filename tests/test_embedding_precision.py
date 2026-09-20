@@ -329,3 +329,358 @@ def test_retrieval_failure_restores_real_rank():
     with pytest.raises(RuntimeError, match="retrieval probe"):
         mod.retrieve_once(pipe, "query")
     assert pipe._rank == original
+
+
+def scoring_cases():
+    def case(qid, kind, left, right):
+        return {
+            "id": qid,
+            "kind": kind,
+            "query": qid,
+            "acceptable_iris": ["r"] if kind != "negative" else [],
+            **{
+                arm: {"candidates": [dict(iri=i, extraction_path="semantic") for i in iris]}
+                for arm, iris in zip(("baseline", "selective"), (left, right), strict=True)
+            },
+        }
+
+    return [
+        case("P", "exact", ["r", "i", "u"], ["r", "i", "r2"]),
+        case("E", "paraphrase", [], []),
+        case("N", "negative", ["i", "u"], []),
+    ]
+
+
+def test_scoring_partial_fixed_denominators_and_negative_counts():
+    mod = runner()
+    labels = {
+        ("P", "r"): "relevant",
+        ("P", "r2"): "relevant",
+        ("P", "i"): "irrelevant",
+        ("P", "u"): "uncertain",
+        ("N", "i"): "irrelevant",
+    }
+    result = mod.summarize(scoring_cases(), labels, ["P", "E"])
+    positive, empty, negative = result["queries"]
+    assert positive["baseline"]["p_at_5"] is None
+    assert positive["selective"]["p_at_5"] is None
+    assert positive["baseline"]["p_at_5_bounds"] == [0.2, 0.4]
+    assert positive["selective"]["p_at_5_bounds"] == [0.4, 0.4]
+    assert empty["baseline"]["p_at_5"] == 0
+    macro = result["positive_groups"]["combined"]
+    assert macro["query_count"] == 2
+    assert macro["baseline"]["p_at_5"] is None
+    assert macro["baseline"]["p_at_5_bounds"] == [0.1, 0.2]
+    assert macro["selective"]["p_at_5_bounds"] == [0.2, 0.2]
+    assert negative["baseline"]["returned"] == 2
+    assert negative["baseline"]["irrelevant"] == 1
+    assert negative["baseline"]["missing"] == 1
+    assert "p_at_5" not in negative["baseline"]
+    assert positive["added"] == ["r2"] and positive["removed"] == ["u"]
+
+
+def test_judgment_identity_and_approval_contract():
+    import copy
+
+    import pytest
+
+    mod = runner()
+    collection = {
+        "fixture": mod.load_fixtures(),
+        "pool": [
+            {
+                "query_id": "P",
+                "query": "P",
+                "iri": "r",
+                "label": "R",
+                "definition": None,
+                "aliases": [],
+                "parents": [],
+            }
+        ],
+    }
+    collection["pool_sha256"] = mod.baseline.stable_digest(collection["pool"])
+    sheet = mod.prepare_judgments(collection)
+    assert mod.validate_judgments(collection, sheet) == {("P", "r"): None}
+    for mutate in [
+        lambda s: s["judgments"].clear(),
+        lambda s: s["judgments"].append(copy.deepcopy(s["judgments"][0])),
+        lambda s: s["judgments"][0].update(label="Changed"),
+        lambda s: s.update(rubric="Changed"),
+    ]:
+        bad = copy.deepcopy(sheet)
+        mutate(bad)
+        with pytest.raises(ValueError):
+            mod.validate_judgments(collection, bad)
+    sheet["judgments"][0]["judgment"] = "relevant"
+    with pytest.raises(ValueError, match="approval"):
+        mod.validate_judgments(collection, sheet)
+
+
+def test_full_scoring_empty_and_one_result_and_path_identity():
+    mod = runner()
+    cases = scoring_cases()
+    cases[0]["baseline"]["candidates"] = [{"iri": "r", "extraction_path": "label_search"}]
+    cases[0]["selective"]["candidates"] = [{"iri": "r", "extraction_path": "semantic"}]
+    labels = {("P", "r"): "relevant", ("N", "i"): "irrelevant", ("N", "u"): "irrelevant"}
+    result = mod.summarize(cases, labels, ["P", "E"])
+    assert result["queries"][0]["baseline"]["p_at_5"] == 0.2
+    assert result["positive_groups"]["combined"]["baseline"]["p_at_5"] == 0.1
+    assert result["queries"][0]["winning_path_changes"] == [
+        {"iri": "r", "baseline": "label_search", "selective": "semantic"}
+    ]
+    assert result["queries"][0]["added"] == []
+    assert result["positive_groups"]["new"]["query_count"] == 0
+    assert result["positive_groups"]["new"]["baseline"]["p_at_5_bounds"] is None
+    assert result["queries"][2]["selective"]["returned"] == 0
+    assert "p_at_5" not in result["queries"][2]["selective"]
+
+
+def test_negative_relevance_requires_owner_resolution():
+    import pytest
+
+    mod = runner()
+    with pytest.raises(ValueError, match=r"Annotation conflict.*owner resolution"):
+        mod.summarize(scoring_cases(), {("N", "i"): "relevant"}, ["P", "E"])
+
+
+def offline_collection(mod):
+    """Real frozen controls + approved new cases with explicitly empty synthetic retrievals."""
+    import json
+
+    from folio_resolve import Concept
+
+    fixture = mod.load_fixtures()
+    frozen = json.loads(mod.CONTROL_PATH.read_text())["variants"]["local"]["results"]
+    results = [
+        {**case, **{arm: control[arm] for arm in mod.ARMS}}
+        for case, control in zip(fixture["cases"][:8], frozen, strict=True)
+    ]
+    pipe = MatchPipeline(InMemoryOntology([]))
+    results.extend(
+        {**case, **mod.rank_pair(pipe, [], case["acceptable_iris"])}
+        for case in fixture["cases"][8:]
+    )
+    concepts = {
+        c["iri"]: Concept(c["iri"], c["label"])
+        for result in results
+        for arm in mod.ARMS
+        for c in result[arm]["candidates"]
+    }
+    pool = mod.candidate_pool(results, list(concepts.values()))
+    frozen_p = json.loads((mod.ROOT / "docs/benchmarks/embedding-baseline-local.json").read_text())[
+        "provenance"
+    ]
+    p = {
+        key: frozen_p[key]
+        for key in (
+            "library_source_sha256",
+            "corpus_sha256",
+            "corpus_policy",
+            "concept_count",
+            "ontology",
+            "model",
+            "model_files_sha256",
+            "pipeline",
+        )
+    }
+    p.update(
+        measurement="one pinned local retrieval per query; paired real ranking of fresh copies",
+        source_sha256=mod.source_hashes(),
+        control_artifact_sha256=mod.CONTROL_SHA256,
+        fixture_sha256=mod.baseline.stable_digest(fixture),
+        approval_payload_sha256=fixture["approval"]["payload_sha256"],
+        ranking_context={"domains": [], "heading_terms": [], "context_text": None},
+        pool_depth=5,
+    )
+    return dict(
+        schema_version=1,
+        fixture=fixture,
+        provenance=p,
+        configuration_sha256=mod.baseline.stable_digest(p),
+        results=results,
+        pool=pool,
+        pool_sha256=mod.baseline.stable_digest(pool),
+        controls_reproduced=True,
+    )
+
+
+def approve_test_sheet(mod, sheet):
+    sheet["approval"] = dict(
+        owner="Test owner",
+        date="2026-09-20",
+        decision="Test judgments",
+        decision_reference="Test-only controlled fixture, not a real owner decision",
+        payload_sha256=mod.baseline.stable_digest(mod.judgment_payload(sheet)),
+    )
+    return mod.baseline.stable_digest(sheet["approval"])
+
+
+def test_offline_scoring_integration_and_fixed_approved_strata(monkeypatch):
+    mod = runner()
+    collection = offline_collection(mod)
+    sheet = mod.prepare_judgments(collection)
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("Scoring must not load or retrieve")
+
+    monkeypatch.setattr(mod.baseline, "build_pipeline", forbidden)
+    monkeypatch.setattr(mod.baseline, "load_corpus", forbidden)
+    monkeypatch.setattr(mod, "retrieve_once", forbidden)
+    result = mod.run_score(collection, sheet)
+    assert result["coverage"] == dict(
+        pooled_pairs=23, relevant=0, irrelevant=0, uncertain=0, missing=23
+    )
+    assert {key: row["query_count"] for key, row in result["positive_groups"].items()} == {
+        "combined": 12,
+        "original": 6,
+        "new": 6,
+        "exact": 6,
+        "paraphrase": 4,
+        "geographic": 2,
+    }
+    assert result["positive_groups"]["original"]["baseline"]["target_hits_at_5"] == 2
+    assert result["positive_groups"]["original"]["selective"]["target_hits_at_5"] == 3
+    assert result["positive_groups"]["combined"]["baseline"]["p_at_5"] is None
+    assert result["negative_query_count"] == 4
+    for row in sheet["judgments"]:
+        row["judgment"] = "irrelevant"
+    receipt = approve_test_sheet(mod, sheet)
+    result = mod.run_score(collection, sheet, receipt)
+    assert result["positive_groups"]["combined"]["baseline"]["p_at_5"] == 0
+    assert result["coverage"]["missing"] == 0
+
+
+def test_collection_drift_rejected_before_scoring():
+    import copy
+
+    import pytest
+
+    mod = runner()
+    collection = offline_collection(mod)
+    mutations = [
+        lambda c: c["provenance"].update(source_sha256={}),
+        lambda c: c["provenance"].update(model={}),
+        lambda c: c["provenance"].update(corpus_sha256="changed"),
+        lambda c: c["provenance"]["pipeline"].update(score_floor=40),
+        lambda c: c["fixture"]["approval"].update(decision="copied"),
+        lambda c: c["results"].pop(),
+        lambda c: c["results"][-1].update(query="changed"),
+        lambda c: c["pool"].pop(),
+        lambda c: c["pool"].append(copy.deepcopy(c["pool"][0])),
+        lambda c: c.update(configuration_sha256="changed"),
+        lambda c: c.update(pool_sha256="changed"),
+        lambda c: c["results"][0]["baseline"]["candidates"][0].update(score=1),
+    ]
+    for mutate in mutations:
+        bad = copy.deepcopy(collection)
+        mutate(bad)
+        with pytest.raises(ValueError):
+            mod.run_score(bad, mod.prepare_judgments(bad))
+
+
+def test_receipt_binding_and_all_judgment_failure_modes():
+    import copy
+
+    import pytest
+
+    mod = runner()
+    collection = offline_collection(mod)
+    sheet = mod.prepare_judgments(collection)
+    sheet["judgments"][0]["judgment"] = "uncertain"
+    receipt = approve_test_sheet(mod, sheet)
+    assert mod.validate_judgments(collection, sheet, receipt)
+    for mutate in [
+        lambda s: s["judgments"][0].update(judgment="relevant"),
+        lambda s: s["judgments"][0].update(judgment="unknown"),
+        lambda s: s["judgments"][0].update(rationale=42),
+        lambda s: s["judgments"][0].update(iri="other"),
+        lambda s: s["judgments"][1].update(**s["judgments"][0]),
+        lambda s: s.update(collection_sha256="changed"),
+        lambda s: s.update(pool_sha256="changed"),
+        lambda s: s.update(rubric_sha256="changed"),
+        lambda s: s["approval"].update(decision_reference=""),
+        lambda s: s["approval"].update(decision="copied quote"),
+    ]:
+        bad = copy.deepcopy(sheet)
+        mutate(bad)
+        with pytest.raises(ValueError):
+            mod.validate_judgments(collection, bad, receipt)
+    with pytest.raises(ValueError, match="approval"):
+        mod.validate_judgments(collection, sheet)
+    # Same concept under distinct queries never shares its judgment.
+    cases = scoring_cases()
+    cases[1]["baseline"]["candidates"] = [{"iri": "r", "extraction_path": "semantic"}]
+    result = mod.summarize(cases, {("P", "r"): "relevant"}, ["P", "E"])
+    assert result["queries"][1]["baseline"]["missing"] == 1
+
+
+def test_score_cli_writes_frozen_offline_result(tmp_path, monkeypatch, capsys):
+    import json
+    import sys
+
+    mod = runner()
+    collection = offline_collection(mod)
+    sheet = mod.prepare_judgments(collection)
+    cpath, jpath, output = (
+        tmp_path / name for name in ("collection.json", "judgments.json", "score.json")
+    )
+    cpath.write_text(json.dumps(collection))
+    jpath.write_text(json.dumps(sheet))
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "embedding_precision",
+            "score",
+            "--collection",
+            str(cpath),
+            "--judgments",
+            str(jpath),
+            "--output",
+            str(output),
+        ],
+    )
+    mod.main()
+    scored = json.loads(output.read_text())
+    assert scored["collection_sha256"] == mod.baseline.stable_digest(collection)
+    assert scored["judgments_sha256"] == mod.baseline.stable_digest(sheet)
+    assert json.loads(capsys.readouterr().out)["missing"] == 23
+    assert json.loads(cpath.read_text()) == collection
+    assert json.loads(jpath.read_text()) == sheet
+
+
+def test_complete_macro_two_relevant_of_five_and_new_irrelevant_admission():
+    mod = runner()
+    cases = scoring_cases()
+    cases[0]["baseline"]["candidates"] = cases[0]["selective"]["candidates"][:]
+    labels = {
+        ("P", "r"): "relevant",
+        ("P", "r2"): "relevant",
+        ("P", "i"): "irrelevant",
+        ("N", "i"): "irrelevant",
+        ("N", "u"): "uncertain",
+    }
+    summary = mod.summarize(cases, labels, ["P", "E"])
+    assert summary["positive_groups"]["combined"]["baseline"]["p_at_5"] == 0.2
+    assert summary["queries"][0]["baseline"]["p_at_5"] == 0.4
+    # Remove the irrelevant result from the original arm to test admission attribution.
+    cases[0]["baseline"]["candidates"].pop(1)
+    summary = mod.summarize(cases, labels, ["P", "E"])
+    assert summary["queries"][0]["new_irrelevant_pairs"] == ["i"]
+    assert summary["queries"][0]["baseline"]["irrelevant"] == 0
+    assert summary["queries"][0]["selective"]["irrelevant"] == 1
+    assert summary["queries"][2]["baseline"]["uncertain"] == 1
+    assert summary["queries"][2]["baseline"]["missing"] == 0
+
+
+def test_new_case_rank_drift_rejected_even_with_rebound_sheet():
+    import pytest
+
+    mod = runner()
+    collection = offline_collection(mod)
+    collection["results"][8]["baseline"]["candidates"].append(
+        dict(iri="invented", extraction_path="semantic")
+    )
+    with pytest.raises(ValueError, match="ranked snapshot"):
+        mod.run_score(collection, mod.prepare_judgments(collection))
