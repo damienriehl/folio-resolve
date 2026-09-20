@@ -1,0 +1,4191 @@
+{
+  "schema_version": 1,
+  "provenance": {
+    "fixture_sha256": "70603b759e56ad252129fc5c4de95c6418f436e06598e773e0ab79c71a759c72",
+    "ontology": {
+      "revision": "e36f3f8e7e7ecc8e081b78ababc3daca149fcaf2",
+      "sha256": "44657b4ed844f5f9c9c48869184606b4fc671471a8263d79d241de87809fa239",
+      "url": "https://raw.githubusercontent.com/alea-institute/FOLIO/e36f3f8e7e7ecc8e081b78ababc3daca149fcaf2/FOLIO.owl"
+    },
+    "corpus_sha256": "a829784b946f3c7e87d55c4734d895a1ece589f78fb8618a2c05008c67c29c73",
+    "corpus_policy": "direct-named-folio-owl-classes-merged-by-iri; en-untagged-other-labels; iri-fallback; all-aliases; no-branch-inference; sorted-iri; label-definition-index-v1",
+    "concept_count": 18325,
+    "variant": "local",
+    "model": {
+      "repo_id": "sentence-transformers/all-MiniLM-L6-v2",
+      "revision": "1110a243fdf4706b3f48f1d95db1a4f5529b4d41",
+      "dimension": 384
+    },
+    "model_files_sha256": {
+      "1_Pooling/config.json": "4be450dde3b0273bb9787637cfbd28fe04a7ba6ab9d36ac48e92b11e350ffc23",
+      "config.json": "953f9c0d463486b10a6871cc2fd59f223b2c70184f49815e7efbcab5d8908b41",
+      "config_sentence_transformers.json": "061ca9d39661d6c6d6de5ba27f79a1cd5770ea247f8d46412a68a498dc5ac9f3",
+      "data_config.json": "32edcb108fc2516b920734a862ae0692bcae1c5d45d5f8d972cb0d53434a4c54",
+      "model.safetensors": "53aa51172d142c89d9012cce15ae4d6cc0ca6895895114379cacb4fab128d9db",
+      "modules.json": "84e40c8e006c9b1d6c122e02cba9b02458120b5fb0c87b746c41e0207cf642cf",
+      "sentence_bert_config.json": "fc1993fde0a95c24ec6c022539d41cf6e2f7c9721e5415d6fb6897472a9cd4b7",
+      "special_tokens_map.json": "303df45a03609e4ead04bc3dc1536d0ab19b5358db685b6f3da123d05ec200e3",
+      "tokenizer.json": "be50c3628f2bf5bb5e3a7f17b1f74611b2561a3a27eeab05e5aa30f411572037",
+      "tokenizer_config.json": "acb92769e8195aabd29b7b2137a9e6d6e25c476a4f15aa4355c233426c61576b",
+      "vocab.txt": "07eced375cec144d27c900241f3e339478dec958f92fddbc551f295c992038a3"
+    },
+    "library_source_sha256": "3f1682970e0cd62535777946e38c8776687ca355cb7ac81f70aa87fb615e1e44",
+    "diagnostic_source_sha256": "03161a2b1ef3323ed3fcabdbd228d30496b881d4109ace7719df7537f9c59f14",
+    "benchmark_source_sha256": "0af9b56a8f4512e1ea3acd06f01a845397873471e7f47133410f1378a88ca0d0",
+    "baseline_sha256": "da5834e0cae37872119aa27e5e8b0326a47c5730644c11677013116b784f145a",
+    "pipeline": {
+      "score_floor": 45.0,
+      "label_search_limit": 10,
+      "semantic_top_k": 5,
+      "entity_ruler": null,
+      "recall_engine": null,
+      "judge": false,
+      "context": null
+    },
+    "git_revision": "faa87a4866eb8c1eb1b75577d44124edc8ad51c6"
+  },
+  "configuration_sha256": "2d59bfd49ef9c01c49c1dad38e937bf7d98227ec60641235fac5fec6b451127d",
+  "machine": {
+    "platform": "Linux-7.0.0-31-generic-x86_64-with-glibc2.43",
+    "python": "3.12.12",
+    "cpu_count": 16,
+    "threads": {
+      "OMP_NUM_THREADS": "1",
+      "MKL_NUM_THREADS": "1"
+    }
+  },
+  "packages": {
+    "Jinja2": "3.1.6",
+    "MarkupSafe": "3.0.3",
+    "PyYAML": "6.0.3",
+    "Pygments": "2.21.0",
+    "annotated-types": "0.8.0",
+    "certifi": "2026.7.22",
+    "charset-normalizer": "3.5.1",
+    "cloudpickle": "3.1.2",
+    "faiss-cpu": "1.14.3",
+    "filelock": "3.32.3",
+    "folio-resolve": "0.4.0",
+    "fsspec": "2026.7.0",
+    "hf-xet": "1.6.0",
+    "huggingface_hub": "0.36.2",
+    "idna": "3.20",
+    "iniconfig": "2.3.0",
+    "joblib": "1.6.0",
+    "mpmath": "1.3.0",
+    "narwhals": "2.26.0",
+    "networkx": "3.6.1",
+    "numpy": "2.5.3",
+    "packaging": "26.3",
+    "pillow": "12.3.0",
+    "pluggy": "1.6.0",
+    "pydantic": "2.13.5",
+    "pydantic_core": "2.46.5",
+    "pytest": "9.1.1",
+    "pytest-asyncio": "1.4.0",
+    "regex": "2026.9.10",
+    "requests": "2.34.2",
+    "safetensors": "0.8.0",
+    "scikit-learn": "1.9.1",
+    "scipy": "1.18.1",
+    "sentence-transformers": "3.4.1",
+    "setuptools": "78.1.0",
+    "sympy": "1.14.0",
+    "threadpoolctl": "3.7.0",
+    "tokenizers": "0.22.2",
+    "torch": "2.13.0+cpu",
+    "tqdm": "4.70.1",
+    "transformers": "4.57.6",
+    "typing-inspection": "0.4.4",
+    "typing_extensions": "4.16.0",
+    "urllib3": "2.8.0"
+  },
+  "runtime": {
+    "pipeline_build_seconds": 227.19527570100036,
+    "warm_repeats_per_query": 3,
+    "timing_policy": "one uninstrumented warmup per query; timed actual matches; lexical includes all label/decomposition searches; semantic includes encoding and exhaustive search; embedding is nested within semantic; other is total minus lexical minus semantic; patch setup and serialization excluded; trace/full-neighbor queries after all timing; pooled linear percentiles",
+    "components": {
+      "lexical_seconds": {
+        "p50": 1.2461114109610207,
+        "p95": 1.9325563822931142,
+        "sum": 30.70840148103889
+      },
+      "semantic_seconds": {
+        "p50": 0.5053652540082112,
+        "p95": 0.6569545393227599,
+        "sum": 12.972972909337841
+      },
+      "embedding_seconds": {
+        "p50": 0.007774715020786971,
+        "p95": 0.010752995283110066,
+        "sum": 0.19929532730020583
+      },
+      "total_seconds": {
+        "p50": 1.7266884070704691,
+        "p95": 2.598133391275769,
+        "sum": 43.68617705616634
+      },
+      "other_seconds": {
+        "p50": 0.0001826841034926474,
+        "p95": 0.00030712409061379716,
+        "sum": 0.004802665789611638
+      },
+      "semantic_without_embedding_seconds": {
+        "p50": 0.49771354300901294,
+        "p95": 0.6466896259633358,
+        "sum": 12.773677582037635
+      }
+    }
+  },
+  "results": [
+    {
+      "id": "E1",
+      "kind": "exact",
+      "query": "Summary Judgment",
+      "acceptable_iris": [
+        "https://folio.openlegalstandard.org/R8K6VFq9c39kbQouame6Onf"
+      ],
+      "expected_labels": {
+        "https://folio.openlegalstandard.org/R8K6VFq9c39kbQouame6Onf": "Summary Judgment"
+      },
+      "timing_samples": [
+        {
+          "lexical_seconds": 0.8606066229986027,
+          "semantic_seconds": 0.5059924130328,
+          "embedding_seconds": 0.00760756793897599,
+          "lexical_calls": 1,
+          "semantic_calls": 1,
+          "embedding_calls": 1,
+          "total_seconds": 1.3668274600058794,
+          "other_seconds": 0.00022842397447675467,
+          "semantic_without_embedding_seconds": 0.49838484509382397
+        },
+        {
+          "lexical_seconds": 0.8571535620139912,
+          "semantic_seconds": 0.49619727802928537,
+          "embedding_seconds": 0.008076693047769368,
+          "lexical_calls": 1,
+          "semantic_calls": 1,
+          "embedding_calls": 1,
+          "total_seconds": 1.3535403030691668,
+          "other_seconds": 0.00018946302589029074,
+          "semantic_without_embedding_seconds": 0.488120584981516
+        },
+        {
+          "lexical_seconds": 0.8681537510128692,
+          "semantic_seconds": 0.4970025570364669,
+          "embedding_seconds": 0.007647295016795397,
+          "lexical_calls": 1,
+          "semantic_calls": 1,
+          "embedding_calls": 1,
+          "total_seconds": 1.3653429400874302,
+          "other_seconds": 0.00018663203809410334,
+          "semantic_without_embedding_seconds": 0.4893552620196715
+        }
+      ],
+      "candidates": [
+        {
+          "iri": "https://folio.openlegalstandard.org/R8K6VFq9c39kbQouame6Onf",
+          "label": "Summary Judgment",
+          "score": 99.0,
+          "branch": "",
+          "extraction_path": "label_search",
+          "surface_term": "Summary Judgment",
+          "gated": false,
+          "gate_reason": "not-a-place; not-short",
+          "rank_tiebreak_score": 0.0
+        },
+        {
+          "iri": "https://folio.openlegalstandard.org/RGcqiLEe0IK8lPRt5mFC0D",
+          "label": "Motion for Summary Judgment",
+          "score": 86.0,
+          "branch": "",
+          "extraction_path": "label_search",
+          "surface_term": "Summary Judgment",
+          "gated": false,
+          "gate_reason": "not-a-place; not-short",
+          "rank_tiebreak_score": 0.0
+        },
+        {
+          "iri": "https://folio.openlegalstandard.org/R9RRyCC6w6V3oGeHdAUkdAo",
+          "label": "Summary Judgment in Lieu of Complaint",
+          "score": 79.4,
+          "branch": "",
+          "extraction_path": "label_search",
+          "surface_term": "Summary Judgment",
+          "gated": false,
+          "gate_reason": "not-a-place; not-short",
+          "rank_tiebreak_score": 0.0
+        },
+        {
+          "iri": "https://folio.openlegalstandard.org/R2iMgtqApgam5KhZ1XpJ0s",
+          "label": "Abstract of Judgment",
+          "score": 70.8,
+          "branch": "",
+          "extraction_path": "semantic",
+          "surface_term": "Summary Judgment",
+          "gated": false,
+          "gate_reason": "not-a-place; not-short",
+          "rank_tiebreak_score": 0.0
+        },
+        {
+          "iri": "https://folio.openlegalstandard.org/RODsAVADydNHhEWk3l57k1",
+          "label": "JJ10 Applications relating to originating process or Statement of Case or for default or summary Judgment (UK J-CODE)",
+          "score": 61.3,
+          "branch": "",
+          "extraction_path": "label_search",
+          "surface_term": "Summary Judgment",
+          "gated": false,
+          "gate_reason": "not-a-place; not-short",
+          "rank_tiebreak_score": 0.0
+        },
+        {
+          "iri": "https://folio.openlegalstandard.org/RUM0A3dwvk0A2dp3WHxNrj",
+          "label": "Dispositive Motions",
+          "score": 60.0,
+          "branch": "",
+          "extraction_path": "label_search",
+          "surface_term": "Summary Judgment",
+          "gated": false,
+          "gate_reason": "not-a-place; not-short",
+          "rank_tiebreak_score": 0.0
+        },
+        {
+          "iri": "https://folio.openlegalstandard.org/R7mLi0c5rJV5GYGGuEi5dmD",
+          "label": "Judgment Lien",
+          "score": 47.3,
+          "branch": "",
+          "extraction_path": "label_search",
+          "surface_term": "Summary Judgment",
+          "gated": false,
+          "gate_reason": "not-a-place; not-short",
+          "rank_tiebreak_score": 0.0
+        },
+        {
+          "iri": "https://folio.openlegalstandard.org/R81opfsWnlEQvW2jFPWFOxo",
+          "label": "Judgment of Arbitration",
+          "score": 47.3,
+          "branch": "",
+          "extraction_path": "label_search",
+          "surface_term": "Summary Judgment",
+          "gated": false,
+          "gate_reason": "not-a-place; not-short",
+          "rank_tiebreak_score": 0.0
+        },
+        {
+          "iri": "https://folio.openlegalstandard.org/R82iOqJMuYOjOGxNmuj1pDp",
+          "label": "Administrative Judgment",
+          "score": 47.3,
+          "branch": "",
+          "extraction_path": "label_search",
+          "surface_term": "Summary Judgment",
+          "gated": false,
+          "gate_reason": "not-a-place; not-short",
+          "rank_tiebreak_score": 0.0
+        }
+      ],
+      "retrievals": [
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/R8K6VFq9c39kbQouame6Onf",
+            "label": "Summary Judgment",
+            "score": 99.0,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "Summary Judgment",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/R8K6VFq9c39kbQouame6Onf",
+            "label": "Summary Judgment",
+            "score": 99.0,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "Summary Judgment",
+            "gated": false,
+            "gate_reason": "not-a-place; not-short",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "survived"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/R9jpIjzc10qdgl78jXOZtfm",
+            "label": "Judgment",
+            "score": 91.3,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "Summary Judgment",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/R9jpIjzc10qdgl78jXOZtfm",
+            "label": "Judgment",
+            "score": 40.0,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "Summary Judgment",
+            "gated": true,
+            "gate_reason": "not-a-place; short-label demoted (fuzzy match below near-exact)",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "demoted_below_floor"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/RGcqiLEe0IK8lPRt5mFC0D",
+            "label": "Motion for Summary Judgment",
+            "score": 86.0,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "Summary Judgment",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/RGcqiLEe0IK8lPRt5mFC0D",
+            "label": "Motion for Summary Judgment",
+            "score": 86.0,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "Summary Judgment",
+            "gated": false,
+            "gate_reason": "not-a-place; not-short",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "survived"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/R9RRyCC6w6V3oGeHdAUkdAo",
+            "label": "Summary Judgment in Lieu of Complaint",
+            "score": 79.4,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "Summary Judgment",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/R9RRyCC6w6V3oGeHdAUkdAo",
+            "label": "Summary Judgment in Lieu of Complaint",
+            "score": 79.4,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "Summary Judgment",
+            "gated": false,
+            "gate_reason": "not-a-place; not-short",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "survived"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/RODsAVADydNHhEWk3l57k1",
+            "label": "JJ10 Applications relating to originating process or Statement of Case or for default or summary Judgment (UK J-CODE)",
+            "score": 61.3,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "Summary Judgment",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/RODsAVADydNHhEWk3l57k1",
+            "label": "JJ10 Applications relating to originating process or Statement of Case or for default or summary Judgment (UK J-CODE)",
+            "score": 61.3,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "Summary Judgment",
+            "gated": false,
+            "gate_reason": "not-a-place; not-short",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "survived"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/RUM0A3dwvk0A2dp3WHxNrj",
+            "label": "Dispositive Motions",
+            "score": 60.0,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "Summary Judgment",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/RUM0A3dwvk0A2dp3WHxNrj",
+            "label": "Dispositive Motions",
+            "score": 60.0,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "Summary Judgment",
+            "gated": false,
+            "gate_reason": "not-a-place; not-short",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "survived"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/R2iMgtqApgam5KhZ1XpJ0s",
+            "label": "Abstract of Judgment",
+            "score": 50.6,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "Summary Judgment",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/R2iMgtqApgam5KhZ1XpJ0s",
+            "label": "Abstract of Judgment",
+            "score": 50.6,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "Summary Judgment",
+            "gated": false,
+            "gate_reason": "not-a-place; not-short",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "deduplicated"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/R7mLi0c5rJV5GYGGuEi5dmD",
+            "label": "Judgment Lien",
+            "score": 47.3,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "Summary Judgment",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/R7mLi0c5rJV5GYGGuEi5dmD",
+            "label": "Judgment Lien",
+            "score": 47.3,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "Summary Judgment",
+            "gated": false,
+            "gate_reason": "not-a-place; not-short",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "survived"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/R81opfsWnlEQvW2jFPWFOxo",
+            "label": "Judgment of Arbitration",
+            "score": 47.3,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "Summary Judgment",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/R81opfsWnlEQvW2jFPWFOxo",
+            "label": "Judgment of Arbitration",
+            "score": 47.3,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "Summary Judgment",
+            "gated": false,
+            "gate_reason": "not-a-place; not-short",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "survived"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/R82iOqJMuYOjOGxNmuj1pDp",
+            "label": "Administrative Judgment",
+            "score": 47.3,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "Summary Judgment",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/R82iOqJMuYOjOGxNmuj1pDp",
+            "label": "Administrative Judgment",
+            "score": 47.3,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "Summary Judgment",
+            "gated": false,
+            "gate_reason": "not-a-place; not-short",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "survived"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/R8K6VFq9c39kbQouame6Onf",
+            "label": "Summary Judgment",
+            "score": 83.0,
+            "branch": "",
+            "extraction_path": "semantic",
+            "surface_term": "Summary Judgment",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/R8K6VFq9c39kbQouame6Onf",
+            "label": "Summary Judgment",
+            "score": 83.0,
+            "branch": "",
+            "extraction_path": "semantic",
+            "surface_term": "Summary Judgment",
+            "gated": false,
+            "gate_reason": "not-a-place; not-short",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "deduplicated"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/R9RRyCC6w6V3oGeHdAUkdAo",
+            "label": "Summary Judgment in Lieu of Complaint",
+            "score": 79.4,
+            "branch": "",
+            "extraction_path": "semantic",
+            "surface_term": "Summary Judgment",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/R9RRyCC6w6V3oGeHdAUkdAo",
+            "label": "Summary Judgment in Lieu of Complaint",
+            "score": 79.4,
+            "branch": "",
+            "extraction_path": "semantic",
+            "surface_term": "Summary Judgment",
+            "gated": false,
+            "gate_reason": "not-a-place; not-short",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "deduplicated"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/R2iMgtqApgam5KhZ1XpJ0s",
+            "label": "Abstract of Judgment",
+            "score": 70.8,
+            "branch": "",
+            "extraction_path": "semantic",
+            "surface_term": "Summary Judgment",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/R2iMgtqApgam5KhZ1XpJ0s",
+            "label": "Abstract of Judgment",
+            "score": 70.8,
+            "branch": "",
+            "extraction_path": "semantic",
+            "surface_term": "Summary Judgment",
+            "gated": false,
+            "gate_reason": "not-a-place; not-short",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "survived"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/RGcqiLEe0IK8lPRt5mFC0D",
+            "label": "Motion for Summary Judgment",
+            "score": 67.7,
+            "branch": "",
+            "extraction_path": "semantic",
+            "surface_term": "Summary Judgment",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/RGcqiLEe0IK8lPRt5mFC0D",
+            "label": "Motion for Summary Judgment",
+            "score": 67.7,
+            "branch": "",
+            "extraction_path": "semantic",
+            "surface_term": "Summary Judgment",
+            "gated": false,
+            "gate_reason": "not-a-place; not-short",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "deduplicated"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/R9jpIjzc10qdgl78jXOZtfm",
+            "label": "Judgment",
+            "score": 65.3,
+            "branch": "",
+            "extraction_path": "semantic",
+            "surface_term": "Summary Judgment",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/R9jpIjzc10qdgl78jXOZtfm",
+            "label": "Judgment",
+            "score": 40.0,
+            "branch": "",
+            "extraction_path": "semantic",
+            "surface_term": "Summary Judgment",
+            "gated": true,
+            "gate_reason": "not-a-place; short-label demoted (fuzzy match below near-exact)",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "demoted_below_floor"
+        }
+      ],
+      "targets": [
+        {
+          "iri": "https://folio.openlegalstandard.org/R8K6VFq9c39kbQouame6Onf",
+          "semantic_rank": 1,
+          "semantic_cosine": 0.8297504289490492,
+          "final_rank": 1,
+          "outcome": "survived",
+          "retrievals": [
+            {
+              "before": {
+                "iri": "https://folio.openlegalstandard.org/R8K6VFq9c39kbQouame6Onf",
+                "label": "Summary Judgment",
+                "score": 99.0,
+                "branch": "",
+                "extraction_path": "label_search",
+                "surface_term": "Summary Judgment",
+                "gated": false,
+                "gate_reason": "",
+                "rank_tiebreak_score": 0.0
+              },
+              "after": {
+                "iri": "https://folio.openlegalstandard.org/R8K6VFq9c39kbQouame6Onf",
+                "label": "Summary Judgment",
+                "score": 99.0,
+                "branch": "",
+                "extraction_path": "label_search",
+                "surface_term": "Summary Judgment",
+                "gated": false,
+                "gate_reason": "not-a-place; not-short",
+                "rank_tiebreak_score": 0.0
+              },
+              "outcome": "survived"
+            },
+            {
+              "before": {
+                "iri": "https://folio.openlegalstandard.org/R8K6VFq9c39kbQouame6Onf",
+                "label": "Summary Judgment",
+                "score": 83.0,
+                "branch": "",
+                "extraction_path": "semantic",
+                "surface_term": "Summary Judgment",
+                "gated": false,
+                "gate_reason": "",
+                "rank_tiebreak_score": 0.0
+              },
+              "after": {
+                "iri": "https://folio.openlegalstandard.org/R8K6VFq9c39kbQouame6Onf",
+                "label": "Summary Judgment",
+                "score": 83.0,
+                "branch": "",
+                "extraction_path": "semantic",
+                "surface_term": "Summary Judgment",
+                "gated": false,
+                "gate_reason": "not-a-place; not-short",
+                "rank_tiebreak_score": 0.0
+              },
+              "outcome": "deduplicated"
+            }
+          ]
+        }
+      ],
+      "semantic_top_five": [
+        {
+          "iri": "https://folio.openlegalstandard.org/R8K6VFq9c39kbQouame6Onf",
+          "label": "Summary Judgment",
+          "cosine": 0.8297504289490492
+        },
+        {
+          "iri": "https://folio.openlegalstandard.org/R9RRyCC6w6V3oGeHdAUkdAo",
+          "label": "Summary Judgment in Lieu of Complaint",
+          "cosine": 0.7942445561836424
+        },
+        {
+          "iri": "https://folio.openlegalstandard.org/R2iMgtqApgam5KhZ1XpJ0s",
+          "label": "Abstract of Judgment",
+          "cosine": 0.708485631588952
+        },
+        {
+          "iri": "https://folio.openlegalstandard.org/RGcqiLEe0IK8lPRt5mFC0D",
+          "label": "Motion for Summary Judgment",
+          "cosine": 0.676917726254751
+        },
+        {
+          "iri": "https://folio.openlegalstandard.org/R9jpIjzc10qdgl78jXOZtfm",
+          "label": "Judgment",
+          "cosine": 0.6528390248392462
+        }
+      ]
+    },
+    {
+      "id": "E2",
+      "kind": "exact",
+      "query": "Auction",
+      "acceptable_iris": [
+        "https://folio.openlegalstandard.org/R8kOvHwkY6TrQmB7RnYiWNO"
+      ],
+      "expected_labels": {
+        "https://folio.openlegalstandard.org/R8kOvHwkY6TrQmB7RnYiWNO": "Auction"
+      },
+      "timing_samples": [
+        {
+          "lexical_seconds": 0.6095399400219321,
+          "semantic_seconds": 0.4953086070017889,
+          "embedding_seconds": 0.007239013910293579,
+          "lexical_calls": 1,
+          "semantic_calls": 1,
+          "embedding_calls": 1,
+          "total_seconds": 1.1050284840166569,
+          "other_seconds": 0.00017993699293583632,
+          "semantic_without_embedding_seconds": 0.48806959309149534
+        },
+        {
+          "lexical_seconds": 0.5822730569634587,
+          "semantic_seconds": 0.5690806270577013,
+          "embedding_seconds": 0.007603429025039077,
+          "lexical_calls": 1,
+          "semantic_calls": 1,
+          "embedding_calls": 1,
+          "total_seconds": 1.1515878440113738,
+          "other_seconds": 0.0002341599902138114,
+          "semantic_without_embedding_seconds": 0.5614771980326623
+        },
+        {
+          "lexical_seconds": 0.6622158050304279,
+          "semantic_seconds": 0.6296686769928783,
+          "embedding_seconds": 0.007990746991708875,
+          "lexical_calls": 1,
+          "semantic_calls": 1,
+          "embedding_calls": 1,
+          "total_seconds": 1.2922257249010727,
+          "other_seconds": 0.00034124287776649,
+          "semantic_without_embedding_seconds": 0.6216779300011694
+        }
+      ],
+      "candidates": [
+        {
+          "iri": "https://folio.openlegalstandard.org/R8kOvHwkY6TrQmB7RnYiWNO",
+          "label": "Auction",
+          "score": 99.0,
+          "branch": "",
+          "extraction_path": "label_search",
+          "surface_term": "Auction",
+          "gated": false,
+          "gate_reason": "not-a-place; near-exact-short-label",
+          "rank_tiebreak_score": 0.0
+        },
+        {
+          "iri": "https://folio.openlegalstandard.org/RDLIpK2R8t5eS7LDT636F0h",
+          "label": "Auctioneer",
+          "score": 99.0,
+          "branch": "",
+          "extraction_path": "label_search",
+          "surface_term": "Auction",
+          "gated": false,
+          "gate_reason": "not-a-place; near-exact-short-label",
+          "rank_tiebreak_score": 0.0
+        },
+        {
+          "iri": "https://folio.openlegalstandard.org/RCxcU4AQo2mykjqSdB8EGpW",
+          "label": "Auction Rate Dividend Payment",
+          "score": 69.4,
+          "branch": "",
+          "extraction_path": "label_search",
+          "surface_term": "Auction",
+          "gated": false,
+          "gate_reason": "not-a-place; not-short",
+          "rank_tiebreak_score": 0.0
+        },
+        {
+          "iri": "https://folio.openlegalstandard.org/R73DJPQnmrqO90OL7OBDZJU",
+          "label": "Antitrust - Bid-Rigging Claims",
+          "score": 49.1,
+          "branch": "",
+          "extraction_path": "semantic",
+          "surface_term": "Auction",
+          "gated": false,
+          "gate_reason": "not-a-place; not-short",
+          "rank_tiebreak_score": 0.0
+        }
+      ],
+      "retrievals": [
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/R8kOvHwkY6TrQmB7RnYiWNO",
+            "label": "Auction",
+            "score": 99.0,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "Auction",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/R8kOvHwkY6TrQmB7RnYiWNO",
+            "label": "Auction",
+            "score": 99.0,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "Auction",
+            "gated": false,
+            "gate_reason": "not-a-place; near-exact-short-label",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "survived"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/RDLIpK2R8t5eS7LDT636F0h",
+            "label": "Auctioneer",
+            "score": 99.0,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "Auction",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/RDLIpK2R8t5eS7LDT636F0h",
+            "label": "Auctioneer",
+            "score": 99.0,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "Auction",
+            "gated": false,
+            "gate_reason": "not-a-place; near-exact-short-label",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "survived"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/RCxcU4AQo2mykjqSdB8EGpW",
+            "label": "Auction Rate Dividend Payment",
+            "score": 69.4,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "Auction",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/RCxcU4AQo2mykjqSdB8EGpW",
+            "label": "Auction Rate Dividend Payment",
+            "score": 69.4,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "Auction",
+            "gated": false,
+            "gate_reason": "not-a-place; not-short",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "survived"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/5HHCTmtWQ06vJt6P2iXuKQ",
+            "label": "Web Search Portals and All Other Information Services",
+            "score": 36.0,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "Auction",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/5HHCTmtWQ06vJt6P2iXuKQ",
+            "label": "Web Search Portals and All Other Information Services",
+            "score": 36.0,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "Auction",
+            "gated": false,
+            "gate_reason": "not-a-place; not-short",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "below_floor"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/HheksdddS7SRRekHFUoX3w",
+            "label": "Used Merchandise Retailers",
+            "score": 36.0,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "Auction",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/HheksdddS7SRRekHFUoX3w",
+            "label": "Used Merchandise Retailers",
+            "score": 36.0,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "Auction",
+            "gated": false,
+            "gate_reason": "not-a-place; not-short",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "below_floor"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/R8JAi8C4J0QARz3c14SHh3I",
+            "label": "Commercial Property Foreclosure",
+            "score": 36.0,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "Auction",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/R8JAi8C4J0QARz3c14SHh3I",
+            "label": "Commercial Property Foreclosure",
+            "score": 36.0,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "Auction",
+            "gated": false,
+            "gate_reason": "not-a-place; not-short",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "below_floor"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/RBI5p2rdv7JzHTtGyObrIcl",
+            "label": "Bankruptcy and Restructuring Events",
+            "score": 36.0,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "Auction",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/RBI5p2rdv7JzHTtGyObrIcl",
+            "label": "Bankruptcy and Restructuring Events",
+            "score": 36.0,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "Auction",
+            "gated": false,
+            "gate_reason": "not-a-place; not-short",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "below_floor"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/RC3e5wjlKsjPKT8crKFSdIf",
+            "label": "Tax Foreclosure",
+            "score": 36.0,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "Auction",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/RC3e5wjlKsjPKT8crKFSdIf",
+            "label": "Tax Foreclosure",
+            "score": 36.0,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "Auction",
+            "gated": false,
+            "gate_reason": "not-a-place; not-short",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "below_floor"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/dtjZlnhKQaelJ4f-ZwVgeg",
+            "label": "General Merchandise Retailers Industry",
+            "score": 36.0,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "Auction",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/dtjZlnhKQaelJ4f-ZwVgeg",
+            "label": "General Merchandise Retailers Industry",
+            "score": 36.0,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "Auction",
+            "gated": false,
+            "gate_reason": "not-a-place; not-short",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "below_floor"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/vC_ktnWvR4ST75CIMUAoEA",
+            "label": "Warehouse Clubs, Supercenters, and Other General Merchandise Retailers",
+            "score": 36.0,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "Auction",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/vC_ktnWvR4ST75CIMUAoEA",
+            "label": "Warehouse Clubs, Supercenters, and Other General Merchandise Retailers",
+            "score": 36.0,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "Auction",
+            "gated": false,
+            "gate_reason": "not-a-place; not-short",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "below_floor"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/R8kOvHwkY6TrQmB7RnYiWNO",
+            "label": "Auction",
+            "score": 76.4,
+            "branch": "",
+            "extraction_path": "semantic",
+            "surface_term": "Auction",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/R8kOvHwkY6TrQmB7RnYiWNO",
+            "label": "Auction",
+            "score": 76.4,
+            "branch": "",
+            "extraction_path": "semantic",
+            "surface_term": "Auction",
+            "gated": false,
+            "gate_reason": "not-a-place; near-exact-short-label",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "deduplicated"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/RDLIpK2R8t5eS7LDT636F0h",
+            "label": "Auctioneer",
+            "score": 70.9,
+            "branch": "",
+            "extraction_path": "semantic",
+            "surface_term": "Auction",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/RDLIpK2R8t5eS7LDT636F0h",
+            "label": "Auctioneer",
+            "score": 40.0,
+            "branch": "",
+            "extraction_path": "semantic",
+            "surface_term": "Auction",
+            "gated": true,
+            "gate_reason": "not-a-place; short-label demoted (fuzzy match below near-exact)",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "demoted_below_floor"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/RiQHdRDZfaAIOlPy9vfwB8",
+            "label": "Bid",
+            "score": 54.7,
+            "branch": "",
+            "extraction_path": "semantic",
+            "surface_term": "Auction",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/RiQHdRDZfaAIOlPy9vfwB8",
+            "label": "Bid",
+            "score": 40.0,
+            "branch": "",
+            "extraction_path": "semantic",
+            "surface_term": "Auction",
+            "gated": true,
+            "gate_reason": "not-a-place; short-label demoted (fuzzy match below near-exact)",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "demoted_below_floor"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/R73DJPQnmrqO90OL7OBDZJU",
+            "label": "Antitrust - Bid-Rigging Claims",
+            "score": 49.1,
+            "branch": "",
+            "extraction_path": "semantic",
+            "surface_term": "Auction",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/R73DJPQnmrqO90OL7OBDZJU",
+            "label": "Antitrust - Bid-Rigging Claims",
+            "score": 49.1,
+            "branch": "",
+            "extraction_path": "semantic",
+            "surface_term": "Auction",
+            "gated": false,
+            "gate_reason": "not-a-place; not-short",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "survived"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/R7kkf8NvitG8hubZUnTwevG",
+            "label": "Seller",
+            "score": 47.8,
+            "branch": "",
+            "extraction_path": "semantic",
+            "surface_term": "Auction",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/R7kkf8NvitG8hubZUnTwevG",
+            "label": "Seller",
+            "score": 40.0,
+            "branch": "",
+            "extraction_path": "semantic",
+            "surface_term": "Auction",
+            "gated": true,
+            "gate_reason": "not-a-place; short-label demoted (fuzzy match below near-exact)",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "demoted_below_floor"
+        }
+      ],
+      "targets": [
+        {
+          "iri": "https://folio.openlegalstandard.org/R8kOvHwkY6TrQmB7RnYiWNO",
+          "semantic_rank": 1,
+          "semantic_cosine": 0.7635090974266372,
+          "final_rank": 1,
+          "outcome": "survived",
+          "retrievals": [
+            {
+              "before": {
+                "iri": "https://folio.openlegalstandard.org/R8kOvHwkY6TrQmB7RnYiWNO",
+                "label": "Auction",
+                "score": 99.0,
+                "branch": "",
+                "extraction_path": "label_search",
+                "surface_term": "Auction",
+                "gated": false,
+                "gate_reason": "",
+                "rank_tiebreak_score": 0.0
+              },
+              "after": {
+                "iri": "https://folio.openlegalstandard.org/R8kOvHwkY6TrQmB7RnYiWNO",
+                "label": "Auction",
+                "score": 99.0,
+                "branch": "",
+                "extraction_path": "label_search",
+                "surface_term": "Auction",
+                "gated": false,
+                "gate_reason": "not-a-place; near-exact-short-label",
+                "rank_tiebreak_score": 0.0
+              },
+              "outcome": "survived"
+            },
+            {
+              "before": {
+                "iri": "https://folio.openlegalstandard.org/R8kOvHwkY6TrQmB7RnYiWNO",
+                "label": "Auction",
+                "score": 76.4,
+                "branch": "",
+                "extraction_path": "semantic",
+                "surface_term": "Auction",
+                "gated": false,
+                "gate_reason": "",
+                "rank_tiebreak_score": 0.0
+              },
+              "after": {
+                "iri": "https://folio.openlegalstandard.org/R8kOvHwkY6TrQmB7RnYiWNO",
+                "label": "Auction",
+                "score": 76.4,
+                "branch": "",
+                "extraction_path": "semantic",
+                "surface_term": "Auction",
+                "gated": false,
+                "gate_reason": "not-a-place; near-exact-short-label",
+                "rank_tiebreak_score": 0.0
+              },
+              "outcome": "deduplicated"
+            }
+          ]
+        }
+      ],
+      "semantic_top_five": [
+        {
+          "iri": "https://folio.openlegalstandard.org/R8kOvHwkY6TrQmB7RnYiWNO",
+          "label": "Auction",
+          "cosine": 0.7635090974266372
+        },
+        {
+          "iri": "https://folio.openlegalstandard.org/RDLIpK2R8t5eS7LDT636F0h",
+          "label": "Auctioneer",
+          "cosine": 0.7087890538685775
+        },
+        {
+          "iri": "https://folio.openlegalstandard.org/RiQHdRDZfaAIOlPy9vfwB8",
+          "label": "Bid",
+          "cosine": 0.5474944313725192
+        },
+        {
+          "iri": "https://folio.openlegalstandard.org/R73DJPQnmrqO90OL7OBDZJU",
+          "label": "Antitrust - Bid-Rigging Claims",
+          "cosine": 0.49124752020475615
+        },
+        {
+          "iri": "https://folio.openlegalstandard.org/R7kkf8NvitG8hubZUnTwevG",
+          "label": "Seller",
+          "cosine": 0.4784963080990115
+        }
+      ]
+    },
+    {
+      "id": "P1",
+      "kind": "paraphrase",
+      "query": "careless conduct injures someone",
+      "acceptable_iris": [
+        "https://folio.openlegalstandard.org/R7nqxxlAfhYqqSA2UQ5UxpX"
+      ],
+      "expected_labels": {
+        "https://folio.openlegalstandard.org/R7nqxxlAfhYqqSA2UQ5UxpX": "Negligence"
+      },
+      "timing_samples": [
+        {
+          "lexical_seconds": 1.8685391269391403,
+          "semantic_seconds": 0.6579363329801708,
+          "embedding_seconds": 0.01036022906191647,
+          "lexical_calls": 1,
+          "semantic_calls": 1,
+          "embedding_calls": 1,
+          "total_seconds": 2.5267954600276425,
+          "other_seconds": 0.0003200001083314419,
+          "semantic_without_embedding_seconds": 0.6475761039182544
+        },
+        {
+          "lexical_seconds": 1.959104801993817,
+          "semantic_seconds": 0.6513910419307649,
+          "embedding_seconds": 0.009724791045300663,
+          "lexical_calls": 1,
+          "semantic_calls": 1,
+          "embedding_calls": 1,
+          "total_seconds": 2.610722437966615,
+          "other_seconds": 0.00022659404203295708,
+          "semantic_without_embedding_seconds": 0.6416662508854643
+        },
+        {
+          "lexical_seconds": 1.9438535450026393,
+          "semantic_seconds": 0.6718397110234946,
+          "embedding_seconds": 0.008747661020606756,
+          "lexical_calls": 1,
+          "semantic_calls": 1,
+          "embedding_calls": 1,
+          "total_seconds": 2.615901361918077,
+          "other_seconds": 0.0002081058919429779,
+          "semantic_without_embedding_seconds": 0.6630920500028878
+        }
+      ],
+      "candidates": [
+        {
+          "iri": "https://folio.openlegalstandard.org/RCuhDmyUHjn92exJ8dx1zO1",
+          "label": "Willful Misconduct",
+          "score": 65.7,
+          "branch": "",
+          "extraction_path": "semantic",
+          "surface_term": "careless conduct injures someone",
+          "gated": false,
+          "gate_reason": "not-a-place; not-short",
+          "rank_tiebreak_score": 0.0
+        },
+        {
+          "iri": "https://folio.openlegalstandard.org/R84N0KXivn5IJaQn8xVwPDg",
+          "label": "Intentional Infliction of Emotional Distress",
+          "score": 63.2,
+          "branch": "",
+          "extraction_path": "semantic",
+          "surface_term": "careless conduct injures someone",
+          "gated": false,
+          "gate_reason": "not-a-place; not-short",
+          "rank_tiebreak_score": 0.0
+        },
+        {
+          "iri": "https://folio.openlegalstandard.org/RDuyHZDRBvSF1vlAJM9Jpix",
+          "label": "Negligent Infliction of Emotional Distress on a Bystander",
+          "score": 56.9,
+          "branch": "",
+          "extraction_path": "semantic",
+          "surface_term": "careless conduct injures someone",
+          "gated": false,
+          "gate_reason": "not-a-place; not-short",
+          "rank_tiebreak_score": 0.0
+        },
+        {
+          "iri": "https://folio.openlegalstandard.org/RDwISw0syjjwmS6UpyiShve",
+          "label": "Reckless Involuntary Manslaughter",
+          "score": 56.1,
+          "branch": "",
+          "extraction_path": "semantic",
+          "surface_term": "careless conduct injures someone",
+          "gated": false,
+          "gate_reason": "not-a-place; not-short",
+          "rank_tiebreak_score": 0.0
+        }
+      ],
+      "retrievals": [
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/RBML32OU09Dl72mx9f3cck2",
+            "label": "Car Renter Liable for Injury",
+            "score": 35.5,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "careless conduct injures someone",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/RBML32OU09Dl72mx9f3cck2",
+            "label": "Car Renter Liable for Injury",
+            "score": 35.5,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "careless conduct injures someone",
+            "gated": false,
+            "gate_reason": "not-a-place; not-short",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "below_floor"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/RBp4NpQMHS35mO7JToYzhXn",
+            "label": "Nonassertive Conduct",
+            "score": 34.6,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "careless conduct injures someone",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/RBp4NpQMHS35mO7JToYzhXn",
+            "label": "Nonassertive Conduct",
+            "score": 34.6,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "careless conduct injures someone",
+            "gated": false,
+            "gate_reason": "not-a-place; not-short",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "below_floor"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/RCLmMhA7u7IrGyH5gDUKn0M",
+            "label": "Code of Conduct",
+            "score": 34.6,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "careless conduct injures someone",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/RCLmMhA7u7IrGyH5gDUKn0M",
+            "label": "Code of Conduct",
+            "score": 34.6,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "careless conduct injures someone",
+            "gated": false,
+            "gate_reason": "not-a-place; not-short",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "below_floor"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/R8Ko5XSFEDGISXRWlQIT9C9",
+            "label": "Disorderly Conduct",
+            "score": 33.0,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "careless conduct injures someone",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/R8Ko5XSFEDGISXRWlQIT9C9",
+            "label": "Disorderly Conduct",
+            "score": 33.0,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "careless conduct injures someone",
+            "gated": false,
+            "gate_reason": "not-a-place; not-short",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "below_floor"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/R3yl9L7uI3BKIBgQugdI6r",
+            "label": "UK Financial Conduct Authority",
+            "score": 32.4,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "careless conduct injures someone",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/R3yl9L7uI3BKIBgQugdI6r",
+            "label": "UK Financial Conduct Authority",
+            "score": 32.4,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "careless conduct injures someone",
+            "gated": false,
+            "gate_reason": "not-a-place; not-short",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "below_floor"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/RF7AfcfFA3fae48E20eEAfbc",
+            "label": "U.S. Consumer Product Safety Commission",
+            "score": 31.6,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "careless conduct injures someone",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/RF7AfcfFA3fae48E20eEAfbc",
+            "label": "U.S. Consumer Product Safety Commission",
+            "score": 31.6,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "careless conduct injures someone",
+            "gated": false,
+            "gate_reason": "not-a-place; not-short",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "below_floor"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/RBSyY8hOhTJFVVp812YuMel",
+            "label": "Ethics Claim",
+            "score": 30.8,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "careless conduct injures someone",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/RBSyY8hOhTJFVVp812YuMel",
+            "label": "Ethics Claim",
+            "score": 30.8,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "careless conduct injures someone",
+            "gated": false,
+            "gate_reason": "not-a-place; not-short",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "below_floor"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/R8Hs98hbvGXbyLnjZcTg1QR",
+            "label": "Duty of Care",
+            "score": 28.9,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "careless conduct injures someone",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/R8Hs98hbvGXbyLnjZcTg1QR",
+            "label": "Duty of Care",
+            "score": 28.9,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "careless conduct injures someone",
+            "gated": false,
+            "gate_reason": "not-a-place; not-short",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "below_floor"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/R7c1yU31BO5LWM06a7c0Pfd",
+            "label": "Some Evidence",
+            "score": 27.7,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "careless conduct injures someone",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/R7c1yU31BO5LWM06a7c0Pfd",
+            "label": "Some Evidence",
+            "score": 27.7,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "careless conduct injures someone",
+            "gated": false,
+            "gate_reason": "not-a-place; not-short",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "below_floor"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/RDKHz2tUvUDYTa1DlEFt6oh",
+            "label": "Foster Care",
+            "score": 27.7,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "careless conduct injures someone",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/RDKHz2tUvUDYTa1DlEFt6oh",
+            "label": "Foster Care",
+            "score": 27.7,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "careless conduct injures someone",
+            "gated": false,
+            "gate_reason": "not-a-place; not-short",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "below_floor"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/RCuhDmyUHjn92exJ8dx1zO1",
+            "label": "Willful Misconduct",
+            "score": 65.7,
+            "branch": "",
+            "extraction_path": "semantic",
+            "surface_term": "careless conduct injures someone",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/RCuhDmyUHjn92exJ8dx1zO1",
+            "label": "Willful Misconduct",
+            "score": 65.7,
+            "branch": "",
+            "extraction_path": "semantic",
+            "surface_term": "careless conduct injures someone",
+            "gated": false,
+            "gate_reason": "not-a-place; not-short",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "survived"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/R84N0KXivn5IJaQn8xVwPDg",
+            "label": "Intentional Infliction of Emotional Distress",
+            "score": 63.2,
+            "branch": "",
+            "extraction_path": "semantic",
+            "surface_term": "careless conduct injures someone",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/R84N0KXivn5IJaQn8xVwPDg",
+            "label": "Intentional Infliction of Emotional Distress",
+            "score": 63.2,
+            "branch": "",
+            "extraction_path": "semantic",
+            "surface_term": "careless conduct injures someone",
+            "gated": false,
+            "gate_reason": "not-a-place; not-short",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "survived"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/RDuyHZDRBvSF1vlAJM9Jpix",
+            "label": "Negligent Infliction of Emotional Distress on a Bystander",
+            "score": 56.9,
+            "branch": "",
+            "extraction_path": "semantic",
+            "surface_term": "careless conduct injures someone",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/RDuyHZDRBvSF1vlAJM9Jpix",
+            "label": "Negligent Infliction of Emotional Distress on a Bystander",
+            "score": 56.9,
+            "branch": "",
+            "extraction_path": "semantic",
+            "surface_term": "careless conduct injures someone",
+            "gated": false,
+            "gate_reason": "not-a-place; not-short",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "survived"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/RDwISw0syjjwmS6UpyiShve",
+            "label": "Reckless Involuntary Manslaughter",
+            "score": 56.1,
+            "branch": "",
+            "extraction_path": "semantic",
+            "surface_term": "careless conduct injures someone",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/RDwISw0syjjwmS6UpyiShve",
+            "label": "Reckless Involuntary Manslaughter",
+            "score": 56.1,
+            "branch": "",
+            "extraction_path": "semantic",
+            "surface_term": "careless conduct injures someone",
+            "gated": false,
+            "gate_reason": "not-a-place; not-short",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "survived"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/R7nqxxlAfhYqqSA2UQ5UxpX",
+            "label": "Negligence",
+            "score": 54.6,
+            "branch": "",
+            "extraction_path": "semantic",
+            "surface_term": "careless conduct injures someone",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/R7nqxxlAfhYqqSA2UQ5UxpX",
+            "label": "Negligence",
+            "score": 40.0,
+            "branch": "",
+            "extraction_path": "semantic",
+            "surface_term": "careless conduct injures someone",
+            "gated": true,
+            "gate_reason": "not-a-place; short-label demoted (fuzzy match below near-exact)",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "demoted_below_floor"
+        }
+      ],
+      "targets": [
+        {
+          "iri": "https://folio.openlegalstandard.org/R7nqxxlAfhYqqSA2UQ5UxpX",
+          "semantic_rank": 5,
+          "semantic_cosine": 0.5464241789091326,
+          "final_rank": null,
+          "outcome": "demoted_below_floor",
+          "retrievals": [
+            {
+              "before": {
+                "iri": "https://folio.openlegalstandard.org/R7nqxxlAfhYqqSA2UQ5UxpX",
+                "label": "Negligence",
+                "score": 54.6,
+                "branch": "",
+                "extraction_path": "semantic",
+                "surface_term": "careless conduct injures someone",
+                "gated": false,
+                "gate_reason": "",
+                "rank_tiebreak_score": 0.0
+              },
+              "after": {
+                "iri": "https://folio.openlegalstandard.org/R7nqxxlAfhYqqSA2UQ5UxpX",
+                "label": "Negligence",
+                "score": 40.0,
+                "branch": "",
+                "extraction_path": "semantic",
+                "surface_term": "careless conduct injures someone",
+                "gated": true,
+                "gate_reason": "not-a-place; short-label demoted (fuzzy match below near-exact)",
+                "rank_tiebreak_score": 0.0
+              },
+              "outcome": "demoted_below_floor"
+            }
+          ]
+        }
+      ],
+      "semantic_top_five": [
+        {
+          "iri": "https://folio.openlegalstandard.org/RCuhDmyUHjn92exJ8dx1zO1",
+          "label": "Willful Misconduct",
+          "cosine": 0.6568716999347098
+        },
+        {
+          "iri": "https://folio.openlegalstandard.org/R84N0KXivn5IJaQn8xVwPDg",
+          "label": "Intentional Infliction of Emotional Distress",
+          "cosine": 0.6316246065517684
+        },
+        {
+          "iri": "https://folio.openlegalstandard.org/RDuyHZDRBvSF1vlAJM9Jpix",
+          "label": "Negligent Infliction of Emotional Distress on a Bystander",
+          "cosine": 0.5685151422848438
+        },
+        {
+          "iri": "https://folio.openlegalstandard.org/RDwISw0syjjwmS6UpyiShve",
+          "label": "Reckless Involuntary Manslaughter",
+          "cosine": 0.5605346971937558
+        },
+        {
+          "iri": "https://folio.openlegalstandard.org/R7nqxxlAfhYqqSA2UQ5UxpX",
+          "label": "Negligence",
+          "cosine": 0.5464241789091326
+        }
+      ]
+    },
+    {
+      "id": "P3",
+      "kind": "paraphrase",
+      "query": "expired deadline bars suing",
+      "acceptable_iris": [
+        "https://folio.openlegalstandard.org/RDKJ7nEqeDxNDRxI2Wqil1N"
+      ],
+      "expected_labels": {
+        "https://folio.openlegalstandard.org/RDKJ7nEqeDxNDRxI2Wqil1N": "Statute of Limitations"
+      },
+      "timing_samples": [
+        {
+          "lexical_seconds": 1.6108617950230837,
+          "semantic_seconds": 0.6271660510683432,
+          "embedding_seconds": 0.010822306969203055,
+          "lexical_calls": 1,
+          "semantic_calls": 1,
+          "embedding_calls": 1,
+          "total_seconds": 2.2382344919024035,
+          "other_seconds": 0.0002066458109766245,
+          "semantic_without_embedding_seconds": 0.6163437440991402
+        },
+        {
+          "lexical_seconds": 1.6342462620232254,
+          "semantic_seconds": 0.617372005013749,
+          "embedding_seconds": 0.008482503006234765,
+          "lexical_calls": 1,
+          "semantic_calls": 1,
+          "embedding_calls": 1,
+          "total_seconds": 2.2518120610620826,
+          "other_seconds": 0.0001937940251082182,
+          "semantic_without_embedding_seconds": 0.6088895020075142
+        },
+        {
+          "lexical_seconds": 1.5050394220743328,
+          "semantic_seconds": 0.6050812050234526,
+          "embedding_seconds": 0.011527706985361874,
+          "lexical_calls": 1,
+          "semantic_calls": 1,
+          "embedding_calls": 1,
+          "total_seconds": 2.1103159030899405,
+          "other_seconds": 0.00019527599215507507,
+          "semantic_without_embedding_seconds": 0.5935534980380908
+        }
+      ],
+      "candidates": [
+        {
+          "iri": "https://folio.openlegalstandard.org/RBaJDWY4eliIvdRb35ib3Bw",
+          "label": "Bar Date Motion",
+          "score": 57.3,
+          "branch": "",
+          "extraction_path": "semantic",
+          "surface_term": "expired deadline bars suing",
+          "gated": false,
+          "gate_reason": "not-a-place; not-short",
+          "rank_tiebreak_score": 0.0
+        },
+        {
+          "iri": "https://folio.openlegalstandard.org/R9v8rZaf1tIB7O0km8nPh9h",
+          "label": "Motion to File Claim After Claims Bar Date",
+          "score": 54.0,
+          "branch": "",
+          "extraction_path": "semantic",
+          "surface_term": "expired deadline bars suing",
+          "gated": false,
+          "gate_reason": "not-a-place; not-short",
+          "rank_tiebreak_score": 0.0
+        }
+      ],
+      "retrievals": [
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/RnnJLAzGV4emQlsf4z80ci",
+            "label": "Expired Registration",
+            "score": 34.6,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "expired deadline bars suing",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/RnnJLAzGV4emQlsf4z80ci",
+            "label": "Expired Registration",
+            "score": 34.6,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "expired deadline bars suing",
+            "gated": false,
+            "gate_reason": "not-a-place; not-short",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "below_floor"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/RCOMvXAjl9L67WfLOTCSlHk",
+            "label": "Bar Association",
+            "score": 27.7,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "expired deadline bars suing",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/RCOMvXAjl9L67WfLOTCSlHk",
+            "label": "Bar Association",
+            "score": 27.7,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "expired deadline bars suing",
+            "gated": false,
+            "gate_reason": "not-a-place; not-short",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "below_floor"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/R9tIoV6NSL01NJcZzv2QgzY",
+            "label": "Lawyer's Bar Identifier",
+            "score": 25.9,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "expired deadline bars suing",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/R9tIoV6NSL01NJcZzv2QgzY",
+            "label": "Lawyer's Bar Identifier",
+            "score": 25.9,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "expired deadline bars suing",
+            "gated": false,
+            "gate_reason": "not-a-place; not-short",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "below_floor"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/R8EkAREWqEHHdURg8LbU2C3",
+            "label": "Brain Death",
+            "score": 24.6,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "expired deadline bars suing",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/R8EkAREWqEHHdURg8LbU2C3",
+            "label": "Brain Death",
+            "score": 24.6,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "expired deadline bars suing",
+            "gated": false,
+            "gate_reason": "not-a-place; not-short",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "below_floor"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/RBIjupGmQLqpwi89uEk45qA",
+            "label": "Expiration Date",
+            "score": 24.3,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "expired deadline bars suing",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/RBIjupGmQLqpwi89uEk45qA",
+            "label": "Expiration Date",
+            "score": 24.3,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "expired deadline bars suing",
+            "gated": false,
+            "gate_reason": "not-a-place; not-short",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "below_floor"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/RCmkrESHrcL7bKILqkwAG1J",
+            "label": "Expiration Event",
+            "score": 24.3,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "expired deadline bars suing",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/RCmkrESHrcL7bKILqkwAG1J",
+            "label": "Expiration Event",
+            "score": 24.3,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "expired deadline bars suing",
+            "gated": false,
+            "gate_reason": "not-a-place; not-short",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "below_floor"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/P0HDWOT7R7eDOW9LDAY1Vg",
+            "label": "Snack and Nonalcoholic Beverage Bars",
+            "score": 22.0,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "expired deadline bars suing",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/P0HDWOT7R7eDOW9LDAY1Vg",
+            "label": "Snack and Nonalcoholic Beverage Bars",
+            "score": 22.0,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "expired deadline bars suing",
+            "gated": false,
+            "gate_reason": "not-a-place; not-short",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "below_floor"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/R7aOV3ldC5GVaSOcGua7Nqs",
+            "label": "Expired Parking Violation",
+            "score": 22.0,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "expired deadline bars suing",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/R7aOV3ldC5GVaSOcGua7Nqs",
+            "label": "Expired Parking Violation",
+            "score": 22.0,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "expired deadline bars suing",
+            "gated": false,
+            "gate_reason": "not-a-place; not-short",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "below_floor"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/RBaJDWY4eliIvdRb35ib3Bw",
+            "label": "Bar Date Motion",
+            "score": 20.6,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "expired deadline bars suing",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/RBaJDWY4eliIvdRb35ib3Bw",
+            "label": "Bar Date Motion",
+            "score": 20.6,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "expired deadline bars suing",
+            "gated": false,
+            "gate_reason": "not-a-place; not-short",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "below_floor"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/R8qrNz3f9tQrFNxbNoW9qm",
+            "label": "D.C. Bar Legal Ethics Opinions",
+            "score": 18.9,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "expired deadline bars suing",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/R8qrNz3f9tQrFNxbNoW9qm",
+            "label": "D.C. Bar Legal Ethics Opinions",
+            "score": 18.9,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "expired deadline bars suing",
+            "gated": false,
+            "gate_reason": "not-a-place; not-short",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "below_floor"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/RBaJDWY4eliIvdRb35ib3Bw",
+            "label": "Bar Date Motion",
+            "score": 57.3,
+            "branch": "",
+            "extraction_path": "semantic",
+            "surface_term": "expired deadline bars suing",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/RBaJDWY4eliIvdRb35ib3Bw",
+            "label": "Bar Date Motion",
+            "score": 57.3,
+            "branch": "",
+            "extraction_path": "semantic",
+            "surface_term": "expired deadline bars suing",
+            "gated": false,
+            "gate_reason": "not-a-place; not-short",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "survived"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/R9v8rZaf1tIB7O0km8nPh9h",
+            "label": "Motion to File Claim After Claims Bar Date",
+            "score": 54.0,
+            "branch": "",
+            "extraction_path": "semantic",
+            "surface_term": "expired deadline bars suing",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/R9v8rZaf1tIB7O0km8nPh9h",
+            "label": "Motion to File Claim After Claims Bar Date",
+            "score": 54.0,
+            "branch": "",
+            "extraction_path": "semantic",
+            "surface_term": "expired deadline bars suing",
+            "gated": false,
+            "gate_reason": "not-a-place; not-short",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "survived"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/RhamdxU4pSj2gQNPR6TjEtA",
+            "label": "B310 Claims Administration and Objections",
+            "score": 44.3,
+            "branch": "",
+            "extraction_path": "semantic",
+            "surface_term": "expired deadline bars suing",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/RhamdxU4pSj2gQNPR6TjEtA",
+            "label": "B310 Claims Administration and Objections",
+            "score": 44.3,
+            "branch": "",
+            "extraction_path": "semantic",
+            "surface_term": "expired deadline bars suing",
+            "gated": false,
+            "gate_reason": "not-a-place; not-short",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "below_floor"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/R7aOV3ldC5GVaSOcGua7Nqs",
+            "label": "Expired Parking Violation",
+            "score": 42.8,
+            "branch": "",
+            "extraction_path": "semantic",
+            "surface_term": "expired deadline bars suing",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/R7aOV3ldC5GVaSOcGua7Nqs",
+            "label": "Expired Parking Violation",
+            "score": 42.8,
+            "branch": "",
+            "extraction_path": "semantic",
+            "surface_term": "expired deadline bars suing",
+            "gated": false,
+            "gate_reason": "not-a-place; not-short",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "below_floor"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/R7pZSuLowh1QRBeGOhk6zEr",
+            "label": "Motion to Extend Time - Appellate Court",
+            "score": 41.9,
+            "branch": "",
+            "extraction_path": "semantic",
+            "surface_term": "expired deadline bars suing",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/R7pZSuLowh1QRBeGOhk6zEr",
+            "label": "Motion to Extend Time - Appellate Court",
+            "score": 41.9,
+            "branch": "",
+            "extraction_path": "semantic",
+            "surface_term": "expired deadline bars suing",
+            "gated": false,
+            "gate_reason": "not-a-place; not-short",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "below_floor"
+        }
+      ],
+      "targets": [
+        {
+          "iri": "https://folio.openlegalstandard.org/RDKJ7nEqeDxNDRxI2Wqil1N",
+          "semantic_rank": 14,
+          "semantic_cosine": 0.3799721942631326,
+          "final_rank": null,
+          "outcome": "not_retrieved",
+          "retrievals": []
+        }
+      ],
+      "semantic_top_five": [
+        {
+          "iri": "https://folio.openlegalstandard.org/RBaJDWY4eliIvdRb35ib3Bw",
+          "label": "Bar Date Motion",
+          "cosine": 0.5727587216730154
+        },
+        {
+          "iri": "https://folio.openlegalstandard.org/R9v8rZaf1tIB7O0km8nPh9h",
+          "label": "Motion to File Claim After Claims Bar Date",
+          "cosine": 0.5403739413597584
+        },
+        {
+          "iri": "https://folio.openlegalstandard.org/RhamdxU4pSj2gQNPR6TjEtA",
+          "label": "B310 Claims Administration and Objections",
+          "cosine": 0.44328037863051334
+        },
+        {
+          "iri": "https://folio.openlegalstandard.org/R7aOV3ldC5GVaSOcGua7Nqs",
+          "label": "Expired Parking Violation",
+          "cosine": 0.428385475644738
+        },
+        {
+          "iri": "https://folio.openlegalstandard.org/R7pZSuLowh1QRBeGOhk6zEr",
+          "label": "Motion to Extend Time - Appellate Court",
+          "cosine": 0.41942988634278083
+        }
+      ]
+    },
+    {
+      "id": "P4",
+      "kind": "paraphrase",
+      "query": "previously resolved dispute barred anew",
+      "acceptable_iris": [
+        "https://folio.openlegalstandard.org/R8OsGCPOsihiJLtbFkIbRfx"
+      ],
+      "expected_labels": {
+        "https://folio.openlegalstandard.org/R8OsGCPOsihiJLtbFkIbRfx": "Res Judicata"
+      },
+      "timing_samples": [
+        {
+          "lexical_seconds": 1.7341959910700098,
+          "semantic_seconds": 0.5364750409498811,
+          "embedding_seconds": 0.008596134022809565,
+          "lexical_calls": 1,
+          "semantic_calls": 1,
+          "embedding_calls": 1,
+          "total_seconds": 2.270848768996075,
+          "other_seconds": 0.0001777369761839509,
+          "semantic_without_embedding_seconds": 0.5278789069270715
+        },
+        {
+          "lexical_seconds": 1.5230173129821196,
+          "semantic_seconds": 0.5047380949836224,
+          "embedding_seconds": 0.007695854059420526,
+          "lexical_calls": 1,
+          "semantic_calls": 1,
+          "embedding_calls": 1,
+          "total_seconds": 2.027933539939113,
+          "other_seconds": 0.0001781319733709097,
+          "semantic_without_embedding_seconds": 0.4970422409242019
+        },
+        {
+          "lexical_seconds": 1.5459625240182504,
+          "semantic_seconds": 0.5112890870077536,
+          "embedding_seconds": 0.008198007009923458,
+          "lexical_calls": 1,
+          "semantic_calls": 1,
+          "embedding_calls": 1,
+          "total_seconds": 2.057433123001829,
+          "other_seconds": 0.00018151197582483292,
+          "semantic_without_embedding_seconds": 0.5030910799978301
+        }
+      ],
+      "candidates": [
+        {
+          "iri": "https://folio.openlegalstandard.org/R85H4hDZWq92xwwBFP7WCtM",
+          "label": "Alternative Dispute Resolution Practice",
+          "score": 56.9,
+          "branch": "",
+          "extraction_path": "semantic",
+          "surface_term": "previously resolved dispute barred anew",
+          "gated": false,
+          "gate_reason": "not-a-place; not-short",
+          "rank_tiebreak_score": 0.0
+        },
+        {
+          "iri": "https://folio.openlegalstandard.org/RCUXIdFpIxrgm2u6Xlk9ywc",
+          "label": "Dispute Resolution Clause",
+          "score": 51.9,
+          "branch": "",
+          "extraction_path": "semantic",
+          "surface_term": "previously resolved dispute barred anew",
+          "gated": false,
+          "gate_reason": "not-a-place; not-short",
+          "rank_tiebreak_score": 0.0
+        },
+        {
+          "iri": "https://folio.openlegalstandard.org/R7JZv6z3TDA2deV497R7DTW",
+          "label": "Alternative Dispute Resolution Clause",
+          "score": 51.4,
+          "branch": "",
+          "extraction_path": "semantic",
+          "surface_term": "previously resolved dispute barred anew",
+          "gated": false,
+          "gate_reason": "not-a-place; not-short",
+          "rank_tiebreak_score": 0.0
+        },
+        {
+          "iri": "https://folio.openlegalstandard.org/RDFhtJuTWcY7UZGV9F5yOoA",
+          "label": "Dispute Events",
+          "score": 49.9,
+          "branch": "",
+          "extraction_path": "semantic",
+          "surface_term": "previously resolved dispute barred anew",
+          "gated": false,
+          "gate_reason": "not-a-place; not-short",
+          "rank_tiebreak_score": 0.0
+        }
+      ],
+      "retrievals": [
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/RpNOHS1FAVVJkNXIN6L6y7",
+            "label": "Dispute Proceeding Type",
+            "score": 35.4,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "previously resolved dispute barred anew",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/RpNOHS1FAVVJkNXIN6L6y7",
+            "label": "Dispute Proceeding Type",
+            "score": 35.4,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "previously resolved dispute barred anew",
+            "gated": false,
+            "gate_reason": "not-a-place; not-short",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "below_floor"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/R85OMPBjCJJv2cpg2RCwYim",
+            "label": "Dispute Forum",
+            "score": 34.3,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "previously resolved dispute barred anew",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/R85OMPBjCJJv2cpg2RCwYim",
+            "label": "Dispute Forum",
+            "score": 34.3,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "previously resolved dispute barred anew",
+            "gated": false,
+            "gate_reason": "not-a-place; not-short",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "below_floor"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/R9v17ZYsnDkNSEZkvD36nhT",
+            "label": "Dispute Venue",
+            "score": 34.3,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "previously resolved dispute barred anew",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/R9v17ZYsnDkNSEZkvD36nhT",
+            "label": "Dispute Venue",
+            "score": 34.3,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "previously resolved dispute barred anew",
+            "gated": false,
+            "gate_reason": "not-a-place; not-short",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "below_floor"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/RDFhtJuTWcY7UZGV9F5yOoA",
+            "label": "Dispute Events",
+            "score": 34.3,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "previously resolved dispute barred anew",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/RDFhtJuTWcY7UZGV9F5yOoA",
+            "label": "Dispute Events",
+            "score": 34.3,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "previously resolved dispute barred anew",
+            "gated": false,
+            "gate_reason": "not-a-place; not-short",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "below_floor"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/RBnuIEAfenTTxlF3AFiSNtc",
+            "label": "Tax Dispute Practice",
+            "score": 33.0,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "previously resolved dispute barred anew",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/RBnuIEAfenTTxlF3AFiSNtc",
+            "label": "Tax Dispute Practice",
+            "score": 33.0,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "previously resolved dispute barred anew",
+            "gated": false,
+            "gate_reason": "not-a-place; not-short",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "below_floor"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/RDigDgTiLFmt7iX3436yCOT",
+            "label": "Dispute Service",
+            "score": 33.0,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "previously resolved dispute barred anew",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/RDigDgTiLFmt7iX3436yCOT",
+            "label": "Dispute Service",
+            "score": 33.0,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "previously resolved dispute barred anew",
+            "gated": false,
+            "gate_reason": "not-a-place; not-short",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "below_floor"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/RDo4EB15aAkKgGEEjd4g22i",
+            "label": "International Trade Commission Dispute",
+            "score": 32.1,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "previously resolved dispute barred anew",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/RDo4EB15aAkKgGEEjd4g22i",
+            "label": "International Trade Commission Dispute",
+            "score": 32.1,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "previously resolved dispute barred anew",
+            "gated": false,
+            "gate_reason": "not-a-place; not-short",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "below_floor"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/RfBdQ771UMEZMpb5zTUXAZ",
+            "label": "Amount in Controversy / Dispute",
+            "score": 32.1,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "previously resolved dispute barred anew",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/RfBdQ771UMEZMpb5zTUXAZ",
+            "label": "Amount in Controversy / Dispute",
+            "score": 32.1,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "previously resolved dispute barred anew",
+            "gated": false,
+            "gate_reason": "not-a-place; not-short",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "below_floor"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/RBWo88jsbY4qHzhlTFr5Np7",
+            "label": "Regulatory Services (Non-Dispute)",
+            "score": 30.8,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "previously resolved dispute barred anew",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/RBWo88jsbY4qHzhlTFr5Np7",
+            "label": "Regulatory Services (Non-Dispute)",
+            "score": 30.8,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "previously resolved dispute barred anew",
+            "gated": false,
+            "gate_reason": "not-a-place; not-short",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "below_floor"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/R8OsGCPOsihiJLtbFkIbRfx",
+            "label": "Res Judicata",
+            "score": 27.5,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "previously resolved dispute barred anew",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/R8OsGCPOsihiJLtbFkIbRfx",
+            "label": "Res Judicata",
+            "score": 27.5,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "previously resolved dispute barred anew",
+            "gated": false,
+            "gate_reason": "not-a-place; not-short",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "below_floor"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/R85H4hDZWq92xwwBFP7WCtM",
+            "label": "Alternative Dispute Resolution Practice",
+            "score": 56.9,
+            "branch": "",
+            "extraction_path": "semantic",
+            "surface_term": "previously resolved dispute barred anew",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/R85H4hDZWq92xwwBFP7WCtM",
+            "label": "Alternative Dispute Resolution Practice",
+            "score": 56.9,
+            "branch": "",
+            "extraction_path": "semantic",
+            "surface_term": "previously resolved dispute barred anew",
+            "gated": false,
+            "gate_reason": "not-a-place; not-short",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "survived"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/RCUXIdFpIxrgm2u6Xlk9ywc",
+            "label": "Dispute Resolution Clause",
+            "score": 51.9,
+            "branch": "",
+            "extraction_path": "semantic",
+            "surface_term": "previously resolved dispute barred anew",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/RCUXIdFpIxrgm2u6Xlk9ywc",
+            "label": "Dispute Resolution Clause",
+            "score": 51.9,
+            "branch": "",
+            "extraction_path": "semantic",
+            "surface_term": "previously resolved dispute barred anew",
+            "gated": false,
+            "gate_reason": "not-a-place; not-short",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "survived"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/R7JZv6z3TDA2deV497R7DTW",
+            "label": "Alternative Dispute Resolution Clause",
+            "score": 51.4,
+            "branch": "",
+            "extraction_path": "semantic",
+            "surface_term": "previously resolved dispute barred anew",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/R7JZv6z3TDA2deV497R7DTW",
+            "label": "Alternative Dispute Resolution Clause",
+            "score": 51.4,
+            "branch": "",
+            "extraction_path": "semantic",
+            "surface_term": "previously resolved dispute barred anew",
+            "gated": false,
+            "gate_reason": "not-a-place; not-short",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "survived"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/RBDRtzbiNquelJuhuvpkCWl",
+            "label": "Ratification",
+            "score": 50.6,
+            "branch": "",
+            "extraction_path": "semantic",
+            "surface_term": "previously resolved dispute barred anew",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/RBDRtzbiNquelJuhuvpkCWl",
+            "label": "Ratification",
+            "score": 40.0,
+            "branch": "",
+            "extraction_path": "semantic",
+            "surface_term": "previously resolved dispute barred anew",
+            "gated": true,
+            "gate_reason": "not-a-place; short-label demoted (fuzzy match below near-exact)",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "demoted_below_floor"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/RDFhtJuTWcY7UZGV9F5yOoA",
+            "label": "Dispute Events",
+            "score": 49.9,
+            "branch": "",
+            "extraction_path": "semantic",
+            "surface_term": "previously resolved dispute barred anew",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/RDFhtJuTWcY7UZGV9F5yOoA",
+            "label": "Dispute Events",
+            "score": 49.9,
+            "branch": "",
+            "extraction_path": "semantic",
+            "surface_term": "previously resolved dispute barred anew",
+            "gated": false,
+            "gate_reason": "not-a-place; not-short",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "survived"
+        }
+      ],
+      "targets": [
+        {
+          "iri": "https://folio.openlegalstandard.org/R8OsGCPOsihiJLtbFkIbRfx",
+          "semantic_rank": 424,
+          "semantic_cosine": 0.3025046213267264,
+          "final_rank": null,
+          "outcome": "below_floor",
+          "retrievals": [
+            {
+              "before": {
+                "iri": "https://folio.openlegalstandard.org/R8OsGCPOsihiJLtbFkIbRfx",
+                "label": "Res Judicata",
+                "score": 27.5,
+                "branch": "",
+                "extraction_path": "label_search",
+                "surface_term": "previously resolved dispute barred anew",
+                "gated": false,
+                "gate_reason": "",
+                "rank_tiebreak_score": 0.0
+              },
+              "after": {
+                "iri": "https://folio.openlegalstandard.org/R8OsGCPOsihiJLtbFkIbRfx",
+                "label": "Res Judicata",
+                "score": 27.5,
+                "branch": "",
+                "extraction_path": "label_search",
+                "surface_term": "previously resolved dispute barred anew",
+                "gated": false,
+                "gate_reason": "not-a-place; not-short",
+                "rank_tiebreak_score": 0.0
+              },
+              "outcome": "below_floor"
+            }
+          ]
+        }
+      ],
+      "semantic_top_five": [
+        {
+          "iri": "https://folio.openlegalstandard.org/R85H4hDZWq92xwwBFP7WCtM",
+          "label": "Alternative Dispute Resolution Practice",
+          "cosine": 0.5689759462324062
+        },
+        {
+          "iri": "https://folio.openlegalstandard.org/RCUXIdFpIxrgm2u6Xlk9ywc",
+          "label": "Dispute Resolution Clause",
+          "cosine": 0.5189243155493802
+        },
+        {
+          "iri": "https://folio.openlegalstandard.org/R7JZv6z3TDA2deV497R7DTW",
+          "label": "Alternative Dispute Resolution Clause",
+          "cosine": 0.5136405777986984
+        },
+        {
+          "iri": "https://folio.openlegalstandard.org/RBDRtzbiNquelJuhuvpkCWl",
+          "label": "Ratification",
+          "cosine": 0.5056555577868936
+        },
+        {
+          "iri": "https://folio.openlegalstandard.org/RDFhtJuTWcY7UZGV9F5yOoA",
+          "label": "Dispute Events",
+          "cosine": 0.4989040576483978
+        }
+      ]
+    },
+    {
+      "id": "P6",
+      "kind": "paraphrase",
+      "query": "bargained reciprocal benefit",
+      "acceptable_iris": [
+        "https://folio.openlegalstandard.org/RBKXEdlGEMzeuinxEdRGBF5"
+      ],
+      "expected_labels": {
+        "https://folio.openlegalstandard.org/RBKXEdlGEMzeuinxEdRGBF5": "Consideration"
+      },
+      "timing_samples": [
+        {
+          "lexical_seconds": 1.1524120280519128,
+          "semantic_seconds": 0.515882303006947,
+          "embedding_seconds": 0.007703377050347626,
+          "lexical_calls": 1,
+          "semantic_calls": 1,
+          "embedding_calls": 1,
+          "total_seconds": 1.668472061981447,
+          "other_seconds": 0.0001777309225872159,
+          "semantic_without_embedding_seconds": 0.5081789259565994
+        },
+        {
+          "lexical_seconds": 1.1445428358856589,
+          "semantic_seconds": 0.49649571196641773,
+          "embedding_seconds": 0.0075611830689013,
+          "lexical_calls": 1,
+          "semantic_calls": 1,
+          "embedding_calls": 1,
+          "total_seconds": 1.641222404083237,
+          "other_seconds": 0.0001838562311604619,
+          "semantic_without_embedding_seconds": 0.48893452889751643
+        },
+        {
+          "lexical_seconds": 1.1612714399816468,
+          "semantic_seconds": 0.4976395700359717,
+          "embedding_seconds": 0.00734463008120656,
+          "lexical_calls": 1,
+          "semantic_calls": 1,
+          "embedding_calls": 1,
+          "total_seconds": 1.6590856600087136,
+          "other_seconds": 0.00017464999109506607,
+          "semantic_without_embedding_seconds": 0.49029493995476514
+        }
+      ],
+      "candidates": [],
+      "retrievals": [
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/RCR2daagM0vMiqCGhsBrZrE",
+            "label": "General Relief Benefit",
+            "score": 35.2,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "bargained reciprocal benefit",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/RCR2daagM0vMiqCGhsBrZrE",
+            "label": "General Relief Benefit",
+            "score": 35.2,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "bargained reciprocal benefit",
+            "gated": false,
+            "gate_reason": "not-a-place; not-short",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "below_floor"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/RSfWLD6VgkWm2v5HbRfK70",
+            "label": "Contributory Benefit",
+            "score": 35.2,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "bargained reciprocal benefit",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/RSfWLD6VgkWm2v5HbRfK70",
+            "label": "Contributory Benefit",
+            "score": 35.2,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "bargained reciprocal benefit",
+            "gated": false,
+            "gate_reason": "not-a-place; not-short",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "below_floor"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/RrMIIsCEqxpHSyyLrupuZl",
+            "label": "Pension Benefit",
+            "score": 35.2,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "bargained reciprocal benefit",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/RrMIIsCEqxpHSyyLrupuZl",
+            "label": "Pension Benefit",
+            "score": 35.2,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "bargained reciprocal benefit",
+            "gated": false,
+            "gate_reason": "not-a-place; not-short",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "below_floor"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/RCUSvXaOqGr627CnjhRYKQu",
+            "label": "Cash Public Benefit",
+            "score": 34.5,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "bargained reciprocal benefit",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/RCUSvXaOqGr627CnjhRYKQu",
+            "label": "Cash Public Benefit",
+            "score": 34.5,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "bargained reciprocal benefit",
+            "gated": false,
+            "gate_reason": "not-a-place; not-short",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "below_floor"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/R7Qj5gZIdKfp8urYwCzPXO7",
+            "label": "Food Public Benefit",
+            "score": 31.5,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "bargained reciprocal benefit",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/R7Qj5gZIdKfp8urYwCzPXO7",
+            "label": "Food Public Benefit",
+            "score": 31.5,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "bargained reciprocal benefit",
+            "gated": false,
+            "gate_reason": "not-a-place; not-short",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "below_floor"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/R7Wr4hG8vwC8fkSaCK9ZhOz",
+            "label": "Public Housing Benefit",
+            "score": 31.5,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "bargained reciprocal benefit",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/R7Wr4hG8vwC8fkSaCK9ZhOz",
+            "label": "Public Housing Benefit",
+            "score": 31.5,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "bargained reciprocal benefit",
+            "gated": false,
+            "gate_reason": "not-a-place; not-short",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "below_floor"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/R7u2oTEkyPQN6Ut84t3YUez",
+            "label": "Non-Contributory Benefit",
+            "score": 31.5,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "bargained reciprocal benefit",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/R7u2oTEkyPQN6Ut84t3YUez",
+            "label": "Non-Contributory Benefit",
+            "score": 31.5,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "bargained reciprocal benefit",
+            "gated": false,
+            "gate_reason": "not-a-place; not-short",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "below_floor"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/R81q0MYebZZv26XtzcIvVJ5",
+            "label": "Disability Public Benefit",
+            "score": 31.5,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "bargained reciprocal benefit",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/R81q0MYebZZv26XtzcIvVJ5",
+            "label": "Disability Public Benefit",
+            "score": 31.5,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "bargained reciprocal benefit",
+            "gated": false,
+            "gate_reason": "not-a-place; not-short",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "below_floor"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/R8Jfe7vUl3X8WdhirLRGKbU",
+            "label": "Underpayment of Public Benefit",
+            "score": 31.5,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "bargained reciprocal benefit",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/R8Jfe7vUl3X8WdhirLRGKbU",
+            "label": "Underpayment of Public Benefit",
+            "score": 31.5,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "bargained reciprocal benefit",
+            "gated": false,
+            "gate_reason": "not-a-place; not-short",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "below_floor"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/R8SCEafhkCA6MFM4zfjkkIy",
+            "label": "Increase of Public Benefit",
+            "score": 31.5,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "bargained reciprocal benefit",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/R8SCEafhkCA6MFM4zfjkkIy",
+            "label": "Increase of Public Benefit",
+            "score": 31.5,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "bargained reciprocal benefit",
+            "gated": false,
+            "gate_reason": "not-a-place; not-short",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "below_floor"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/R7TxvYxSg4f2BzLUmL1Mows",
+            "label": "Redemption Clause",
+            "score": 42.2,
+            "branch": "",
+            "extraction_path": "semantic",
+            "surface_term": "bargained reciprocal benefit",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/R7TxvYxSg4f2BzLUmL1Mows",
+            "label": "Redemption Clause",
+            "score": 42.2,
+            "branch": "",
+            "extraction_path": "semantic",
+            "surface_term": "bargained reciprocal benefit",
+            "gated": false,
+            "gate_reason": "not-a-place; not-short",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "below_floor"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/R8DuEmmnbcptnIZhPdF2Tvx",
+            "label": "Discounts and Credits",
+            "score": 41.3,
+            "branch": "",
+            "extraction_path": "semantic",
+            "surface_term": "bargained reciprocal benefit",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/R8DuEmmnbcptnIZhPdF2Tvx",
+            "label": "Discounts and Credits",
+            "score": 41.3,
+            "branch": "",
+            "extraction_path": "semantic",
+            "surface_term": "bargained reciprocal benefit",
+            "gated": false,
+            "gate_reason": "not-a-place; not-short",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "below_floor"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/RxYosffmgrv0hqnILTcCgW",
+            "label": "Locally Provided Public Benefit",
+            "score": 40.7,
+            "branch": "",
+            "extraction_path": "semantic",
+            "surface_term": "bargained reciprocal benefit",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/RxYosffmgrv0hqnILTcCgW",
+            "label": "Locally Provided Public Benefit",
+            "score": 40.7,
+            "branch": "",
+            "extraction_path": "semantic",
+            "surface_term": "bargained reciprocal benefit",
+            "gated": false,
+            "gate_reason": "not-a-place; not-short",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "below_floor"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/RQ0TQRZKlDOogaFb20BIuK",
+            "label": "Redeemable Asset",
+            "score": 40.5,
+            "branch": "",
+            "extraction_path": "semantic",
+            "surface_term": "bargained reciprocal benefit",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/RQ0TQRZKlDOogaFb20BIuK",
+            "label": "Redeemable Asset",
+            "score": 40.5,
+            "branch": "",
+            "extraction_path": "semantic",
+            "surface_term": "bargained reciprocal benefit",
+            "gated": false,
+            "gate_reason": "not-a-place; not-short",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "below_floor"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/RgQLVqqo23cFKNa2n4P7wp",
+            "label": "Recoupment of Public Benefit",
+            "score": 39.7,
+            "branch": "",
+            "extraction_path": "semantic",
+            "surface_term": "bargained reciprocal benefit",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/RgQLVqqo23cFKNa2n4P7wp",
+            "label": "Recoupment of Public Benefit",
+            "score": 39.7,
+            "branch": "",
+            "extraction_path": "semantic",
+            "surface_term": "bargained reciprocal benefit",
+            "gated": false,
+            "gate_reason": "not-a-place; not-short",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "below_floor"
+        }
+      ],
+      "targets": [
+        {
+          "iri": "https://folio.openlegalstandard.org/RBKXEdlGEMzeuinxEdRGBF5",
+          "semantic_rank": 1654,
+          "semantic_cosine": 0.18546188623062285,
+          "final_rank": null,
+          "outcome": "not_retrieved",
+          "retrievals": []
+        }
+      ],
+      "semantic_top_five": [
+        {
+          "iri": "https://folio.openlegalstandard.org/R7TxvYxSg4f2BzLUmL1Mows",
+          "label": "Redemption Clause",
+          "cosine": 0.4219872971990752
+        },
+        {
+          "iri": "https://folio.openlegalstandard.org/R8DuEmmnbcptnIZhPdF2Tvx",
+          "label": "Discounts and Credits",
+          "cosine": 0.41311064807002246
+        },
+        {
+          "iri": "https://folio.openlegalstandard.org/RxYosffmgrv0hqnILTcCgW",
+          "label": "Locally Provided Public Benefit",
+          "cosine": 0.4067204155422011
+        },
+        {
+          "iri": "https://folio.openlegalstandard.org/RQ0TQRZKlDOogaFb20BIuK",
+          "label": "Redeemable Asset",
+          "cosine": 0.40501204491472725
+        },
+        {
+          "iri": "https://folio.openlegalstandard.org/RgQLVqqo23cFKNa2n4P7wp",
+          "label": "Recoupment of Public Benefit",
+          "cosine": 0.39696774484243386
+        }
+      ]
+    },
+    {
+      "id": "N1",
+      "kind": "negative",
+      "query": "purple nebula hums a lullaby",
+      "acceptable_iris": [],
+      "expected_labels": {},
+      "timing_samples": [
+        {
+          "lexical_seconds": 1.2094668300123885,
+          "semantic_seconds": 0.4919772039866075,
+          "embedding_seconds": 0.007643620949238539,
+          "lexical_calls": 1,
+          "semantic_calls": 1,
+          "embedding_calls": 1,
+          "total_seconds": 1.7016236890340224,
+          "other_seconds": 0.00017965503502637148,
+          "semantic_without_embedding_seconds": 0.48433358303736895
+        },
+        {
+          "lexical_seconds": 1.188230223953724,
+          "semantic_seconds": 0.4833975280635059,
+          "embedding_seconds": 0.00820721301715821,
+          "lexical_calls": 1,
+          "semantic_calls": 1,
+          "embedding_calls": 1,
+          "total_seconds": 1.671790150925517,
+          "other_seconds": 0.00016239890828728676,
+          "semantic_without_embedding_seconds": 0.4751903150463477
+        },
+        {
+          "lexical_seconds": 1.1875861249864101,
+          "semantic_seconds": 0.49955973809119314,
+          "embedding_seconds": 0.007515817997045815,
+          "lexical_calls": 1,
+          "semantic_calls": 1,
+          "embedding_calls": 1,
+          "total_seconds": 1.6873029459966347,
+          "other_seconds": 0.0001570829190313816,
+          "semantic_without_embedding_seconds": 0.4920439200941473
+        }
+      ],
+      "candidates": [],
+      "retrievals": [
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/R97B21bF7D59fA5C7cc561cb",
+            "label": "U.S. Bankruptcy Court - D. Nebraska",
+            "score": 16.5,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "purple nebula hums a lullaby",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/R97B21bF7D59fA5C7cc561cb",
+            "label": "U.S. Bankruptcy Court - D. Nebraska",
+            "score": 16.5,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "purple nebula hums a lullaby",
+            "gated": false,
+            "gate_reason": "not-a-place; not-short",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "below_floor"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/RnTNsy3rvPXsc7tOyLnJm8",
+            "label": "Clean Air Claim",
+            "score": 16.4,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "purple nebula hums a lullaby",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/RnTNsy3rvPXsc7tOyLnJm8",
+            "label": "Clean Air Claim",
+            "score": 16.4,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "purple nebula hums a lullaby",
+            "gated": false,
+            "gate_reason": "not-a-place; not-short",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "below_floor"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/R8aET6xMdN7kwawnEJFxGqY",
+            "label": "Turnips",
+            "score": 13.8,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "purple nebula hums a lullaby",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/R8aET6xMdN7kwawnEJFxGqY",
+            "label": "Turnips",
+            "score": 13.8,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "purple nebula hums a lullaby",
+            "gated": true,
+            "gate_reason": "not-a-place; short-label demoted (fuzzy match below near-exact)",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "below_floor"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/R9kvj3qr4PlwHySafh0nevU",
+            "label": "Blackberries",
+            "score": 13.8,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "purple nebula hums a lullaby",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/R9kvj3qr4PlwHySafh0nevU",
+            "label": "Blackberries",
+            "score": 13.8,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "purple nebula hums a lullaby",
+            "gated": true,
+            "gate_reason": "not-a-place; short-label demoted (fuzzy match below near-exact)",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "below_floor"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/RCCbmNM7sKsMbmg25ArBkWu",
+            "label": "Eggplants",
+            "score": 13.8,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "purple nebula hums a lullaby",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/RCCbmNM7sKsMbmg25ArBkWu",
+            "label": "Eggplants",
+            "score": 13.8,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "purple nebula hums a lullaby",
+            "gated": true,
+            "gate_reason": "not-a-place; short-label demoted (fuzzy match below near-exact)",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "below_floor"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/R22668bE60e60A8Fc195D022",
+            "label": "Nebraska Court of Appeals",
+            "score": 11.0,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "purple nebula hums a lullaby",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/R22668bE60e60A8Fc195D022",
+            "label": "Nebraska Court of Appeals",
+            "score": 11.0,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "purple nebula hums a lullaby",
+            "gated": false,
+            "gate_reason": "not-a-place; not-short",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "below_floor"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/R6D7b57D86e2c70B808FCc29",
+            "label": "Nebraska Supreme Court",
+            "score": 11.0,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "purple nebula hums a lullaby",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/R6D7b57D86e2c70B808FCc29",
+            "label": "Nebraska Supreme Court",
+            "score": 11.0,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "purple nebula hums a lullaby",
+            "gated": false,
+            "gate_reason": "not-a-place; not-short",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "below_floor"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/RD7Cdab84825d8D85615B159",
+            "label": "Nebraska Attorney General Reports",
+            "score": 11.0,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "purple nebula hums a lullaby",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/RD7Cdab84825d8D85615B159",
+            "label": "Nebraska Attorney General Reports",
+            "score": 11.0,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "purple nebula hums a lullaby",
+            "gated": false,
+            "gate_reason": "not-a-place; not-short",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "below_floor"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/RF69012863c181765aa33cf7",
+            "label": "U.S. District Court - D. Nebraska",
+            "score": 11.0,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "purple nebula hums a lullaby",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/RF69012863c181765aa33cf7",
+            "label": "U.S. District Court - D. Nebraska",
+            "score": 11.0,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "purple nebula hums a lullaby",
+            "gated": false,
+            "gate_reason": "not-a-place; not-short",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "below_floor"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/RCE3eed40A223E8183aC3051",
+            "label": "Ventspils novads",
+            "score": 38.0,
+            "branch": "",
+            "extraction_path": "semantic",
+            "surface_term": "purple nebula hums a lullaby",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/RCE3eed40A223E8183aC3051",
+            "label": "Ventspils novads",
+            "score": 38.0,
+            "branch": "",
+            "extraction_path": "semantic",
+            "surface_term": "purple nebula hums a lullaby",
+            "gated": false,
+            "gate_reason": "not-a-place; not-short",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "below_floor"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/RDF1ebd2A98136584433A097",
+            "label": "Madonas novads",
+            "score": 33.3,
+            "branch": "",
+            "extraction_path": "semantic",
+            "surface_term": "purple nebula hums a lullaby",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/RDF1ebd2A98136584433A097",
+            "label": "Madonas novads",
+            "score": 33.3,
+            "branch": "",
+            "extraction_path": "semantic",
+            "surface_term": "purple nebula hums a lullaby",
+            "gated": false,
+            "gate_reason": "not-a-place; not-short",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "below_floor"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/R18B57b923397D373b86598f",
+            "label": "Arima",
+            "score": 32.7,
+            "branch": "",
+            "extraction_path": "semantic",
+            "surface_term": "purple nebula hums a lullaby",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/R18B57b923397D373b86598f",
+            "label": "Arima",
+            "score": 32.7,
+            "branch": "",
+            "extraction_path": "semantic",
+            "surface_term": "purple nebula hums a lullaby",
+            "gated": true,
+            "gate_reason": "not-a-place; short-label demoted (fuzzy match below near-exact)",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "below_floor"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/R5528fcBE310288506f393d1",
+            "label": "Balvu novads",
+            "score": 32.3,
+            "branch": "",
+            "extraction_path": "semantic",
+            "surface_term": "purple nebula hums a lullaby",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/R5528fcBE310288506f393d1",
+            "label": "Balvu novads",
+            "score": 32.3,
+            "branch": "",
+            "extraction_path": "semantic",
+            "surface_term": "purple nebula hums a lullaby",
+            "gated": false,
+            "gate_reason": "not-a-place; not-short",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "below_floor"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/R6F14893B727493E355B613f",
+            "label": "Sonsonate",
+            "score": 31.3,
+            "branch": "",
+            "extraction_path": "semantic",
+            "surface_term": "purple nebula hums a lullaby",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/R6F14893B727493E355B613f",
+            "label": "Sonsonate",
+            "score": 31.3,
+            "branch": "",
+            "extraction_path": "semantic",
+            "surface_term": "purple nebula hums a lullaby",
+            "gated": true,
+            "gate_reason": "not-a-place; short-label demoted (fuzzy match below near-exact)",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "below_floor"
+        }
+      ],
+      "targets": [],
+      "semantic_top_five": [
+        {
+          "iri": "https://folio.openlegalstandard.org/RCE3eed40A223E8183aC3051",
+          "label": "Ventspils novads",
+          "cosine": 0.3802529710306985
+        },
+        {
+          "iri": "https://folio.openlegalstandard.org/RDF1ebd2A98136584433A097",
+          "label": "Madonas novads",
+          "cosine": 0.3330770851954103
+        },
+        {
+          "iri": "https://folio.openlegalstandard.org/R18B57b923397D373b86598f",
+          "label": "Arima",
+          "cosine": 0.3274413143127048
+        },
+        {
+          "iri": "https://folio.openlegalstandard.org/R5528fcBE310288506f393d1",
+          "label": "Balvu novads",
+          "cosine": 0.3232097564788425
+        },
+        {
+          "iri": "https://folio.openlegalstandard.org/R6F14893B727493E355B613f",
+          "label": "Sonsonate",
+          "cosine": 0.312996779591212
+        }
+      ]
+    },
+    {
+      "id": "N2",
+      "kind": "negative",
+      "query": "my sourdough starter smells fruity",
+      "acceptable_iris": [],
+      "expected_labels": {},
+      "timing_samples": [
+        {
+          "lexical_seconds": 1.282755991909653,
+          "semantic_seconds": 0.4758175640599802,
+          "embedding_seconds": 0.007450115983374417,
+          "lexical_calls": 1,
+          "semantic_calls": 1,
+          "embedding_calls": 1,
+          "total_seconds": 1.7587449119891971,
+          "other_seconds": 0.00017135601956397295,
+          "semantic_without_embedding_seconds": 0.4683674480766058
+        },
+        {
+          "lexical_seconds": 1.2830370320007205,
+          "semantic_seconds": 0.46853474900126457,
+          "embedding_seconds": 0.007756466045975685,
+          "lexical_calls": 1,
+          "semantic_calls": 1,
+          "embedding_calls": 1,
+          "total_seconds": 1.7517531251069158,
+          "other_seconds": 0.00018134410493075848,
+          "semantic_without_embedding_seconds": 0.4607782829552889
+        },
+        {
+          "lexical_seconds": 1.3343354550888762,
+          "semantic_seconds": 0.4671298119938001,
+          "embedding_seconds": 0.007792963995598257,
+          "lexical_calls": 1,
+          "semantic_calls": 1,
+          "embedding_calls": 1,
+          "total_seconds": 1.8016322030453011,
+          "other_seconds": 0.0001669359626248479,
+          "semantic_without_embedding_seconds": 0.45933684799820185
+        }
+      ],
+      "candidates": [],
+      "retrievals": [
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/RCIv9j8UdKC0YVPrbl5EGRq",
+            "label": "Fruit Vegetables",
+            "score": 27.7,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "my sourdough starter smells fruity",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/RCIv9j8UdKC0YVPrbl5EGRq",
+            "label": "Fruit Vegetables",
+            "score": 27.7,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "my sourdough starter smells fruity",
+            "gated": false,
+            "gate_reason": "not-a-place; not-short",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "below_floor"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/RDx4PuWu7ZznwNEGW6rXll0",
+            "label": "Fruit Crops",
+            "score": 27.7,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "my sourdough starter smells fruity",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/RDx4PuWu7ZznwNEGW6rXll0",
+            "label": "Fruit Crops",
+            "score": 27.7,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "my sourdough starter smells fruity",
+            "gated": false,
+            "gate_reason": "not-a-place; not-short",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "below_floor"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/R93oC7LagxAP0b2nzlVq1ET",
+            "label": "Effective Beginning Date",
+            "score": 27.0,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "my sourdough starter smells fruity",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/R93oC7LagxAP0b2nzlVq1ET",
+            "label": "Effective Beginning Date",
+            "score": 27.0,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "my sourdough starter smells fruity",
+            "gated": false,
+            "gate_reason": "not-a-place; not-short",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "below_floor"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/R9XidLr8CX79rJyIFYkEmXu",
+            "label": "Bananas",
+            "score": 25.9,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "my sourdough starter smells fruity",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/R9XidLr8CX79rJyIFYkEmXu",
+            "label": "Bananas",
+            "score": 25.9,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "my sourdough starter smells fruity",
+            "gated": true,
+            "gate_reason": "not-a-place; short-label demoted (fuzzy match below near-exact)",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "below_floor"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/RCMCLUqt9sH8v5JikB9d4Ax",
+            "label": "Apples",
+            "score": 25.9,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "my sourdough starter smells fruity",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/RCMCLUqt9sH8v5JikB9d4Ax",
+            "label": "Apples",
+            "score": 25.9,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "my sourdough starter smells fruity",
+            "gated": true,
+            "gate_reason": "not-a-place; short-label demoted (fuzzy match below near-exact)",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "below_floor"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/R73dveMt11oYotWVGR1ST2F",
+            "label": "Cherries",
+            "score": 25.8,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "my sourdough starter smells fruity",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/R73dveMt11oYotWVGR1ST2F",
+            "label": "Cherries",
+            "score": 25.8,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "my sourdough starter smells fruity",
+            "gated": true,
+            "gate_reason": "not-a-place; short-label demoted (fuzzy match below near-exact)",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "below_floor"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/R9YMhsOAS2OD06TKrSoPIOA",
+            "label": "Grapes",
+            "score": 25.8,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "my sourdough starter smells fruity",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/R9YMhsOAS2OD06TKrSoPIOA",
+            "label": "Grapes",
+            "score": 25.8,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "my sourdough starter smells fruity",
+            "gated": true,
+            "gate_reason": "not-a-place; short-label demoted (fuzzy match below near-exact)",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "below_floor"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/RBcuoqBaLiPaGEYNL1fcaP9",
+            "label": "Raspberries",
+            "score": 25.8,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "my sourdough starter smells fruity",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/RBcuoqBaLiPaGEYNL1fcaP9",
+            "label": "Raspberries",
+            "score": 25.8,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "my sourdough starter smells fruity",
+            "gated": true,
+            "gate_reason": "not-a-place; short-label demoted (fuzzy match below near-exact)",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "below_floor"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/RIxZRp4UxyqiBeFnokFhrA",
+            "label": "Citrus Fruits",
+            "score": 25.6,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "my sourdough starter smells fruity",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/RIxZRp4UxyqiBeFnokFhrA",
+            "label": "Citrus Fruits",
+            "score": 25.6,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "my sourdough starter smells fruity",
+            "gated": false,
+            "gate_reason": "not-a-place; not-short",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "below_floor"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/R8WhsyEOse5TvMLfnHDYfTY",
+            "label": "Stone Fruits",
+            "score": 24.3,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "my sourdough starter smells fruity",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/R8WhsyEOse5TvMLfnHDYfTY",
+            "label": "Stone Fruits",
+            "score": 24.3,
+            "branch": "",
+            "extraction_path": "label_search",
+            "surface_term": "my sourdough starter smells fruity",
+            "gated": false,
+            "gate_reason": "not-a-place; not-short",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "below_floor"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/R8ucHOT4J1VQ7KZTWxIoth3",
+            "label": "Fruit of the Poisonous Tree",
+            "score": 38.7,
+            "branch": "",
+            "extraction_path": "semantic",
+            "surface_term": "my sourdough starter smells fruity",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/R8ucHOT4J1VQ7KZTWxIoth3",
+            "label": "Fruit of the Poisonous Tree",
+            "score": 38.7,
+            "branch": "",
+            "extraction_path": "semantic",
+            "surface_term": "my sourdough starter smells fruity",
+            "gated": false,
+            "gate_reason": "not-a-place; not-short",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "below_floor"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/D7tLCZbyRfaSK8s3EKh_Vg",
+            "label": "Vegetable and Melon Farming",
+            "score": 29.0,
+            "branch": "",
+            "extraction_path": "semantic",
+            "surface_term": "my sourdough starter smells fruity",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/D7tLCZbyRfaSK8s3EKh_Vg",
+            "label": "Vegetable and Melon Farming",
+            "score": 29.0,
+            "branch": "",
+            "extraction_path": "semantic",
+            "surface_term": "my sourdough starter smells fruity",
+            "gated": false,
+            "gate_reason": "not-a-place; not-short",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "below_floor"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/RCMCLUqt9sH8v5JikB9d4Ax",
+            "label": "Apples",
+            "score": 28.6,
+            "branch": "",
+            "extraction_path": "semantic",
+            "surface_term": "my sourdough starter smells fruity",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/RCMCLUqt9sH8v5JikB9d4Ax",
+            "label": "Apples",
+            "score": 28.6,
+            "branch": "",
+            "extraction_path": "semantic",
+            "surface_term": "my sourdough starter smells fruity",
+            "gated": true,
+            "gate_reason": "not-a-place; short-label demoted (fuzzy match below near-exact)",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "below_floor"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/W1kQtC8lQ0qF-vXog2VUbg",
+            "label": "Fresh Fruit and Vegetable Merchant Wholesalers",
+            "score": 28.5,
+            "branch": "",
+            "extraction_path": "semantic",
+            "surface_term": "my sourdough starter smells fruity",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/W1kQtC8lQ0qF-vXog2VUbg",
+            "label": "Fresh Fruit and Vegetable Merchant Wholesalers",
+            "score": 28.5,
+            "branch": "",
+            "extraction_path": "semantic",
+            "surface_term": "my sourdough starter smells fruity",
+            "gated": false,
+            "gate_reason": "not-a-place; not-short",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "below_floor"
+        },
+        {
+          "before": {
+            "iri": "https://folio.openlegalstandard.org/R0AE4afADE9d527D8a1E6893",
+            "label": "Tindouf",
+            "score": 26.6,
+            "branch": "",
+            "extraction_path": "semantic",
+            "surface_term": "my sourdough starter smells fruity",
+            "gated": false,
+            "gate_reason": "",
+            "rank_tiebreak_score": 0.0
+          },
+          "after": {
+            "iri": "https://folio.openlegalstandard.org/R0AE4afADE9d527D8a1E6893",
+            "label": "Tindouf",
+            "score": 26.6,
+            "branch": "",
+            "extraction_path": "semantic",
+            "surface_term": "my sourdough starter smells fruity",
+            "gated": true,
+            "gate_reason": "not-a-place; short-label demoted (fuzzy match below near-exact)",
+            "rank_tiebreak_score": 0.0
+          },
+          "outcome": "below_floor"
+        }
+      ],
+      "targets": [],
+      "semantic_top_five": [
+        {
+          "iri": "https://folio.openlegalstandard.org/R8ucHOT4J1VQ7KZTWxIoth3",
+          "label": "Fruit of the Poisonous Tree",
+          "cosine": 0.38718612803707564
+        },
+        {
+          "iri": "https://folio.openlegalstandard.org/D7tLCZbyRfaSK8s3EKh_Vg",
+          "label": "Vegetable and Melon Farming",
+          "cosine": 0.2900736965102164
+        },
+        {
+          "iri": "https://folio.openlegalstandard.org/RCMCLUqt9sH8v5JikB9d4Ax",
+          "label": "Apples",
+          "cosine": 0.28587499114561926
+        },
+        {
+          "iri": "https://folio.openlegalstandard.org/W1kQtC8lQ0qF-vXog2VUbg",
+          "label": "Fresh Fruit and Vegetable Merchant Wholesalers",
+          "cosine": 0.2850861096709453
+        },
+        {
+          "iri": "https://folio.openlegalstandard.org/R0AE4afADE9d527D8a1E6893",
+          "label": "Tindouf",
+          "cosine": 0.2660732547823663
+        }
+      ]
+    }
+  ]
+}
