@@ -1,0 +1,99 @@
+{
+  "schema_version": 1,
+  "approval": "Owner approved only unambiguous cases initially, 2026-09-19; A1/A2/P2/P5 excluded before measurement.",
+  "annotation_source": "Owner-approved unambiguous subset of the 2026-09-19 public fixture proposal; newly authored retrieval queries, not general quality annotations",
+  "tokenizer": "Unicode re.findall(r\"\\w+\", text.casefold()), no stemming or stopwords",
+  "negative_policy": "No intended legal target; report candidates separately, not blanket false positives.",
+  "ontology": {
+    "revision": "e36f3f8e7e7ecc8e081b78ababc3daca149fcaf2",
+    "sha256": "44657b4ed844f5f9c9c48869184606b4fc671471a8263d79d241de87809fa239",
+    "url": "https://raw.githubusercontent.com/alea-institute/FOLIO/e36f3f8e7e7ecc8e081b78ababc3daca149fcaf2/FOLIO.owl"
+  },
+  "model": {
+    "repo_id": "sentence-transformers/all-MiniLM-L6-v2",
+    "revision": "1110a243fdf4706b3f48f1d95db1a4f5529b4d41",
+    "dimension": 384
+  },
+  "cases": [
+    {
+      "id": "E1",
+      "kind": "exact",
+      "query": "Summary Judgment",
+      "acceptable_iris": [
+        "https://folio.openlegalstandard.org/R8K6VFq9c39kbQouame6Onf"
+      ],
+      "expected_labels": {
+        "https://folio.openlegalstandard.org/R8K6VFq9c39kbQouame6Onf": "Summary Judgment"
+      }
+    },
+    {
+      "id": "E2",
+      "kind": "exact",
+      "query": "Auction",
+      "acceptable_iris": [
+        "https://folio.openlegalstandard.org/R8kOvHwkY6TrQmB7RnYiWNO"
+      ],
+      "expected_labels": {
+        "https://folio.openlegalstandard.org/R8kOvHwkY6TrQmB7RnYiWNO": "Auction"
+      }
+    },
+    {
+      "id": "P1",
+      "kind": "paraphrase",
+      "query": "careless conduct injures someone",
+      "acceptable_iris": [
+        "https://folio.openlegalstandard.org/R7nqxxlAfhYqqSA2UQ5UxpX"
+      ],
+      "expected_labels": {
+        "https://folio.openlegalstandard.org/R7nqxxlAfhYqqSA2UQ5UxpX": "Negligence"
+      }
+    },
+    {
+      "id": "P3",
+      "kind": "paraphrase",
+      "query": "expired deadline bars suing",
+      "acceptable_iris": [
+        "https://folio.openlegalstandard.org/RDKJ7nEqeDxNDRxI2Wqil1N"
+      ],
+      "expected_labels": {
+        "https://folio.openlegalstandard.org/RDKJ7nEqeDxNDRxI2Wqil1N": "Statute of Limitations"
+      }
+    },
+    {
+      "id": "P4",
+      "kind": "paraphrase",
+      "query": "previously resolved dispute barred anew",
+      "acceptable_iris": [
+        "https://folio.openlegalstandard.org/R8OsGCPOsihiJLtbFkIbRfx"
+      ],
+      "expected_labels": {
+        "https://folio.openlegalstandard.org/R8OsGCPOsihiJLtbFkIbRfx": "Res Judicata"
+      }
+    },
+    {
+      "id": "P6",
+      "kind": "paraphrase",
+      "query": "bargained reciprocal benefit",
+      "acceptable_iris": [
+        "https://folio.openlegalstandard.org/RBKXEdlGEMzeuinxEdRGBF5"
+      ],
+      "expected_labels": {
+        "https://folio.openlegalstandard.org/RBKXEdlGEMzeuinxEdRGBF5": "Consideration"
+      }
+    },
+    {
+      "id": "N1",
+      "kind": "negative",
+      "query": "purple nebula hums a lullaby",
+      "acceptable_iris": [],
+      "expected_labels": {}
+    },
+    {
+      "id": "N2",
+      "kind": "negative",
+      "query": "my sourdough starter smells fruity",
+      "acceptable_iris": [],
+      "expected_labels": {}
+    }
+  ]
+}
