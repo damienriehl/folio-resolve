@@ -628,3 +628,39 @@ def test_real_frozen_judgment_chain_identity_arithmetic():
             for direction in ("added", "removed")
             for iris in row[direction].values()
         )
+
+
+def test_committed_boundary_evidence_reproduces_offline(monkeypatch):
+    """Committed conclusions must remain reproducible without optional model assets."""
+    import json
+
+    root = Path(__file__).parents[1] / "docs/benchmarks"
+    collection = json.loads((root / "embedding-lexical-boundaries-collection.json").read_text())
+    expected = json.loads((root / "embedding-lexical-boundaries-results.json").read_text())
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Offline scoring attempted corpus loading or model inference")
+
+    monkeypatch.setattr(lexical.baseline, "build_pipeline", forbidden)
+    monkeypatch.setattr(lexical.baseline, "load_corpus", forbidden)
+    actual = lexical.run_score(collection)
+    # Python versions can sum the same per-query fractions a few ulps apart.
+    # Check only aggregate bounds against their integer-count oracle, then
+    # compare every other field exactly (including candidate scores and hashes).
+    for gate in ("original", "selective"):
+        for metric in ("strict", "expanded"):
+            for group in actual["comparisons"][gate][metric]["positive_groups"]:
+                for policy in lexical.POLICIES:
+                    for result in (actual, expected):
+                        aggregate = result["comparisons"][gate][metric]["positive_groups"][group]
+                        cell = aggregate[policy]
+                        slots = 5 * aggregate["query_count"]
+                        rational_bounds = [
+                            cell["relevant"] / slots,
+                            (cell["relevant"] + cell["unjudged"]) / slots,
+                        ]
+                        assert cell["p_at_5_bounds"] == pytest.approx(
+                            rational_bounds, rel=0, abs=1e-15
+                        )
+                        cell["p_at_5_bounds"] = rational_bounds
+    assert actual == expected
