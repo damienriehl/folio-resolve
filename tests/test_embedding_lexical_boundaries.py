@@ -173,3 +173,153 @@ def test_original_minimum_lengths_do_not_award_containment(query, label, kwargs)
     trace = []
     assert lexical.boundary_relevance_score(set(), query, label, trace=trace, **kwargs) == 0.0
     assert trace == []
+
+
+def test_provider_reretrieves_before_limit_and_orders_ties():
+    concepts = [Concept(iri='z', label='Surigao'),
+                Concept(iri='b', label='Town Exchange', alternative_labels=('Riga',)),
+                Concept(iri='a', label='Town Exchange', alternative_labels=('Riga',))]
+    assert lexical.LexicalOntology(concepts, 'substring').search_by_label('Riga', limit=1)[0][0].iri == 'z'
+    treatment = lexical.LexicalOntology(concepts, 'boundary')
+    assert [c.iri for c, _ in treatment.search_by_label('Riga', limit=2)] == ['a', 'b']
+
+
+def test_real_pipeline_decomposition_shared_semantics_and_fresh_ranking():
+    from folio_resolve import MatchPipeline
+    concepts = [Concept(iri='embedded', label='Surigao'), Concept(iri='riga', label='Riga'),
+                Concept(iri='paris', label='Paris')]
+    query = 'Riga and Paris'
+    case = {'id': 'small', 'kind': 'exact', 'query': query, 'acceptable_iris': ['riga'],
+            'expected_labels': {'riga': 'Riga'}}
+
+    class Semantic:
+        calls = 0
+
+        def query(self, text, *, top_k):
+            assert text == query and top_k == 5
+            self.calls += 1
+            return [('riga', 'Riga', .8)]
+
+    semantic = Semantic()
+    pipeline = MatchPipeline(InMemoryOntology(concepts), semantic_index=semantic)
+    inputs = lexical.precision.retrieve_once(pipeline, query)
+    controls = [{**case, **lexical.precision.rank_pair(pipeline, inputs, ['riga'])}]
+    semantic.calls = 0
+    result = lexical.collect_cases(concepts, semantic, {'cases': [case]}, controls)[0]
+    assert semantic.calls == 1
+    left = result['substring']['baseline']['candidate_inputs']
+    right = result['boundary']['baseline']['candidate_inputs']
+    assert [c for c in left if c['extraction_path'] == 'semantic'] == [c for c in right if c['extraction_path'] == 'semantic']
+    assert any(c['iri'] == 'embedded' and c['extraction_path'] == 'decomposition' for c in left)
+    assert not any(c['iri'] == 'embedded' and c['extraction_path'] == 'decomposition' for c in right)
+    for policy in ('boundary', 'substring'):
+        snapshots = result[policy]
+        for gate in ('selective', 'baseline'):
+            pipe = lexical.precision.selective_from(pipeline) if gate == 'selective' else pipeline
+            assert lexical.precision.replay.rank_snapshot(pipe, snapshots[gate]['candidate_inputs'], ['riga']) == snapshots[gate]
+    assert result['containment_changes']
+
+
+def test_complete_controls_required_including_last_case():
+    import copy
+    frozen = lexical.load_frozen_inputs()[0]
+    actual = copy.deepcopy(frozen['results'])
+    lexical.precision.verify_controls(actual, frozen['results'])
+    actual[-1]['selective']['candidate_inputs'].append({'tampered': True})
+    with pytest.raises(ValueError, match='selective complete control snapshot differs'):
+        lexical.precision.verify_controls(actual, frozen['results'])
+
+
+@pytest.fixture
+def small_collection(monkeypatch):
+    import json
+    from dataclasses import asdict
+
+    from folio_resolve import MatchPipeline
+    frozen, sheet = lexical.load_frozen_inputs()
+    concepts = [Concept(iri='a', label='Riga'), Concept(iri='b', label='Surigao'),
+                Concept(iri='c', label='Town Exchange', alternative_labels=('Riga',)),
+                Concept(iri='d', label='Paris'), Concept(iri='e', label='Rome')]
+    case = {'id': 'small', 'kind': 'exact', 'query': 'Riga', 'acceptable_iris': ['a'],
+            'expected_labels': {'a': 'Riga'}}
+    fixture = {**frozen['fixture'], 'cases': [case]}
+    response = [[c.iri, c.label, .8 - i * .1] for i, c in enumerate(concepts)]
+    semantic = lexical.SavedSemanticResponse('Riga', response)
+    pipe = MatchPipeline(InMemoryOntology(concepts), semantic_index=semantic)
+    inputs = lexical.precision.retrieve_once(pipe, 'Riga')
+    controls = [{**case, **lexical.precision.rank_pair(pipe, inputs, ['a'])}]
+    frozen = {**frozen, 'fixture': fixture, 'results': controls,
+              'pool': lexical.precision.candidate_pool(controls, concepts)}
+    monkeypatch.setattr(lexical, 'load_frozen_inputs', lambda: (frozen, sheet))
+    results = lexical.collect_cases(concepts, semantic, fixture, controls)
+    pool = lexical.pool_from_results(results, concepts)
+    provenance = lexical.expected_provenance(frozen, sheet)
+    runtime = {'python': '3.11.0', 'platform': 'test', 'packages': {'pytest': '8.0'}}
+    metadata = json.loads(json.dumps([asdict(c) for c in concepts]))
+    value = {'schema_version': lexical.SCHEMA, 'fixture': fixture, 'provenance': provenance,
+             'configuration_sha256': lexical.baseline.stable_digest(provenance),
+             'runtime': runtime, 'runtime_sha256': lexical.baseline.stable_digest(runtime),
+             'results': results, 'pool': pool, 'pool_sha256': lexical.baseline.stable_digest(pool),
+             'concept_metadata': metadata, 'concept_metadata_sha256': lexical.baseline.stable_digest(metadata),
+             'controls_reproduced': True}
+    lexical.validate_collection(value)
+    return value
+
+
+def test_offline_new_schema_validates_without_model(small_collection):
+    lexical.validate_collection(small_collection)
+
+
+@pytest.mark.parametrize('key', ['model', 'model_files_sha256', 'corpus_sha256',
+                                'source_sha256', 'library_source_sha256', 'fixture_sha256',
+                                'pipeline', 'owner_receipt_sha256'])
+def test_offline_provenance_tampering_blocked_even_with_new_digest(small_collection, key):
+    small_collection['provenance'][key] = 'changed'
+    small_collection['configuration_sha256'] = lexical.baseline.stable_digest(small_collection['provenance'])
+    with pytest.raises(ValueError, match=f'provenance {key} differs'):
+        lexical.validate_collection(small_collection)
+
+
+@pytest.mark.parametrize('mutation,message', [
+    ('semantic', 'semantic response|Semantic response'),
+    ('rank', 'ranked snapshot'),
+    ('trace', 'trace coverage'),
+    ('schema', 'schema'),
+    ('pool', 'pool'),
+    ('fixture', 'fixture'),
+    ('controls', 'controls not reproduced'),
+])
+def test_offline_evidence_corruption_blocked(small_collection, mutation, message):
+    row = small_collection['results'][0]
+    if mutation == 'semantic':
+        row['semantic_response'][0][2] = .1
+    elif mutation == 'rank':
+        row['boundary']['selective']['candidates'][0]['score'] += 1
+    elif mutation == 'trace':
+        row['containment_changes'].clear()
+    elif mutation == 'schema':
+        small_collection['schema_version'] = 1
+    elif mutation == 'pool':
+        small_collection['pool'][0]['label'] = 'changed'
+        small_collection['pool_sha256'] = lexical.baseline.stable_digest(small_collection['pool'])
+    elif mutation == 'fixture':
+        small_collection['fixture'] = {**small_collection['fixture'], 'cases': []}
+    else:
+        small_collection['controls_reproduced'] = False
+    with pytest.raises(ValueError, match=message):
+        lexical.validate_collection(small_collection)
+
+
+def test_treatment_never_collected_when_control_fails(monkeypatch):
+    concepts = [Concept(iri='a', label='Riga')]
+    fixture = {'cases': [{'id': 'small', 'kind': 'exact', 'query': 'Riga',
+                         'acceptable_iris': ['a'], 'expected_labels': {'a': 'Riga'}}]}
+    original = lexical.LexicalOntology.search_by_label
+
+    def guard(self, query, *, limit=20):
+        assert self.policy == 'substring'
+        return original(self, query, limit=limit)
+
+    monkeypatch.setattr(lexical.LexicalOntology, 'search_by_label', guard)
+    with pytest.raises(ValueError, match='control count differs'):
+        lexical.collect_cases(concepts, lexical.SavedSemanticResponse('Riga', [['a', 'Riga', .8]]), fixture, [])
