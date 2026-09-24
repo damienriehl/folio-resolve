@@ -302,6 +302,60 @@ def test_failed_cannot_carry_fabricated_probabilities() -> None:
         DecisionCollection.from_json(bad.to_json(), c)
 
 
+def test_controls_alone_teach_heldout_abstention() -> None:
+    c = corpus()
+    coll = collection(c)
+    result = score_collection(coll, c)
+    assert result.nomatch_fp_rate < 1.0
+    assert result.nomatch_fp_rate == 0.0
+    assert result.run.overall.f1 == 1.0
+    assert result.thresholds_by_fold == (Thresholds(0.9, 0.95),) * 5
+    for d in coll.decisions:
+        if d.kind == "nomatch":
+            assert emit(d, result.thresholds_by_fold[fold_for_item(d.item_id)]) == ()
+    baseline = compare_collections(coll, coll, c).baseline
+    assert baseline.thresholds_by_fold == (Thresholds(0.5, None),) * 5
+    assert baseline.nomatch_fp_rate == 1.0
+
+
+def test_control_emissions_never_tune_own_fold() -> None:
+    c = corpus()
+    c = replace(c, nomatch_items=c.nomatch_items[:1])
+    coll = collection(c)
+    control = coll.decisions[-1]
+    own_fold = fold_for_item(control.item_id)
+    before = select_thresholds(coll, c)
+    altered = replace(
+        coll,
+        decisions=(*coll.decisions[:-1], replace(control, shortlist=(), candidates=())),
+    )
+    after = select_thresholds(altered, c)
+    assert before[own_fold] == after[own_fold] == Thresholds(0.9, None)
+    assert {fold for fold in range(5) if before[fold] != after[fold]} == (
+        set(range(5)) - {own_fold}
+    )
+    assert after == (Thresholds(0.9, None),) * 5
+
+
+def test_no_controls_preserves_scoreable_only_report() -> None:
+    c = replace(corpus(), nomatch_items=())
+    coll = collection(c)
+    # Both candidates tie: one TP and one FP per row, so the old optimum is 2/3.
+    coll = replace(
+        coll,
+        decisions=tuple(
+            replace(d, candidates=tuple(replace(p, p=0.9) for p in d.candidates))
+            for d in coll.decisions
+        ),
+    )
+    result = score_collection(coll, c)
+    previous = score_collection(coll, c, thresholds=Thresholds(0.9, None))
+    assert result.thresholds_by_fold == (Thresholds(0.9, None),) * 5
+    assert result.run.overall == previous.run.overall
+    assert result.run.overall.f1 == pytest.approx(2 / 3)
+    assert result.nomatch_fp_rate == 0.0
+
+
 def test_crossfit_learns_abstention_for_controls() -> None:
     c = corpus()
     coll = collection(c)

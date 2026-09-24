@@ -2,12 +2,16 @@
 
 Collections pin their provenance and every passage's shortlist. Failures remain in
 scoring and pairing, but have no invented probabilities. Cross-fitting optimizes
-strict scoreable-item micro-F1; controls are evaluated separately, as in the
-synthetic lane. Consequently control labels do not affect that optimization.
+training-fold micro-F1 using scoreable TP/FP/FN plus one FP per IRI emitted on a
+training-fold no-match control (controls add no TP/FN). Both slices use the same
+fold assignment; held-out rows never tune their own thresholds. Reported strict
+P/R/F1 remains scoreable-only; control FP rate is passages emitting / controls.
 
 The fixed grid is 0, .05, ..., 1 for admission and abstention, with None meaning
 never abstain (even at probability 1). Ties prefer never abstaining, then the
-highest no-match threshold, then the highest admission threshold. Fold assignment
+highest no-match threshold, then the highest admission threshold. This order
+applies only at equal control-aware objective values: abstention wins when it
+improves that objective, but never-abstain still wins a tie. Fold assignment
 is SHA-256 of ``20260727:item_id``, interpreted as a big-endian integer modulo 5.
 A baseline encodes its committed answers as p=1 and other shortlist entries as
 p=0, with no_match_p=0; replay it at Thresholds(.5, None), never cross-fit it.
@@ -254,7 +258,14 @@ def fold_for_item(item_id: str) -> int:
 def select_thresholds(
     collection: DecisionCollection, corpus: LoadedCorpus
 ) -> tuple[Thresholds, ...]:
-    """Optimize on four folds only; no-match controls are outside strict F1."""
+    """Maximize 2*TP/(2*TP+FP+FN) on the other four folds only.
+
+    TP/FP/FN come from scoreable rows, with one additional FP per IRI emitted
+    on a training-fold control; controls add no TP/FN. Controls use fold_for_item
+    too, so their own fold cannot tune their thresholds. Reported metrics remain
+    unchanged. Equal objectives prefer never abstaining, then highest no-match
+    threshold, then highest admission threshold (first grid entry wins).
+    """
     collection.validate(corpus)
     decisions = {d.item_id: d for d in collection.decisions}
     grid = tuple(
@@ -265,6 +276,7 @@ def select_thresholds(
     selected = []
     for fold in range(FOLD_COUNT):
         training = [item for item in corpus.scoreable_items if fold_for_item(item.item_id) != fold]
+        controls = [item for item in corpus.nomatch_items if fold_for_item(item.item_id) != fold]
         best, best_f1 = grid[0], -1.0
         for thresholds in grid:
             tp = fp = fn = 0
@@ -273,6 +285,7 @@ def select_thresholds(
                 tp += len(prediction & item.gold_iris)
                 fp += len(prediction - item.gold_iris)
                 fn += len(item.gold_iris - prediction)
+            fp += sum(len(emit(decisions[item.item_id], thresholds)) for item in controls)
             denominator = 2 * tp + fp + fn
             f1 = 2 * tp / denominator if denominator else 0.0
             if f1 > best_f1:
