@@ -121,64 +121,114 @@ def test_baseline_roundtrip_and_score_equivalence(tmp_path):
     assert actual.nomatch_fp_rate == 1
 
 
-@pytest.mark.parametrize("leak", [False, True])
-def test_runner_outputs_and_leak_gate(tmp_path, monkeypatch, leak):
+@pytest.fixture
+def runner(tmp_path, monkeypatch):
     import sys
     from types import SimpleNamespace
 
     from folio_eval import verifier_depth as module
+    from folio_eval.leakcheck import build_manifest
+    from folio_eval.synthetic_checkpoint import CheckpointFingerprint
+    from folio_eval.synthetic_contract import SUPPRESSION_CATEGORIES
 
     config = load_config(Path("eval/synthetic/answer_rule_config_synthetic_v1.json"))
     corpus = fixture_corpus(config)
     calls = []
     monkeypatch.setattr(module, "ROOT", tmp_path)
-    monkeypatch.setattr(module, "ensure_hash_seed", lambda: calls.append("seed"))
+    monkeypatch.setattr(module, "ensure_hash_seed", lambda: None)
     monkeypatch.setattr(module, "load_corpus", lambda path: corpus)
     monkeypatch.setattr(module, "load_config", lambda path: config)
+    fingerprint = CheckpointFingerprint(
+        corpus.manifest.content_sha256,
+        corpus.manifest.nomatch_content_sha256,
+        config.content_sha256(),
+        corpus.manifest.ontology_cache_sha256,
+        "fixture-commit",
+        "0",
+        "fixture",
+        "fixture",
+        "fixture",
+        "d" * 64,
+    )
+    monkeypatch.setattr(module, "build_checkpoint_fingerprint", lambda *a, **kw: fingerprint)
+    monkeypatch.setattr(
+        module,
+        "assert_ontology_pin",
+        lambda pin: (calls.append("pin"), SimpleNamespace(sha256=pin))[1],
+    )
+    salt = tmp_path / "salt"
+    salt.write_bytes(b"fixture")
 
-    def fingerprint(*args, **kwargs):
-        calls.append("pristine")
-        return SimpleNamespace(git_head="fixture-commit")
+    def manifest(words):
+        value = build_manifest(
+            words, b"fixture", gold_version="fixture", gold_content_sha256="e" * 64
+        )
+        monkeypatch.setattr(module, "load_manifest", lambda path: value)
 
-    monkeypatch.setattr(module, "build_checkpoint_fingerprint", fingerprint)
-    monkeypatch.setattr(module, "assert_ontology_pin", lambda pin: SimpleNamespace(sha256=pin))
-    monkeypatch.setattr(module, "load_manifest", lambda path: object())
-
-    def scan_json(value, manifest, salt):
-        calls.append("json")
-        return int(leak)
-
-    monkeypatch.setattr(module, "scan_json_value", scan_json)
-    monkeypatch.setattr(module, "scan_text", lambda *args: 0)
-    monkeypatch.setitem(sys.modules, "folio", SimpleNamespace(FOLIO=lambda: object()))
+    manifest(["thresholds"])
+    monkeypatch.setitem(
+        sys.modules, "folio", SimpleNamespace(FOLIO=lambda: calls.append("ontology"))
+    )
 
     def adapt(text):
         calls.append("adapt")
-        return SimpleNamespace(candidates=candidates(8))
+        return SimpleNamespace(
+            candidates=candidates(8),
+            raw_candidate_count=8,
+            suppression_counters=dict.fromkeys(SUPPRESSION_CATEGORIES, 0),
+        )
 
-    monkeypatch.setattr(module, "DocumentAdapter", lambda provider: SimpleNamespace(adapt=adapt))
-    salt = tmp_path / "salt"
-    salt.write_bytes(b"fixture")
-    args = ["--corpus-manifest", "unused", "--leak-manifest", "unused", "--salt-file", str(salt)]
-    if leak:
-        with pytest.raises(ValueError, match="leak check"):
-            module.main(args)
-        assert not (tmp_path / "docs").exists()
-        assert not (tmp_path / "eval").exists()
-    else:
-        assert module.main(args) == 0
-        report = json.loads(
-            (tmp_path / "docs/benchmarks/verifier-shortlist-depth.json").read_text()
-        )
-        markdown = (tmp_path / "docs/benchmarks/verifier-shortlist-depth.md").read_text()
-        loaded = load_collection(
-            tmp_path / "eval/synthetic/verifier/baseline-collection-v1.json", corpus
-        )
-        assert loaded.shortlist_depth == report["chosen_n"] == 10
-        assert "Chosen N: 10" in markdown
-        assert calls.count("json") == 2
-    assert calls[:2] == ["seed", "pristine"]
-    assert calls.count("adapt") == 3
+    adapter = SimpleNamespace(adapt=adapt)
+    monkeypatch.setattr(module, "DocumentAdapter", lambda provider: adapter)
+    args = [
+        "--corpus-manifest",
+        "unused",
+        "--leak-manifest",
+        "unused",
+        "--salt-file",
+        str(salt),
+        "--checkpoint-dir",
+        str(tmp_path / "checkpoint"),
+    ]
+    return SimpleNamespace(
+        module=module,
+        args=args,
+        calls=calls,
+        manifest=manifest,
+        corpus=corpus,
+        config=config,
+        root=tmp_path,
+        fingerprint=fingerprint,
+        adapter=adapter,
+    )
+
+
+def test_preflight_rejects_fixed_text_before_adapter(runner, monkeypatch):
+    monkeypatch.setattr(runner.module, "render_markdown", lambda report: "Thresholds")
+    with pytest.raises(ValueError, match="Markdown output"):
+        runner.module.main(runner.args)
+    assert runner.calls == []
+
+
+def test_rendered_outputs_never_contain_forbidden_word(runner):
+    report = depth_curve(
+        {"a": candidates(8), "b": candidates(8)},
+        {item.item_id: item.gold_iris for item in runner.corpus.scoreable_items},
+    )
+    collection = build_baseline_collection(
+        runner.corpus,
+        dict.fromkeys(("a", "b", "n"), candidates(8)),
+        runner.config,
+        shortlist_depth=10,
+        adapter_source="fixture",
+        adapter_sha256="d" * 64,
+    )
+    for output in (
+        runner.module.render_markdown(report),
+        json.dumps(report),
+        json.dumps(collection.to_json()),
+    ):
+        assert "thresholds" not in output.lower()
 
 
 def test_baseline_empty_controls_and_zero_probability_survivors():
@@ -195,3 +245,119 @@ def test_baseline_empty_controls_and_zero_probability_survivors():
     assert [c.p for c in collection.decisions[0].candidates] == [1] * 6 + [0] * 2
     assert collection.decisions[-1].no_match_p == 0
     assert emit(collection.decisions[-1], Thresholds(0.5, None)) == ()
+
+
+def read_outputs(runner):
+    paths = (
+        "docs/benchmarks/verifier-shortlist-depth.json",
+        "docs/benchmarks/verifier-shortlist-depth.md",
+        "eval/synthetic/verifier/baseline-collection-v1.json",
+    )
+    outputs = [(runner.root / path).read_text() for path in paths]
+    assert all("thresholds" not in text.lower() for text in outputs)
+    return outputs
+
+
+def test_two_shards_match_single_run(runner):
+    from folio_eval.synthetic_checkpoint import checkpoint_item_key, shard_for_item
+
+    assert runner.module.main(runner.args) == 0
+    expected = read_outputs(runner)
+    assert runner.calls.count("adapt") == 3
+    for path in (runner.root / "docs/benchmarks").iterdir():
+        path.unlink()
+    (runner.root / "eval/synthetic/verifier/baseline-collection-v1.json").unlink()
+    args = [*runner.args, "--checkpoint-dir", str(runner.root / "sharded"), "--shard-count", "2"]
+    runner.calls.clear()
+    assert runner.module.main([*args, "--shard-index", "0"]) == 0
+    expected_count = sum(
+        shard_for_item(checkpoint_item_key(kind, item.item_id), 2) == 0
+        for kind, group in (
+            ("scoreable", runner.corpus.scoreable_items),
+            ("nomatch", runner.corpus.nomatch_items),
+        )
+        for item in group
+    )
+    assert runner.calls.count("adapt") == expected_count
+    assert not (runner.root / "docs/benchmarks/verifier-shortlist-depth.json").exists()
+    assert runner.module.main([*args, "--shard-index", "1"]) == 0
+    assert runner.calls.count("adapt") == 3
+    assert not (runner.root / "docs/benchmarks/verifier-shortlist-depth.json").exists()
+    runner.calls.clear()
+    assert runner.module.main([*args, "--finalize-only"]) == 0
+    assert runner.calls == []
+    assert read_outputs(runner) == expected
+    expected_curve = depth_curve(
+        dict.fromkeys(("a", "b", "n"), candidates(8)),
+        {i.item_id: i.gold_iris for i in runner.corpus.scoreable_items},
+    )
+    assert json.loads(expected[0])["curve"] == expected_curve["curve"]
+    payload = json.loads(expected[2])
+    direct = build_baseline_collection(
+        runner.corpus,
+        dict.fromkeys(("a", "b", "n"), candidates(8)),
+        runner.config,
+        shortlist_depth=expected_curve["chosen_n"],
+        adapter_source=payload["adapter_source"],
+        adapter_sha256=payload["adapter_sha256"],
+    )
+    assert payload == direct.to_json()
+    assert runner.module.main([*args, "--shard-index", "0"]) == 0
+    assert runner.calls == []  # Resuming an already durable shard also does no work.
+
+
+def test_finalize_failure_retains_synthetic_checkpoint(runner, monkeypatch):
+    from folio_eval.synthetic_checkpoint import SyntheticCheckpointStore
+    from folio_eval.synthetic_score import score_corpus_checkpointed
+
+    store = SyntheticCheckpointStore.create(
+        runner.root / "checkpoint",
+        fingerprint=runner.fingerprint,
+        shard_count=1,
+        expected_item_count=3,
+        retained_limit=200,
+    )
+    score_corpus_checkpointed(
+        runner.corpus, None, runner.config, store=store, adapter=runner.adapter
+    )
+    before = {path: path.read_bytes() for path in store.item_paths()}
+    assert len(before) == 3
+    runner.calls.clear()
+    original = runner.module.render_markdown
+
+    def broken(report):
+        # The preflight has zero retrieved gold; fail only on the completed report.
+        return original(report) + ("Thresholds" if report["chosen_n"] == 10 else "")
+
+    monkeypatch.setattr(runner.module, "render_markdown", broken)
+    with pytest.raises(ValueError, match=r"Markdown output.*re-finalize needs no recomputation"):
+        runner.module.main([*runner.args, "--finalize-only"])
+    assert not (runner.root / "docs").exists()
+    assert not (runner.root / "eval").exists()
+    assert {path: path.read_bytes() for path in store.item_paths()} == before
+    assert runner.calls == []
+    monkeypatch.setattr(runner.module, "render_markdown", original)
+    assert runner.module.main([*runner.args, "--finalize-only"]) == 0
+    assert runner.calls == []
+    assert {path: path.read_bytes() for path in store.item_paths()} == before
+    read_outputs(runner)
+
+
+def test_preflight_scans_json_keys(runner, monkeypatch):
+    original = runner.module.depth_curve
+
+    def broken(*args, **kwargs):
+        return {**original(*args, **kwargs), "thresholds": 0}
+
+    monkeypatch.setattr(runner.module, "depth_curve", broken)
+    with pytest.raises(ValueError, match="depth JSON output"):
+        runner.module.main(runner.args)
+    assert runner.calls == []
+
+
+def test_finalize_incomplete_never_adapts(runner):
+    from folio_eval.synthetic_checkpoint import CheckpointError
+
+    with pytest.raises(CheckpointError, match="incomplete"):
+        runner.module.main([*runner.args, "--finalize-only"])
+    assert runner.calls == []

@@ -17,11 +17,17 @@ from .answer_rule import (
     load_config,
     rank_candidates,
 )
-from .leakcheck import load_manifest, scan_json_value, scan_text
+from .leakcheck import Manifest, load_manifest, scan_json_value, scan_text
 from .selftest import assert_ontology_pin, ensure_hash_seed
-from .synthesize import LoadedCorpus, load_corpus
-from .synthetic_checkpoint import build_checkpoint_fingerprint
-from .synthetic_score import DEPTH_PROBE_MAX, DocumentAdapter, _assert_config
+from .synthesize import LoadedCorpus, SyntheticItem, load_corpus
+from .synthetic_checkpoint import SyntheticCheckpointStore, build_checkpoint_fingerprint
+from .synthetic_contract import SyntheticItemKind
+from .synthetic_score import (
+    DEPTH_PROBE_MAX,
+    DocumentAdapter,
+    _assert_config,
+    score_corpus_checkpointed,
+)
 from .verifier import CandidateProbability, DecisionCollection, PassageDecision
 
 DEPTHS = (6, 10, 20, 30, 50, 75, 100, 150, 200)
@@ -155,12 +161,54 @@ def render_markdown(report: Mapping[str, Any]) -> str:
             "",
             f"Unreachable gold relations at depth 200: {report['unreachable_gold_count_at_200']}.",
             "",
-            "Baseline replay: Thresholds(0.5, None); no abstention.",
+            "Baseline replay admits p >= 0.5 and never abstains.",
             "The deterministic baseline prompt hash identifies the canonical answer rule.",
             "",
         ]
     )
     return "\n".join(lines)
+
+
+def _artifacts(
+    corpus: LoadedCorpus,
+    config: AnswerRuleConfig,
+    survivors: Mapping[str, Sequence[CandidateLike]],
+    metadata: Mapping[str, str],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    report = depth_curve(
+        survivors, {item.item_id: item.gold_iris for item in corpus.scoreable_items}
+    )
+    collection = build_baseline_collection(
+        corpus,
+        survivors,
+        config,
+        shortlist_depth=report["chosen_n"],
+        adapter_source=metadata["adapter_source"],
+        adapter_sha256=metadata["adapter_sha256"],
+    )
+    report.update(metadata)
+    return report, collection.to_json()
+
+
+def _check_outputs(
+    report: Mapping[str, Any],
+    payload: Mapping[str, Any],
+    manifest: Manifest,
+    salt: bytes,
+) -> str:
+    markdown = render_markdown(report)
+    for name, value in (("depth JSON output", report), ("baseline JSON output", payload)):
+        if scan_json_value(value, manifest, salt):
+            raise ValueError(
+                f"leak check failed for {name}; checkpoint intact; "
+                "re-finalize needs no recomputation"
+            )
+    if scan_text(markdown, manifest, salt):
+        raise ValueError(
+            "leak check failed for Markdown output; checkpoint intact; "
+            "re-finalize needs no recomputation"
+        )
+    return markdown
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -171,59 +219,90 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     parser.add_argument("--leak-manifest", type=Path, required=True)
     parser.add_argument("--salt-file", type=Path, required=True)
+    parser.add_argument("--checkpoint-dir", type=Path, required=True)
+    parser.add_argument("--shard-count", type=int, default=1)
+    parser.add_argument("--shard-index", type=int, default=0)
+    parser.add_argument("--finalize-only", action="store_true")
     args = parser.parse_args(argv)
+    if args.shard_count < 1 or not 0 <= args.shard_index < args.shard_count:
+        parser.error("shard-index must be within the positive shard-count")
     ensure_hash_seed()
     corpus = load_corpus(args.corpus_manifest)
     config = load_config(args.config)
     _assert_config(corpus, config)
     if not corpus.manifest.scoreable:
         raise ValueError("corpus manifest is not scoreable")
-    # Reuse the scorer's exact unfiltered pristine-tree check and provenance.
+    # Preserve the scorer's unfiltered pristine-tree gate and exact fingerprint.
     fingerprint = build_checkpoint_fingerprint(corpus, config, repo_root=ROOT)
-    pin = assert_ontology_pin(corpus.manifest.ontology_cache_sha256)
     manifest = load_manifest(args.leak_manifest)
     salt = args.salt_file.read_bytes()
-    scan_text("", manifest, salt)  # Validate salt before expensive adapter work.
-    from folio import FOLIO
-
-    from folio_resolve.ontology import FolioPythonProvider
-
-    adapter = DocumentAdapter(FolioPythonProvider(_folio=FOLIO()))
-    survivors = {
-        item.item_id: adapter.adapt(item.text).candidates
-        for item in sorted(
-            (*corpus.scoreable_items, *corpus.nomatch_items), key=lambda row: row.item_id
-        )
-    }
-    report = depth_curve(
-        survivors, {item.item_id: item.gold_iris for item in corpus.scoreable_items}
-    )
-    adapter_path = Path(__file__).with_name("synthetic_score.py")
-    adapter_sha = hashlib.sha256(adapter_path.read_bytes()).hexdigest()
-    collection = build_baseline_collection(
-        corpus,
-        survivors,
-        config,
-        shortlist_depth=report["chosen_n"],
-        adapter_source=fingerprint.git_head,
-        adapter_sha256=adapter_sha,
-    )
-    report.update(
+    metadata = dict(
         corpus_content_sha256=corpus.manifest.content_sha256,
         nomatch_content_sha256=corpus.manifest.nomatch_content_sha256,
         adapter_source=fingerprint.git_head,
-        adapter_sha256=adapter_sha,
-        ontology_cache_sha256=pin.sha256,
+        adapter_sha256=hashlib.sha256(
+            Path(__file__).with_name("synthetic_score.py").read_bytes()
+        ).hexdigest(),
+        ontology_cache_sha256=corpus.manifest.ontology_cache_sha256,
         answer_rule_config_sha256=config.content_sha256(),
     )
-    payload = collection.to_json()
-    markdown = render_markdown(report)
-    # Check every artifact before writing any of them; no metadata exemptions.
-    for value in (report, payload):
-        if scan_json_value(value, manifest, salt):
-            raise ValueError("leak check failed for JSON output")
-    if scan_text(markdown, manifest, salt):
-        raise ValueError("leak check failed for Markdown output")
+    items = (*corpus.scoreable_items, *corpus.nomatch_items)
+    skeleton, baseline = _artifacts(
+        corpus,
+        config,
+        {item.item_id: () for item in items},
+        metadata,
+    )
+    # Include nested candidate keys even though the placeholder rankings are empty.
+    baseline["decisions"].append(
+        PassageDecision(
+            item_id="",
+            kind="scoreable",
+            shortlist=("",),
+            no_match_p=0.0,
+            candidates=(CandidateProbability("", 0.0),),
+        ).to_json()
+    )
+    _check_outputs(skeleton, baseline, manifest, salt)
+    store = SyntheticCheckpointStore.create(
+        args.checkpoint_dir,
+        fingerprint=fingerprint,
+        shard_count=args.shard_count,
+        expected_item_count=len(items),
+        retained_limit=max(DEPTH_PROBE_MAX, config.top_k),
+    )
+
+    def adapter_factory() -> DocumentAdapter:
+        assert_ontology_pin(corpus.manifest.ontology_cache_sha256)
+        from folio import FOLIO
+
+        from folio_resolve.ontology import FolioPythonProvider
+
+        return DocumentAdapter(FolioPythonProvider(_folio=FOLIO()))
+
+    result = score_corpus_checkpointed(
+        corpus,
+        None,
+        config,
+        store=store,
+        shard_index=args.shard_index,
+        finalize_only=args.finalize_only,
+        adapter_factory=adapter_factory,
+    )
+    # Sharded workers only persist items; publish once in the explicit finalizer.
+    if result is None or (args.shard_count > 1 and not args.finalize_only):
+        return 0
+    groups: tuple[tuple[SyntheticItemKind, Sequence[SyntheticItem]], ...] = (
+        ("scoreable", corpus.scoreable_items),
+        ("nomatch", corpus.nomatch_items),
+    )
+    survivors = {
+        item.item_id: store.load_item(kind, item.item_id).candidates
+        for kind, group in groups
+        for item in group
+    }
+    report, payload = _artifacts(corpus, config, survivors, metadata)
+    markdown = _check_outputs(report, payload, manifest, salt)
     outputs = {
         ROOT / "docs/benchmarks/verifier-shortlist-depth.json": json.dumps(
             report, indent=2, sort_keys=True
