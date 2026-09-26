@@ -11,6 +11,7 @@ from folio_eval.leakcheck import ScryptParams, build_manifest
 from folio_eval.verifier import load_collection
 from folio_eval.verifier_collect import (
     CodexRunner,
+    RenderStats,
     RunnerReply,
     collect,
     parse_events,
@@ -91,12 +92,95 @@ def test_tool_events_rejected(tmp_path, kind):
     assert all(d.state == 'failed' for d in result.decisions)
 
 
-@pytest.mark.parametrize('surface', ['https://folio.org/id', 'urn:folio:concept'])
+@pytest.mark.parametrize('surface', [
+    'https://folio.openlegalstandard.org/R123',
+    'folio.openlegalstandard.org/R123',
+    'http://lmss.sali.org/R123',
+    'lmss.sali.org/R123',
+    'HTTPS://FOLIO.OPENLEGALSTANDARD.ORG/R123',
+])
 def test_prompt_refuses_iri(surface):
     with pytest.raises(ValueError, match='IRI'):
         render_prompt(TEMPLATE, 'id', surface, ('wrong',), CONCEPTS)
     with pytest.raises(ValueError, match='IRI'):
         render_prompt(TEMPLATE, 'id', 'text', ('wrong',), {'wrong': ('Label', surface)})
+
+
+@pytest.mark.parametrize('field', ['label', 'definition'])
+def test_prompt_neutralizes_external_links(field):
+    text = 'Before https://www.ncsc.org/reference after\nhttp://example.org/page end'
+    label, definition = (text, 'Definition') if field == 'label' else ('Label', text)
+    prompt, _ = render_prompt(
+        TEMPLATE, 'id', 'text', ('wrong',), {'wrong': (label, definition)},
+    )
+    assert 'Before [link] after\\n[link] end' in prompt
+    assert 'https://' not in prompt and 'http://' not in prompt
+
+
+@pytest.mark.parametrize('surface', [
+    'https://folio.openlegalstandard.org/R123',
+    'folio.openlegalstandard.org/R123',
+    'http://lmss.sali.org/R123',
+    'lmss.sali.org/R123',
+    'HTTPS://FOLIO.OPENLEGALSTANDARD.ORG/R123',
+])
+def test_prompt_refuses_folio_iri_in_label(surface):
+    with pytest.raises(ValueError, match='IRI'):
+        render_prompt(TEMPLATE, 'id', 'text', ('wrong',), {'wrong': (surface, 'Definition')})
+
+
+def test_prompt_refuses_candidate_url_in_label():
+    iri = 'https://example.org/candidate'
+    with pytest.raises(ValueError, match='IRI'):
+        render_prompt(TEMPLATE, 'id', 'text', (iri,), {iri: (iri, 'Definition')})
+
+
+def test_replacement_count_includes_prompt_rejected_by_backstop():
+    stats = RenderStats()
+    with pytest.raises(ValueError, match='IRI'):
+        render_prompt(TEMPLATE, 'id', 'text', ('wrong',),
+                      {'wrong': ('Label', 'See https://example.org/page and lmss.sali.org/R123')},
+                      stats=stats)
+    assert stats.urls_replaced == 1
+
+
+@pytest.mark.parametrize('field,surface', [
+    ('definition', 'oasis:names:tc:legalxml:example'),
+    ('passage', 'Note:see the accompanying text'),
+])
+def test_prompt_preserves_non_folio_colon_text(field, surface):
+    concepts = {'wrong': ('Label', surface if field == 'definition' else 'Definition')}
+    prompt, _ = render_prompt(
+        TEMPLATE, 'id', surface if field == 'passage' else 'text', ('wrong',), concepts,
+    )
+    assert surface in prompt
+
+
+@pytest.mark.parametrize('field', ['template', 'passage', 'label', 'definition'])
+@pytest.mark.parametrize('iri', ['https://example.org/loaded-concept', 'urn:custom:loaded'])
+def test_prompt_refuses_exact_loaded_iri_anywhere(field, iri):
+    # The loaded concept need not be in this item's shortlist.
+    concepts = {
+        'wrong': (iri if field == 'label' else 'Label',
+                  iri if field == 'definition' else 'Definition'),
+        iri: ('Unused', 'Not shortlisted'),
+    }
+    with pytest.raises(ValueError, match='IRI'):
+        render_prompt(
+            TEMPLATE + (iri if field == 'template' else ''), 'id',
+            iri if field == 'passage' else 'text', ('wrong',), concepts,
+        )
+
+
+def test_collector_reports_replaced_urls(tmp_path, capsys):
+    c = corpus()
+    baseline = collection(c)
+    concepts = {**CONCEPTS, 'gold': ('Correct https://example.org/label',
+                                   'See https://www.ncsc.org/reference for details')}
+    collect(baseline, c, concepts, TEMPLATE, Fake(),
+            checkpoint=tmp_path / 'cp', runner_identity='fake', limit=1)
+    expected = 2 * sum('gold' in d.shortlist for d in baseline.decisions)
+    assert f'urls_replaced={expected}' in capsys.readouterr().out
 
 
 def test_real_runner_argv_fake_subprocess(tmp_path, monkeypatch):

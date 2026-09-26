@@ -23,7 +23,18 @@ from .verifier import (
 )
 
 SHUFFLE_SEED = 20260727
-IRI_RE = re.compile(r'\b[a-z][a-z0-9+.-]*:(?://|[^\s])', re.IGNORECASE)
+IRI_RE = re.compile(
+    r'(?<![a-z0-9.-])(?:folio\.openlegalstandard\.org|lmss\.sali\.org)(?![a-z0-9.-])',
+    re.IGNORECASE,
+)
+URL_RE = re.compile(r'https?://\S+', re.IGNORECASE)
+
+
+@dataclass
+class RenderStats:
+    """URL replacements across render attempts, including repeated concepts."""
+
+    urls_replaced: int = 0
 
 
 @dataclass(frozen=True)
@@ -133,6 +144,7 @@ def preflight_concepts(
 def render_prompt(
     template: str, item_id: str, passage: str, shortlist: tuple[str, ...],
     concepts: Mapping[str, tuple[str, str]],
+    *, stats: RenderStats | None = None,
 ) -> tuple[str, dict[str, str]]:
     if len(set(shortlist)) != len(shortlist):
         raise ValueError('duplicate shortlist concept')
@@ -144,9 +156,21 @@ def render_prompt(
     if len(ordered) > 1 and ordered == list(shortlist):
         ordered = ordered[1:] + ordered[:1]
     handles = {f'c{i:02d}': iri for i, iri in enumerate(ordered, 1)}
+    def neutralize_links(text: str) -> str:
+        # Sanitization must not hide FOLIO identifiers or known candidate IRIs.
+        for match in URL_RE.finditer(text):
+            url = match.group()
+            if IRI_RE.search(url) or any(iri in url for iri in concepts):
+                raise ValueError('rendered prompt contains an IRI')
+        sanitized, count = URL_RE.subn('[link]', text)
+        if stats is not None:
+            stats.urls_replaced += count
+        return sanitized
+
     rows = []
     for handle, iri in handles.items():
         label, definition = concepts[iri]
+        label, definition = neutralize_links(label), neutralize_links(definition)
         if not definition.strip():
             definition = '(no definition available)'
         rows.append({'handle': handle, 'label': label, 'definition': definition})
@@ -192,10 +216,13 @@ def collect(
     print('Shortlist concept preflight (unique IRIs): ' +
           ' '.join(f'{key}={value}' for key, value in counts.items()))
     texts = {item.item_id: item.text for item in (*corpus.scoreable_items, *corpus.nomatch_items)}
+    stats = RenderStats()
     prompts = {
-        d.item_id: render_prompt(template, d.item_id, texts[d.item_id], d.shortlist, concepts)
+        d.item_id: render_prompt(template, d.item_id, texts[d.item_id], d.shortlist, concepts,
+                                 stats=stats)
         for d in baseline.decisions
     }
+    print(f'Prompt rendering (all items): urls_replaced={stats.urls_replaced}')
     fingerprint = _digest({
         'baseline': baseline.to_json(), 'prompts': prompts, 'runner': runner_identity,
         'collector_sha256': hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
