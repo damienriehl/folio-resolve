@@ -406,6 +406,19 @@ def compare_collections(
     """Paired strict F1 on scoreable items; verify full coverage including controls."""
     if {d.item_id for d in collection.decisions} != {d.item_id for d in baseline.decisions}:
         raise ValueError("paired collection item-id sets differ")
+    for field in (
+        "shortlist_depth",
+        "adapter_source",
+        "adapter_sha256",
+        "corpus_content_sha256",
+        "nomatch_content_sha256",
+    ):
+        if getattr(collection, field) != getattr(baseline, field):
+            raise ValueError(f"paired collection {field} differs")
+    baseline_shortlists = {d.item_id: d.shortlist for d in baseline.decisions}
+    for decision in collection.decisions:
+        if decision.shortlist != baseline_shortlists[decision.item_id]:
+            raise ValueError(f"paired collection item {decision.item_id}: shortlist differs")
     after = score_collection(collection, corpus, thresholds=thresholds)
     before = score_collection(baseline, corpus, thresholds=baseline_thresholds)
     before_ids = {s.item_id for s in before.run.item_scores}

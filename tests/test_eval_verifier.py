@@ -259,6 +259,8 @@ def test_identical_baseline_delta_and_fixed_baseline_replay() -> None:
     coll = collection(c)
     fixed = Thresholds(0.5, None)
     compared = compare_collections(coll, coll, c, thresholds=fixed, baseline_thresholds=fixed)
+    assert compared.candidate.run.overall == score_collection(coll, c, thresholds=fixed).run.overall
+    assert compared.candidate.run.overall == compared.baseline.run.overall
     assert compared.delta.point == 0.0
     assert compared.delta.low <= 0 <= compared.delta.high
     assert compared.delta.n_resamples == 2000 and compared.delta.seed == 20260727
@@ -431,3 +433,37 @@ def test_nomatch_one_can_be_disabled() -> None:
     d = replace(collection(corpus()).decisions[-1], no_match_p=1.0)
     assert emit(d, Thresholds(0.5, 1.0)) == ()
     assert emit(d, Thresholds(0.5, None)) == ("gold",)
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("shortlist_depth", 25),
+        ("adapter_source", "other-run"),
+        ("adapter_sha256", "0" * 64),
+        ("corpus_content_sha256", "0" * 64),
+        ("nomatch_content_sha256", "0" * 64),
+    ],
+)
+def test_pairing_rejects_different_retrieval_provenance(field: str, value: object) -> None:
+    c = corpus()
+    baseline = collection(c)
+    arm = replace(baseline, **{field: value})
+    with pytest.raises(ValueError, match=field):
+        compare_collections(arm, baseline, c)
+
+
+@pytest.mark.parametrize("item_id", ["s0", "n0"])
+@pytest.mark.parametrize("shortlist", [("gold", "wrong"), ("other", "gold")])
+def test_pairing_rejects_different_shortlists(item_id: str, shortlist: tuple[str, ...]) -> None:
+    c = corpus()
+    baseline = collection(c)
+    arm = replace(
+        baseline,
+        decisions=tuple(
+            replace(d, shortlist=shortlist) if d.item_id == item_id else d
+            for d in baseline.decisions
+        ),
+    )
+    with pytest.raises(ValueError, match=f"{item_id}.*shortlist"):
+        compare_collections(arm, baseline, c)

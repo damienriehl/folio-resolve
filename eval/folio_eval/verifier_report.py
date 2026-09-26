@@ -30,6 +30,7 @@ from .leakcheck import Manifest, load_manifest, scan_json_value, scan_text
 from .selftest import ensure_hash_seed
 from .synthesize import LoadedCorpus, load_corpus
 from .verifier import (
+    DecisionCollection,
     PairedVerifierResult,
     VerifierScoreResult,
     compare_collections,
@@ -125,6 +126,31 @@ def grader_mix(corpus: LoadedCorpus) -> dict[str, Any]:
         ),
         "scored_items_without_votes": scored_without_votes,
     }
+
+
+def validate_depth_report(
+    depth: Mapping[str, Any], corpus: LoadedCorpus, baseline: DecisionCollection
+) -> None:
+    """Bind the retrieval curve to the loaded corpus and deterministic baseline."""
+    corpus_fields = {
+        "corpus_content_sha256": corpus.manifest.content_sha256,
+        "nomatch_content_sha256": corpus.manifest.nomatch_content_sha256,
+        "ontology_cache_sha256": corpus.manifest.ontology_cache_sha256,
+        "answer_rule_config_sha256": corpus.manifest.answer_rule_config_sha256,
+    }
+    baseline_fields = {
+        "chosen_n": baseline.shortlist_depth,
+        "corpus_content_sha256": baseline.corpus_content_sha256,
+        "nomatch_content_sha256": baseline.nomatch_content_sha256,
+        "adapter_source": baseline.adapter_source,
+        "adapter_sha256": baseline.adapter_sha256,
+        # The depth writer uses the answer-rule config hash as the baseline prompt hash.
+        "answer_rule_config_sha256": baseline.prompt_template_sha256,
+    }
+    for source, fields in (("corpus", corpus_fields), ("baseline", baseline_fields)):
+        for field, expected in fields.items():
+            if depth.get(field) != expected:
+                raise ValueError(f"depth report {field} differs from {source}")
 
 
 def build_report(
@@ -361,6 +387,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     arm = load_collection(args.arm, corpus)
     baseline = load_collection(args.baseline, corpus)
     depth = json.loads(args.depth.read_text(encoding="utf-8"))
+    validate_depth_report(depth, corpus, baseline)
     if arm.shortlist_depth != depth["chosen_n"] or baseline.shortlist_depth != depth["chosen_n"]:
         raise ValueError("collection depth differs from chosen N")
     result = compare_collections(arm, baseline, corpus)

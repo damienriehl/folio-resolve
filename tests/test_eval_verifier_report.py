@@ -180,9 +180,21 @@ def test_pristine_gate_includes_untracked(monkeypatch: pytest.MonkeyPatch) -> No
         report.require_pristine(Path("."))
 
 
+@pytest.mark.parametrize(
+    "bad_field",
+    [
+        None,
+        "corpus_content_sha256",
+        "nomatch_content_sha256",
+        "adapter_source",
+        "adapter_sha256",
+        "answer_rule_config_sha256",
+        "ontology_cache_sha256",
+    ],
+)
 @pytest.mark.parametrize("record", [False, True])
 def test_runner_fixture_replay(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, record: bool
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, record: bool, bad_field: str | None
 ) -> None:
     """Run CLI orchestration on in-memory fixture collections; never a live report."""
     monkeypatch.setenv("PYTHONHASHSEED", "0")
@@ -196,18 +208,36 @@ def test_runner_fixture_replay(
     salt = tmp_path / "salt"
     salt.write_bytes(b"test")
     depth = tmp_path / "depth.json"
-    depth.write_text(
-        json.dumps(
-            {
-                "chosen_n": 24,
-                "unreachable_gold_count_at_200": 0,
-                "curve": {"24": {"unreachable_gold_count": 0}},
-            }
-        )
+    c = corpus()
+    baseline = collection(c)
+    depth_payload = {
+        "chosen_n": 24,
+        "unreachable_gold_count_at_200": 0,
+        "curve": {"24": {"unreachable_gold_count": 0}},
+        "corpus_content_sha256": c.manifest.content_sha256,
+        "nomatch_content_sha256": c.manifest.nomatch_content_sha256,
+        "adapter_source": baseline.adapter_source,
+        "adapter_sha256": baseline.adapter_sha256,
+        "answer_rule_config_sha256": baseline.prompt_template_sha256,
+        "ontology_cache_sha256": c.manifest.ontology_cache_sha256,
+    }
+    # The baseline prompt hash identifies the deterministic answer rule.
+    c = replace(
+        c, manifest=replace(c.manifest, answer_rule_config_sha256=baseline.prompt_template_sha256)
     )
+    monkeypatch.setattr(report, "load_corpus", lambda path: c)
+    if bad_field:
+        depth_payload[bad_field] = "0" * 64
+    depth.write_text(json.dumps(depth_payload))
     argv = ["--arm", "fixture", "--depth", str(depth), "--salt-file", str(salt)]
     if record:
         argv.append("--record-experiment")
+    if bad_field:
+        with pytest.raises(ValueError, match=bad_field):
+            report.main(argv)
+        assert events == (["pristine"] if record else [])
+        assert not (tmp_path / "docs").exists()
+        return
     assert report.main(argv) == 0
     assert events == (["pristine", "record"] if record else [])
     output = json.loads((tmp_path / "docs/benchmarks/verifier-ceiling.json").read_text())
