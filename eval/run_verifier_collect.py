@@ -25,13 +25,15 @@ def load_concepts(path: Path, expected_sha256: str) -> dict[str, tuple[str, str]
         raise ValueError('ontology cache hash differs from corpus manifest')
     rdf = '{http://www.w3.org/1999/02/22-rdf-syntax-ns#}'
     skos = '{http://www.w3.org/2004/02/skos/core#}'
+    rdfs = '{http://www.w3.org/2000/01/rdf-schema#}'
     result = {}
     for node in ET.fromstring(raw).iter():
         iri = node.get(rdf + 'about')
         if iri:
-            label = node.findtext(skos + 'prefLabel')
-            definition = node.findtext(skos + 'definition')
-            if label and definition:
+            # Match folio_resolve.ontology._owl_to_concept's display label.
+            label = node.findtext(rdfs + 'label') or node.findtext(skos + 'prefLabel')
+            definition = node.findtext(skos + 'definition') or ''
+            if label:
                 result[iri] = (label, definition)
     return result
 

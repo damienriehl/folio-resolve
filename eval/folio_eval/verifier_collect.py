@@ -7,7 +7,7 @@ import random
 import re
 import subprocess
 import tempfile
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Protocol
@@ -115,12 +115,28 @@ def parse_events(reply: RunnerReply) -> tuple[str, str]:
     return model, final
 
 
+def preflight_concepts(
+    shortlists: Iterable[tuple[str, ...]], concepts: Mapping[str, tuple[str, str]],
+) -> dict[str, int]:
+    """Validate all shortlisted labels and count unique IRIs, without running a model."""
+    iris = {iri for shortlist in shortlists for iri in shortlist}
+    unresolved = sorted(iri for iri in iris if iri not in concepts or not concepts[iri][0].strip())
+    if unresolved:
+        raise ValueError(
+            f'{len(unresolved)} unresolved shortlisted concepts (missing label); '
+            f'first {min(5, len(unresolved))}: {", ".join(unresolved[:5])}'
+        )
+    return {'resolved': len(iris), 'unresolved': 0,
+            'missing_definition': sum(not concepts[iri][1].strip() for iri in iris)}
+
+
 def render_prompt(
     template: str, item_id: str, passage: str, shortlist: tuple[str, ...],
     concepts: Mapping[str, tuple[str, str]],
 ) -> tuple[str, dict[str, str]]:
     if len(set(shortlist)) != len(shortlist):
         raise ValueError('duplicate shortlist concept')
+    preflight_concepts((shortlist,), concepts)
     ordered = list(shortlist)
     seed = hashlib.sha256(f'{SHUFFLE_SEED}:{item_id}'.encode()).digest()
     random.Random(int.from_bytes(seed, 'big')).shuffle(ordered)
@@ -131,8 +147,8 @@ def render_prompt(
     rows = []
     for handle, iri in handles.items():
         label, definition = concepts[iri]
-        if not label.strip() or not definition.strip():
-            raise ValueError('concept requires a label and FOLIO definition')
+        if not definition.strip():
+            definition = '(no definition available)'
         rows.append({'handle': handle, 'label': label, 'definition': definition})
     fields = {'passage': json.dumps(passage, ensure_ascii=False),
               'candidates': json.dumps(rows, ensure_ascii=False)}
@@ -171,6 +187,10 @@ def collect(
     baseline.validate(corpus)
     if limit is not None and limit < 1:
         raise ValueError('limit must be positive')
+    counts = preflight_concepts((d.shortlist for d in baseline.decisions), concepts)
+    # U2 has no metadata field for this count; include it even for limited/resumed runs.
+    print('Shortlist concept preflight (unique IRIs): ' +
+          ' '.join(f'{key}={value}' for key, value in counts.items()))
     texts = {item.item_id: item.text for item in (*corpus.scoreable_items, *corpus.nomatch_items)}
     prompts = {
         d.item_id: render_prompt(template, d.item_id, texts[d.item_id], d.shortlist, concepts)

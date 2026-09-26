@@ -218,3 +218,65 @@ def test_ontology_loader_and_cli_fake(tmp_path, monkeypatch):
     assert cli.main(args, runner=fake) == 0
     assert fake.calls == 15
     assert load_collection(output, c).model_id == 'reported-model'
+
+
+def test_owl_display_labels_and_optional_definitions(tmp_path: Path) -> None:
+    import hashlib
+
+    from run_verifier_collect import load_concepts
+
+    owl = tmp_path / 'labels.owl'
+    owl.write_text('''<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+        xmlns:rdfs="http://www.w3.org/2000/01/rdf-schema#"
+        xmlns:skos="http://www.w3.org/2004/02/skos/core#">
+        <rdf:Description rdf:about="https://folio.org/rdfs-only">
+          <rdfs:label>Negative Pledge</rdfs:label>
+          <skos:definition>A restriction</skos:definition></rdf:Description>
+        <rdf:Description rdf:about="https://folio.org/no-definition">
+          <skos:prefLabel>Preferred Only</skos:prefLabel></rdf:Description>
+        <rdf:Description rdf:about="https://folio.org/both">
+          <rdfs:label>Display Label</rdfs:label><skos:prefLabel>Preferred Label</skos:prefLabel>
+          <skos:definition>Both labels</skos:definition></rdf:Description></rdf:RDF>''')
+    concepts = load_concepts(owl, hashlib.sha256(owl.read_bytes()).hexdigest())
+    prompt, _ = render_prompt(TEMPLATE, 'id', 'public text', (
+        'https://folio.org/rdfs-only', 'https://folio.org/no-definition',
+        'https://folio.org/both',
+    ), concepts)
+    assert 'Negative Pledge' in prompt
+    assert 'Preferred Only' in prompt
+    assert 'Display Label' in prompt and 'Preferred Label' not in prompt
+    assert '(no definition available)' in prompt
+
+
+@pytest.mark.parametrize('blank_label', [None, '', '   '])
+def test_unresolved_shortlist_preflight_before_runner(
+    tmp_path: Path, blank_label: str | None,
+) -> None:
+    c = corpus()
+    baseline = collection(c)
+    # Only the final item has the unresolved IRI: even --limit must check it.
+    missing = 'https://folio.org/unresolvable'
+    last = replace(baseline.decisions[-1], shortlist=(missing,), candidates=(), state='failed',
+                   no_match_p=None)
+    baseline = replace(baseline, decisions=(*baseline.decisions[:-1], last))
+    concepts = dict(CONCEPTS)
+    if blank_label is not None:
+        concepts[missing] = (blank_label, 'Definition')
+    fake = Fake()
+    with pytest.raises(ValueError, match=f'1 unresolved shortlisted concept.*{missing}'):
+        collect(baseline, c, concepts, TEMPLATE, fake, checkpoint=tmp_path / 'cp',
+                runner_identity='fake', limit=1)
+    assert fake.calls == 0
+    assert not (tmp_path / 'cp').exists()
+
+
+def test_preflight_reports_unique_missing_definitions(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+    concepts = {**CONCEPTS, 'gold': ('Correct', '')}
+    fake = Fake()
+    c = corpus()
+    result = collect(collection(c), c, concepts, TEMPLATE, fake,
+                     checkpoint=tmp_path / 'cp', runner_identity='fake', limit=1)
+    assert result is None and fake.calls == 1
+    assert 'resolved=2 unresolved=0 missing_definition=1' in capsys.readouterr().out
