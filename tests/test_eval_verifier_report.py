@@ -11,6 +11,7 @@ import pytest
 from folio_eval import experiment
 from folio_eval import verifier_report as report
 from folio_eval.leakcheck import Manifest, build_manifest, scan_json_value, scan_text
+from folio_eval.synthesize import LoadedCorpus
 from folio_eval.verifier import PairedVerifierResult, compare_collections
 from test_eval_verifier import collection, corpus
 
@@ -76,24 +77,44 @@ def test_preflight_collision_before_work(tmp_path: Path, monkeypatch: pytest.Mon
         report.main(["--arm", "unused", "--salt-file", str(salt)])
 
 
-def test_outputs_and_provenance(tmp_path: Path) -> None:
-    provenance = tmp_path / "corpus.jsonl"
-    provenance.write_text(
-        json.dumps(
-            {
-                "provenance": {
-                    "grader_votes": [
-                        {"model_family": "codex"},
-                        {"model_family": "claude"},
-                    ]
-                }
-            }
-        )
-        + "\n"
+def grader_corpus() -> LoadedCorpus:
+    c = corpus()
+    scored = replace(
+        c.corpus_items[0],
+        provenance={"grader_votes": [{"model_family": "codex"}, {"model_family": "claude"}]},
     )
-    mix = report.grader_mix(provenance)
-    assert mix["votes_by_family"] == {"codex": 1, "claude": 1}
-    assert mix["passage_count"] == 1
+    unscored = replace(c.corpus_items[1], verification="needs_review")
+    unscored_with_votes = replace(
+        c.corpus_items[2],
+        verification="needs_review",
+        provenance={"grader_votes": [{"model_family": "excluded"}]},
+    )
+    return replace(c, corpus_items=(scored, unscored, unscored_with_votes))
+
+
+@pytest.mark.parametrize("provenance", [{}, {"grader_votes": []}])
+def test_scored_items_without_votes_are_counted(provenance: dict[str, Any]) -> None:
+    c = grader_corpus()
+    missing = replace(corpus().corpus_items[3], provenance=provenance)
+    mix = report.grader_mix(replace(c, corpus_items=(*c.corpus_items, missing)))
+    assert mix == {
+        "passage_count": 2,
+        "votes_by_family": {"claude": 1, "codex": 1},
+        "passages_by_mix": {"claude: 1, codex: 1": 1},
+        "corpus_rows_without_votes": 2,
+        "scored_items_without_votes": 1,
+    }
+
+
+def test_outputs_and_provenance(tmp_path: Path) -> None:
+    mix = report.grader_mix(grader_corpus())
+    assert mix == {
+        "passage_count": 1,
+        "votes_by_family": {"claude": 1, "codex": 1},
+        "passages_by_mix": {"claude: 1, codex: 1": 1},
+        "corpus_rows_without_votes": 1,
+        "scored_items_without_votes": 0,
+    }
     depth = {
         "chosen_n": 24,
         "unreachable_gold_count_at_200": 7,
@@ -169,7 +190,6 @@ def test_runner_fixture_replay(
     monkeypatch.setattr(report, "load_manifest", lambda path: manifest())
     monkeypatch.setattr(report, "load_corpus", lambda path: corpus())
     monkeypatch.setattr(report, "load_collection", lambda path, c: collection(c))
-    monkeypatch.setattr(report, "grader_mix", lambda path: {"passage_count": 0})
     events: list[str] = []
     monkeypatch.setattr(report, "require_pristine", lambda root: events.append("pristine"))
     monkeypatch.setattr(report, "record_experiment", lambda *args: events.append("record"))
@@ -191,6 +211,8 @@ def test_runner_fixture_replay(
     assert report.main(argv) == 0
     assert events == (["pristine", "record"] if record else [])
     output = json.loads((tmp_path / "docs/benchmarks/verifier-ceiling.json").read_text())
+    assert output["grader_mix"]["scored_items_without_votes"] == 10
+    assert output["grader_mix"]["corpus_rows_without_votes"] == 10
     assert output["decision"]["paired_delta"]["n_resamples"] == 2000
     assert output["decision"]["paired_delta"]["seed"] == 20260727
     assert output["decision"]["paired_delta"]["alpha"] == 0.05

@@ -15,7 +15,7 @@ from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from .experiment import (
     DEFAULT_PENDING_PATH,
@@ -98,22 +98,32 @@ def _score_payload(score: VerifierScoreResult) -> dict[str, Any]:
     }
 
 
-def grader_mix(path: Path) -> dict[str, Any]:
-    """Count votes and per-passage mixes without copying labels or passage text."""
+def grader_mix(corpus: LoadedCorpus) -> dict[str, Any]:
+    """Count scored-cohort votes; report missing votes without exposing corpus text.
+
+    Passage count includes scored items without votes, but mix patterns do not.
+    The corpus-wide missing count excludes the separate no-match control slice.
+    """
     totals: Counter[str] = Counter()
     patterns: Counter[str] = Counter()
-    passages = 0
-    for line in path.read_text(encoding="utf-8").splitlines():
-        row = json.loads(line)
-        votes = row["provenance"]["grader_votes"]
+    scored_items = corpus.scoreable_items
+    scored_without_votes = 0
+    for item in scored_items:
+        votes = cast(Sequence[Mapping[str, Any]], item.provenance.get("grader_votes") or ())
+        if not votes:
+            scored_without_votes += 1
+            continue
         counts = Counter(str(vote["model_family"]) for vote in votes)
         totals.update(counts)
         patterns[", ".join(f"{family}: {count}" for family, count in sorted(counts.items()))] += 1
-        passages += 1
     return {
-        "passage_count": passages,
+        "passage_count": len(scored_items),
         "votes_by_family": dict(sorted(totals.items())),
         "passages_by_mix": dict(sorted(patterns.items())),
+        "corpus_rows_without_votes": sum(
+            not item.provenance.get("grader_votes") for item in corpus.corpus_items
+        ),
+        "scored_items_without_votes": scored_without_votes,
     }
 
 
@@ -229,6 +239,8 @@ def preflight(manifest: Manifest, salt: bytes) -> None:
                     "passage_count": 0,
                     "votes_by_family": {"codex": 0, "claude": 0},
                     "passages_by_mix": {"": 0},
+                    "corpus_rows_without_votes": 0,
+                    "scored_items_without_votes": 0,
                 },
                 "grader_caveat": CAVEAT,
                 "verdict_rule": RULE,
@@ -352,7 +364,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if arm.shortlist_depth != depth["chosen_n"] or baseline.shortlist_depth != depth["chosen_n"]:
         raise ValueError("collection depth differs from chosen N")
     result = compare_collections(arm, baseline, corpus)
-    payload = build_report(result, depth, grader_mix(corpus.manifest.corpus_path))
+    payload = build_report(result, depth, grader_mix(corpus))
     _check_outputs(payload, manifest, salt)
     if args.record_experiment:
         record_experiment(result, payload["decision"], corpus, manifest, salt)
