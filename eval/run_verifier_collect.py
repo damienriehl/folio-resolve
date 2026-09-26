@@ -41,7 +41,8 @@ def load_concepts(path: Path, expected_sha256: str) -> dict[str, tuple[str, str]
 def main(argv: list[str] | None = None, *, runner: Runner | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--shortlists', type=Path, required=True, help='U1 baseline U2 collection')
-    parser.add_argument('--model', required=True, help='Requested model; provenance requires reported ID')
+    parser.add_argument('--model', required=True,
+                        help='Requested model; recorded as requested when CLI omits served identity')
     parser.add_argument('--checkpoint', type=Path, required=True)
     parser.add_argument('--salt-file', type=Path, required=True)
     parser.add_argument('--corpus-manifest', type=Path,
@@ -54,6 +55,8 @@ def main(argv: list[str] | None = None, *, runner: Runner | None = None) -> int:
     parser.add_argument('--out', type=Path,
                         default=ROOT / 'eval/synthetic/verifier/codex-collection-v1.json')
     parser.add_argument('--limit', type=int, help='Maximum new items; resume without this flag to finish')
+    parser.add_argument('--jobs', type=int, choices=range(1, 9), default=1,
+                        help='Concurrent items (1-8; default 1)')
     args = parser.parse_args(argv)
     corpus = load_corpus(args.corpus_manifest)
     baseline = load_collection(args.shortlists, corpus)
@@ -65,7 +68,7 @@ def main(argv: list[str] | None = None, *, runner: Runner | None = None) -> int:
     result = collect(
         baseline, corpus, concepts, args.template.read_bytes().decode('utf-8'),
         runner if runner is not None else CodexRunner(args.model),
-        checkpoint=args.checkpoint, runner_identity=args.model, limit=args.limit,
+        checkpoint=args.checkpoint, runner_identity=args.model, limit=args.limit, jobs=args.jobs,
     )
     if result is None:
         print('Smoke limit reached; checkpoints saved; no collection published.')

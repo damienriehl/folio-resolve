@@ -3,9 +3,12 @@ from __future__ import annotations
 
 import json
 import subprocess
+import threading
+import time
 from dataclasses import replace
 from pathlib import Path
 
+import folio_eval.verifier_collect as collector
 import pytest
 from folio_eval.leakcheck import ScryptParams, build_manifest
 from folio_eval.verifier import load_collection
@@ -22,6 +25,16 @@ from test_eval_verifier import collection, corpus
 
 TEMPLATE = 'Judge tags.\n{passage}\n{candidates}'
 CONCEPTS = {'wrong': ('Other', 'Another concept'), 'gold': ('Correct', 'A concept')}
+
+
+@pytest.fixture(autouse=True)
+def fake_cli_version(monkeypatch):
+    monkeypatch.setattr(collector, '_cli_version', lambda: 'codex-cli test-version', raising=False)
+
+
+def checkpoints(tmp_path):
+    return [json.loads(p.read_text()) for p in (tmp_path / 'checkpoint').rglob('*.json')
+            if p.name != 'manifest.json']
 
 
 def events(text: str, extra: list[dict] | None = None) -> str:
@@ -90,6 +103,7 @@ def test_tool_events_rejected(tmp_path, kind):
     result = run(tmp_path, fake)
     assert fake.calls == 45
     assert all(d.state == 'failed' for d in result.decisions)
+    assert all(p['failure_reasons'] == ['tool_event'] * 3 for p in checkpoints(tmp_path))
 
 
 @pytest.mark.parametrize('surface', [
@@ -198,8 +212,8 @@ def test_real_runner_argv_fake_subprocess(tmp_path, monkeypatch):
     assert parse_events(reply)[0] == 'reported-model'
 
 
-def test_missing_reported_model_refused():
-    with pytest.raises(ValueError, match='model'):
+def test_missing_final_message_refused():
+    with pytest.raises(ValueError, match='no_final_message'):
         parse_events(RunnerReply('{"type":"turn.completed"}'))
 
 
@@ -258,7 +272,7 @@ def test_real_template_and_iri_mapping(tmp_path):
 
 def test_corrupt_checkpoint_refused(tmp_path):
     run(tmp_path, Fake())
-    path = next(p for p in (tmp_path / 'checkpoint').glob('*.json') if p.name != 'manifest.json')
+    path = next(p for p in (tmp_path / 'checkpoint').rglob('*.json') if p.name != 'manifest.json')
     payload = json.loads(path.read_text())
     payload['decision']['no_match_p'] = .77
     path.write_text(json.dumps(payload))
@@ -302,6 +316,10 @@ def test_ontology_loader_and_cli_fake(tmp_path, monkeypatch):
     assert cli.main(args, runner=fake) == 0
     assert fake.calls == 15
     assert load_collection(output, c).model_id == 'reported-model'
+    serial_bytes = output.read_bytes()
+    parallel_args = [*args, '--checkpoint', str(tmp_path / 'parallel-cp'), '--jobs', '3']
+    assert cli.main(parallel_args, runner=Fake()) == 0
+    assert output.read_bytes() == serial_bytes
 
 
 def test_owl_display_labels_and_optional_definitions(tmp_path: Path) -> None:
@@ -364,3 +382,208 @@ def test_preflight_reports_unique_missing_definitions(
                      checkpoint=tmp_path / 'cp', runner_identity='fake', limit=1)
     assert result is None and fake.calls == 1
     assert 'resolved=2 unresolved=0 missing_definition=1' in capsys.readouterr().out
+
+
+class Observed(Fake):
+    def __call__(self, prompt, cwd):
+        reply = super().__call__(prompt, cwd)
+        rows = [json.loads(line) for line in reply.events.splitlines()]
+        rows[0] = {'type': 'thread.started', 'thread_id': 'test-thread'}
+        rows.insert(1, {'type': 'turn.started'})
+        rows[2]['item']['id'] = 'item_0'
+        return RunnerReply('\n'.join(json.dumps(row) for row in rows))
+
+
+def test_observed_stream_requested_provenance(tmp_path):
+    fake = Observed()
+    result = run(tmp_path, fake)
+    assert fake.calls == 15
+    assert all(d.state == 'decided' for d in result.decisions)
+    assert result.model_id == (
+        'fake-v1 (requested; codex-cli test-version; served model not reported by CLI)')
+    for payload in checkpoints(tmp_path):
+        assert payload['failure_reasons'] == []
+        assert payload['model_mismatch'] is False
+        assert payload['requested_model'] == 'fake-v1'
+        assert payload['cli_version'] == 'codex-cli test-version'
+
+
+def test_reported_model_mismatch_flag(tmp_path, capsys):
+    result = run(tmp_path, Fake())
+    assert result.model_id == 'reported-model'
+    assert all(p['model_mismatch'] is True for p in checkpoints(tmp_path))
+    assert 'Model mismatch:' in capsys.readouterr().out
+
+
+@pytest.mark.parametrize('bad,reason', [
+    ('not json', 'malformed_json'),
+    ('{"no_match_p":0,"no_match_p":1,"candidates":{}}', 'malformed_json'),
+    ('[]', 'invalid_response'),
+    ('{"no_match_p":0,"candidates":{"c01":0}}', 'missing_handles'),
+    ('{"no_match_p":0,"candidates":{"c01":2,"c02":0}}', 'probability_out_of_range'),
+    ('{"no_match_p":true,"candidates":{"c01":0,"c02":0}}', 'probability_out_of_range'),
+    ('{"no_match_p":NaN,"candidates":{"c01":0,"c02":0}}', 'probability_out_of_range'),
+    (json.dumps({'no_match_p': 10 ** 400, 'candidates': {'c01': 0, 'c02': 0}}),
+     'probability_out_of_range'),
+])
+def test_rejection_reasons(tmp_path, capsys, bad, reason):
+    run(tmp_path, Fake(bad), limit=1)
+    payload, = checkpoints(tmp_path)
+    assert payload['failure_reasons'] == [reason] * 3
+    assert payload['decision']['state'] == 'failed'
+    assert 'failure_reasons' not in payload['decision']
+    assert f'"{reason}": 3' in capsys.readouterr().out
+
+
+@pytest.mark.parametrize('reply,reason', [
+    ('not json', 'malformed_json'),
+    ('[]', 'invalid_event_stream'),
+    (events('{}', [{'type': 'error'}]), 'rejected_event_type'),
+    (events('{}', [{'type': 'item.started', 'item': {'type': 'web_search'}}]), 'tool_event'),
+    ('{"type":"turn.completed"}', 'no_final_message'),
+    (events('{}').split('\n{"type": "turn.completed"')[0], 'no_turn_completion'),
+    (events('{}', [{'type': 'turn.started', 'model': 'different'}]), 'inconsistent_model'),
+    (events('{}', [{'type': 'turn.started', 'model_id': []}]), 'invalid_model'),
+])
+def test_event_rejection_reasons(tmp_path, reply, reason):
+    run(tmp_path, lambda *_: RunnerReply(reply), limit=1)
+    assert checkpoints(tmp_path)[0]['failure_reasons'] == [reason] * 3
+
+
+@pytest.mark.parametrize('error,reason', [
+    (subprocess.TimeoutExpired('fake', 1), 'timeout'),
+    (subprocess.CalledProcessError(1, 'fake'), 'nonzero_exit'),
+    (OSError('fake'), 'os_error'),
+    (subprocess.SubprocessError('fake'), 'subprocess_error'),
+    (TypeError('fake'), 'invalid_response'),
+    (ValueError('fake'), 'invalid_response'),
+])
+def test_runner_rejection_reasons(tmp_path, capsys, error, reason):
+    def reject(*_):
+        raise error
+    result = run(tmp_path, reject)
+    assert all(d.state == 'failed' for d in result.decisions)
+    assert all(p['failure_reasons'] == [reason] * 3 for p in checkpoints(tmp_path))
+    assert f'"{reason}": 45' in capsys.readouterr().out
+
+
+def test_recovered_attempt_retains_reason_on_resume(tmp_path, capsys):
+    class Recover(Observed):
+        def __call__(self, prompt, cwd):
+            self.bad = 'bad' if self.calls == 0 else None
+            return super().__call__(prompt, cwd)
+    result = run(tmp_path, Recover())
+    assert sum(len(p['failure_reasons']) for p in checkpoints(tmp_path)) == 1
+    capsys.readouterr()
+    assert run(tmp_path, Observed()) == result
+    assert '"malformed_json": 1' in capsys.readouterr().out
+
+
+def test_old_fingerprint_recomputed(tmp_path):
+    cp = tmp_path / 'checkpoint'
+    cp.mkdir()
+    old_manifest = '{"fingerprint":"old-collector-fingerprint"}'
+    (cp / 'manifest.json').write_text(old_manifest)
+    for source in collection(corpus()).decisions[:2]:
+        payload = {'fingerprint': 'old-collector-fingerprint', 'models': [],
+                   'decision': replace(source, state='failed', no_match_p=None,
+                                       candidates=()).to_json()}
+        old_item = cp / f'{collector._digest(source.item_id)}.json'
+        old_item.write_text(json.dumps({**payload, 'sha256': collector._digest(payload)}))
+    fake = Observed()
+    result = run(tmp_path, fake)
+    assert fake.calls == 15 and all(d.state == 'decided' for d in result.decisions)
+    assert (cp / 'manifest.json').read_text() == old_manifest
+    resumed = Observed()
+    assert run(tmp_path, resumed) == result and resumed.calls == 0
+
+
+def test_jobs_bounded_and_output_identical(tmp_path):
+    class Concurrent(Observed):
+        def __init__(self):
+            super().__init__()
+            self.lock = threading.Lock()
+            self.active = self.peak = 0
+            self.barrier = threading.Barrier(3)
+
+        def __call__(self, prompt, cwd):
+            with self.lock:
+                self.active += 1
+                self.peak = max(self.peak, self.active)
+                reply = super().__call__(prompt, cwd)
+                index = self.calls
+            if index <= 3:
+                self.barrier.wait(timeout=5)
+            time.sleep(.002 * (4 - index % 3))
+            with self.lock:
+                self.active -= 1
+            return reply
+    serial = run(tmp_path / 'serial', Observed(), jobs=1)
+    fake = Concurrent()
+    parallel = run(tmp_path / 'parallel', fake, jobs=3)
+    assert fake.peak == 3 and fake.calls == 15
+    salt = b'test salt'
+    manifest = build_manifest(['private company'], salt, gold_version='gold_v1', gold_content_sha256='a' * 64,
+                              scrypt_params=ScryptParams(n=16, r=1, p=1, dklen=16, test_params=True))
+    paths = [tmp_path / 'serial.json', tmp_path / 'parallel.json']
+    for path, result in zip(paths, [serial, parallel], strict=True):
+        write_collection(path, result, corpus(), manifest, salt)
+    assert paths[0].read_bytes() == paths[1].read_bytes()
+    assert all(p['decision']['state'] == 'decided' for p in checkpoints(tmp_path / 'parallel'))
+
+
+def test_parallel_limit_resume(tmp_path):
+    fake = Observed()
+    assert run(tmp_path, fake, jobs=3, limit=2) is None
+    assert fake.calls == 2
+    resumed = Observed()
+    assert run(tmp_path, resumed, jobs=3) is not None
+    assert resumed.calls == 13
+
+
+@pytest.mark.parametrize('jobs', [0, -1, 9])
+def test_jobs_bounds(tmp_path, jobs):
+    with pytest.raises(ValueError, match='jobs'):
+        run(tmp_path, Fake(), jobs=jobs)
+
+
+def test_cli_jobs_bounds():
+    import run_verifier_collect as cli
+    for jobs in ['0', '-1', '9']:
+        with pytest.raises(SystemExit) as error:
+            cli.main(['--shortlists', 'unused', '--model', 'fake', '--checkpoint', 'unused',
+                      '--salt-file', 'unused', '--jobs', jobs])
+        assert error.value.code == 2
+
+
+def test_cli_version_captured_once(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.undo()
+    def fake_process(argv, **kwargs):
+        calls.append(argv)
+        assert argv == ['codex', '--version']
+        assert kwargs['check'] is True
+        return subprocess.CompletedProcess(argv, 0, 'codex-cli test-version\n', '')
+    monkeypatch.setattr(subprocess, 'run', fake_process)
+    result = run(tmp_path, Observed(), jobs=3)
+    assert calls == [['codex', '--version']]
+    assert 'codex-cli test-version' in result.model_id
+
+
+@pytest.mark.parametrize('key', ['model', 'model_id'])
+def test_matching_reported_model(tmp_path, key):
+    def matching(prompt, cwd):
+        reply = Fake()(prompt, cwd)
+        rows = [json.loads(line) for line in reply.events.splitlines()]
+        rows[0] = {'type': 'thread.started', key: 'fake-v1'}
+        return RunnerReply('\n'.join(json.dumps(row) for row in rows))
+    result = run(tmp_path, matching)
+    assert result.model_id == 'fake-v1'
+    assert all(p['model_mismatch'] is False for p in checkpoints(tmp_path))
+
+
+def test_parallel_checkpoint_checksum(tmp_path):
+    run(tmp_path, Observed(), jobs=3)
+    for payload in checkpoints(tmp_path):
+        digest = payload.pop('sha256')
+        assert collector._digest(payload) == digest
