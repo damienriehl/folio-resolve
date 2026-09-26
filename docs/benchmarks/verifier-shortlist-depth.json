@@ -1,0 +1,78 @@
+{
+  "adapter_sha256": "a133d89e85cc6fa1278933def8ff2fde7467b8a9a2448a7528e53aef4504901d",
+  "adapter_source": "5b273ac4f9467a413ded22996fcc3faff6925a80",
+  "answer_rule_config_sha256": "ac413db665602cdde841a7e7590adc4eba02cded82266df5e763d7be7dd87c03",
+  "chosen_n": 100,
+  "corpus_content_sha256": "a417085a506ed52033c7aeb43d0868f1b7e7201064b8e37f03637e920afaac4d",
+  "curve": {
+    "10": {
+      "depth": 10,
+      "mean_item_recall": 0.04814814814814815,
+      "micro_recall": 0.06060606060606061,
+      "retrieved_gold_count": 22,
+      "unreachable_gold_count": 341
+    },
+    "100": {
+      "depth": 100,
+      "mean_item_recall": 0.16592592592592595,
+      "micro_recall": 0.1928374655647383,
+      "retrieved_gold_count": 70,
+      "unreachable_gold_count": 293
+    },
+    "150": {
+      "depth": 150,
+      "mean_item_recall": 0.17925925925925926,
+      "micro_recall": 0.2066115702479339,
+      "retrieved_gold_count": 75,
+      "unreachable_gold_count": 288
+    },
+    "20": {
+      "depth": 20,
+      "mean_item_recall": 0.05037037037037037,
+      "micro_recall": 0.06336088154269973,
+      "retrieved_gold_count": 23,
+      "unreachable_gold_count": 340
+    },
+    "200": {
+      "depth": 200,
+      "mean_item_recall": 0.19925925925925927,
+      "micro_recall": 0.22865013774104684,
+      "retrieved_gold_count": 83,
+      "unreachable_gold_count": 280
+    },
+    "30": {
+      "depth": 30,
+      "mean_item_recall": 0.05037037037037037,
+      "micro_recall": 0.06336088154269973,
+      "retrieved_gold_count": 23,
+      "unreachable_gold_count": 340
+    },
+    "50": {
+      "depth": 50,
+      "mean_item_recall": 0.06814814814814815,
+      "micro_recall": 0.07713498622589532,
+      "retrieved_gold_count": 28,
+      "unreachable_gold_count": 335
+    },
+    "6": {
+      "depth": 6,
+      "mean_item_recall": 0.03259259259259259,
+      "micro_recall": 0.04132231404958678,
+      "retrieved_gold_count": 15,
+      "unreachable_gold_count": 348
+    },
+    "75": {
+      "depth": 75,
+      "mean_item_recall": 0.14666666666666667,
+      "micro_recall": 0.16804407713498623,
+      "retrieved_gold_count": 61,
+      "unreachable_gold_count": 302
+    }
+  },
+  "gold_relation_count": 363,
+  "nomatch_content_sha256": "c40b03445b4d2233d65128a506c8ddab5e44bec17159865ebbb69b0ded3fab57",
+  "ontology_cache_sha256": "b6ed82e6d17b7cb1d468453e4111ec08ca091d72a6849be2b58dd37692cb6ef9",
+  "scoreable_item_count": 225,
+  "uncapped_n": 200,
+  "unreachable_gold_count_at_200": 280
+}
