@@ -176,6 +176,16 @@ def measure_ceiling(
     }
 
 
+def residual_item_ids(report: Mapping[str, Any]) -> list[str]:
+    """Use the globally better depth-50 ranking, breaking ties in ARMS order."""
+    arm = max(ARMS, key=lambda name: report["rankings"][name]["50"]["recovered_count"])
+    return sorted(
+        item
+        for item, row in report["passages"].items()
+        if row[arm]["100"]["recovered_count"] < row["never_produced_count"]
+    )
+
+
 def write_report(path: Path, report: Mapping[str, Any], manifest: Manifest, salt: bytes) -> None:
     """Leak-scan before creating or replacing any output."""
     if scan_json_value(report, manifest, salt):
@@ -204,6 +214,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--leak-manifest", type=Path, required=True)
     parser.add_argument("--salt-file", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument(
+        "--residual-item-ids", type=Path, help="Write JSON passage IDs for U6 --item-ids"
+    )
     args = parser.parse_args(argv)
     attribution = load_attribution(args.attribution, args.attribution_sha256)
     corpus = load_corpus(args.corpus_manifest)
@@ -236,5 +249,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     report["ontology_sha256"] = ontology_sha256
     report["model_revision"] = model_pin["revision"]
     report["model_files_sha256"] = model_pin["files"]
+    residual = residual_item_ids(report)
+    if args.residual_item_ids:
+        if args.residual_item_ids.resolve() == args.output.resolve():
+            raise ValueError("residual IDs and report need distinct output paths")
+        if scan_json_value(residual, manifest, salt):
+            raise ValueError("leak check failed for residual item IDs; inputs are intact")
     write_report(args.output, report, manifest, salt)
+    if args.residual_item_ids:
+        from .leakcheck import _atomic_write_text
+
+        _atomic_write_text(args.residual_item_ids, json.dumps(residual) + "\n")
     return 0
