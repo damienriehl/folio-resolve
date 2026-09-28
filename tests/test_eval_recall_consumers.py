@@ -733,7 +733,13 @@ def test_cli_canary_only_and_resume(cli_fixture, runner, capsys):
 
 @pytest.mark.parametrize(
     "surface",
-    ["committed", "contextual_rerank", "folio-enrich-gpt-6-luna", "aggregate bound is an estimate"],
+    [
+        "committed",
+        "contextual_rerank",
+        "folio-enrich-gpt-6-luna",
+        "aggregate bound is an estimate",
+        "Distance past rank 200",
+    ],
 )
 def test_cli_leak_scan_prevents_output_write(cli_fixture, monkeypatch, runner, surface):
     args, output, _ = cli_fixture
@@ -958,3 +964,53 @@ def test_completed_arm_survives_later_arm_failure(cli_fixture, runner):
     report = json.loads(output.read_text())
     assert set(report["arms"]) == {"folio-enrich-deterministic", "folio-mapper-deterministic"}
     assert sum(report["complete_arms"].values()) == 2
+
+
+@pytest.mark.parametrize("producer", consumers.ENRICH_LLM_STAGES[2:9])
+@pytest.mark.parametrize("lost_at", [None, "reconciliation", "resolution"])
+def test_round2_parallel_production_join(lost_at, producer):
+    stages = {name: [] for name in consumers.ENRICH_LLM_STAGES}
+    stages[producer] = ["x"]
+    for name in consumers.ENRICH_LLM_STAGES[9:]:
+        if name == lost_at:
+            break
+        stages[name] = ["x"]
+    run = attribution_run(
+        "folio-enrich", {"a": stages}, {"a": frozenset() if lost_at else frozenset({"x"})}, "llm-on"
+    )
+    result = attribute_fixture(run, {"a": {"x"}})
+    assert result["relations"][0]["stage"] == (lost_at or "committed")
+    assert result["metrics"]["recall"] == (0 if lost_at else 1)
+
+
+def test_round2_paid_then_deterministic_retains_projection(cli_fixture):
+    args, output, _ = cli_fixture
+    consumers.main([*args, "--arms", ALL_PAID_SELECTORS, *paid_bounds_cli()])
+    paid = json.loads(output.read_text())["campaign"]
+    assert Decimal(paid["projection_usd"]) > 0
+    output.unlink()
+    consumers.main([*args, "--arms", "enrich:deterministic,mapper:deterministic"])
+    report = json.loads(output.read_text())
+    assert all(report["complete_arms"].values())
+    assert report["campaign"]["projection_usd"] == paid["projection_usd"]
+
+
+@pytest.mark.parametrize(
+    "fault", ["campaign_sha256", "paid_sha256", "paid_arms", "projection_usd", "missing_canary"]
+)
+def test_round2_deterministic_revalidates_paid_projection(cli_fixture, runner, tmp_path, fault):
+    args, output, _ = cli_fixture
+    consumers.main([*args, "--arms", ALL_PAID_SELECTORS, *paid_bounds_cli()])
+    before = output.read_bytes()
+    calls = [s.repo_root.joinpath("calls.jsonl").read_text() for s in runner[0]]
+    path = tmp_path / "campaign/batches/projection.json"
+    value = json.loads(path.read_text())
+    if fault == "missing_canary":
+        next(path.parent.glob("*/batch-00000.json")).unlink()
+    else:
+        value[fault] = [] if fault == "paid_arms" else "0"
+        path.write_text(json.dumps(value))
+    with pytest.raises(comparison.ComparisonError, match="all-arm projection"):
+        consumers.main([*args, "--arms", "enrich:deterministic,mapper:deterministic"])
+    assert output.read_bytes() == before
+    assert [s.repo_root.joinpath("calls.jsonl").read_text() for s in runner[0]] == calls

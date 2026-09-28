@@ -559,6 +559,37 @@ def _run_locked(
         return total
 
     projected_ledger = remaining_cost()
+    if not paid_selected and paid_manifest.exists():
+        if not projection_path.exists():
+            raise ComparisonError("deterministic publication requires a valid all-arm projection")
+        previous = json.loads(projection_path.read_text())
+        if (
+            previous.get("campaign_sha256") != fingerprint
+            or previous.get("paid_sha256") != paid_identity
+            or set(previous.get("paid_arms", [])) != PAID_ARM_KEYS
+            or set(pricing) != PAID_ARM_KEYS
+        ):
+            raise ComparisonError("invalid all-arm projection identity")
+        projection = Decimal(0)
+        for arm in paid:
+            bound = TokenBound(**pricing[arm.key]["bound"])
+            bound.validate(arm.spec.name)
+            stored_price = pricing[arm.key]["price"]
+            price = ModelPrice(
+                Decimal(stored_price["input_per_million"]),
+                Decimal(stored_price["output_per_million"]),
+                stored_price["date"],
+                stored_price["source"],
+            )
+            projection += bound.cost(price) * (len(items) + int(identity_canary))
+        if Decimal(previous["projection_usd"]) != projection or projection >= CAP_USD:
+            raise ComparisonError("invalid all-arm projection amount")
+        for arm in paid:
+            for number in (-1, 0) if identity_canary else (0,):
+                if not (local_dir / arm.key / f"batch-{number:05d}.json").exists():
+                    raise ComparisonError("all-arm projection lacks completed canaries")
+                batch(arm, number, canary[:1] if number == -1 else canary)
+
     if paid_selected and (all_paid_selected or not canary_only):
         _atomic_write_text(
             projection_path,
@@ -651,6 +682,12 @@ def _stage_sets(run: StackRun, item_id: str) -> dict[str, frozenset[str]]:
         snapshots[stage] = frozenset(values)
     if run.stack == "folio-mapper" and snapshots["committed"] != run.rows[item_id]:
         raise ValueError("committed snapshot differs from final output")
+    if run.stack == "folio-enrich" and run.lane == "llm-on":
+        # Concurrent producers expose partial snapshots. Union their evidence at
+        # the join; only reconciliation and later stages can remove it.
+        before_join = ENRICH_LLM_STAGES[: ENRICH_LLM_STAGES.index("reconciliation")]
+        produced = frozenset().union(*(snapshots.pop(s) for s in before_join if s in snapshots))
+        snapshots = {"parallel_production": produced, **snapshots}
     # Reserve "committed" for survival, rather than a loss at the commit step.
     if run.stack == "folio-mapper":
         del snapshots["committed"]
@@ -840,6 +877,7 @@ def consumer_output_preflight(arms: Sequence[ConsumerArm]) -> dict[str, Any]:
     stages = (
         *STAGES,
         *ENRICH_LLM_STAGES,
+        "parallel_production",
         *ENRICH_DETERMINISTIC_STAGES,
         "stage1_filter",
         "embedding_rerank",
@@ -994,8 +1032,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             sum(v.get(iri, 0) >= DEFAULT_FLOOR for v in item_votes) < 2 for iri in iris
         ):
             raise ValueError("invalid consumer gold agreement")
+    from .recall_report import preflight
+
     manifest = load_manifest(args.leak_manifest)
     salt = args.salt_file.read_bytes()
+    preflight(manifest, salt)
     if scan_json_value(consumer_output_preflight(available), manifest, salt):
         raise ValueError("leak check failed before consumer launch")
     args.campaign_dir.mkdir(parents=True, exist_ok=True, mode=0o700)

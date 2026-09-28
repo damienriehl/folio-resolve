@@ -363,10 +363,6 @@ def test_committed_depth_shape_reconciles_363_relations():
     assert report["overall"]["rank_101_200"]["count"] == 13
     with pytest.raises(ValueError, match="population"):
         reconcile_depth(survivors, {"s": iris}, expected)
-    with pytest.raises(ValueError, match="reconciliation"):
-        reconcile_depth({"s": candidates(112)}, {"s": iris}, expected)
-    with pytest.raises(ValueError, match="reconciliation"):
-        reconcile_depth({"s": candidates(69)}, {"s": iris}, expected)
 
 
 def test_finalize_publishes_fingerprint_and_exact_byte_hash_without_adapt(runner):
@@ -574,3 +570,46 @@ def test_review_verify_cli_does_not_collect(runner, monkeypatch):
     path.write_text(json.dumps(value))
     with pytest.raises(ValueError, match="SHA-256"):
         runner.module.main(args)
+
+
+@pytest.mark.parametrize("count,depth", [(112, 200), (69, 100)])
+def test_round2_retrieval_count_failure(count, depth):
+    from folio_eval.recall_attribution import reconcile_depth
+
+    report, expected, survivors, gold = reconciled_fixture()
+    reconcile_depth(survivors, gold, expected, report["fingerprint"])
+    survivors["s"] = candidates(count)
+    with pytest.raises(ValueError, match=f"depth reconciliation failed at {depth}:"):
+        reconcile_depth(survivors, gold, expected, report["fingerprint"])
+
+
+@pytest.mark.parametrize("fault", ["overall", "stratum", "stage", "rank", "agreement", "distance"])
+def test_round2_finalized_aggregates_rejected(tmp_path, fault):
+    import hashlib
+    import json
+
+    from folio_eval.recall_attribution import verify_finalized_attribution
+
+    report, expected, _, _ = reconciled_fixture()
+    path = tmp_path / "attribution.json"
+
+    def verify():
+        path.write_text(json.dumps(report))
+        verify_finalized_attribution(path, expected, hashlib.sha256(path.read_bytes()).hexdigest())
+
+    verify()
+    ranked = next(r for r in report["relations"] if r["rank"] is not None)
+    if fault == "overall":
+        report["overall"]["top_100"]["count"] = 0
+    elif fault == "stratum":
+        report["by_stratum"]["brief"]["top_100"]["share"] = 0
+    elif fault == "stage":
+        ranked["stage"] = "never_produced"
+    elif fault == "rank":
+        ranked["rank"] = -1
+    elif fault == "agreement":
+        ranked["agreement"] = True
+    else:
+        report["rank_distance_below_200"] = {"1": 1}
+    with pytest.raises(ValueError, match="attribution"):
+        verify()

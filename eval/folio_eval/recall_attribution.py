@@ -133,32 +133,33 @@ def attribute_relations(
                 )
             )
 
-    def counts(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
-        return {
-            stage: {
-                "count": sum(r["stage"] == stage for r in rows),
-                "share": sum(r["stage"] == stage for r in rows) / len(rows) if rows else 0.0,
-                "by_agreement": {
-                    str(n): sum(r["stage"] == stage and r["agreement"] == n for r in rows)
-                    for n in (2, 3)
-                },
-            }
-            for stage in STAGES
-        }
-
     distances = Counter(r["rank"] - 200 for r in relations if r["stage"] == "rank_below_200")
     return {
         "schema_version": 1,
         "relations": relations,
         "gold_relation_count": len(relations),
         "scoreable_item_count": len(scoreable),
-        "overall": counts(relations),
+        "overall": _relation_counts(relations),
         "by_stratum": {
-            s: counts([r for r in relations if r["stratum_id"] == s])
+            s: _relation_counts([r for r in relations if r["stratum_id"] == s])
             for s in sorted({r["stratum_id"] for r in relations})
         },
         "rank_distance_below_200": {str(d): distances[d] for d in sorted(distances)},
         "depth_curve": depth_curve(survivors, scoreable, depths=(100, 200)),
+    }
+
+
+def _relation_counts(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    return {
+        stage: {
+            "count": sum(r["stage"] == stage for r in rows),
+            "share": sum(r["stage"] == stage for r in rows) / len(rows) if rows else 0.0,
+            "by_agreement": {
+                str(n): sum(r["stage"] == stage and r["agreement"] == n for r in rows)
+                for n in (2, 3)
+            },
+        }
+        for stage in STAGES
     }
 
 
@@ -206,6 +207,49 @@ def verify_finalized_attribution(
         raise ValueError("attribution SHA-256 mismatch")
     report = json.loads(raw)
     rows = report["relations"]
+    if report.get("schema_version") != 1 or not isinstance(rows, list):
+        raise ValueError("invalid attribution schema or relations")
+    ranks: set[tuple[str, int]] = set()
+    item_strata: dict[str, str] = {}
+    for row in rows:
+        if not isinstance(row, dict) or any(
+            not isinstance(row.get(key), str) or not row[key]
+            for key in ("item_id", "iri", "stratum_id", "stage")
+        ):
+            raise ValueError("invalid attribution relation")
+        rank = row.get("rank")
+        stage = row["stage"]
+        if type(row.get("agreement")) is not int or row["agreement"] not in (2, 3):
+            raise ValueError("invalid attribution agreement")
+        if stage not in STAGES or "rank" not in row:
+            raise ValueError("invalid attribution stage or rank")
+        if rank is None:
+            if stage in STAGES[:3]:
+                raise ValueError("attribution stage/rank mismatch")
+        else:
+            if type(rank) is not int or rank < 1:
+                raise ValueError("invalid attribution rank")
+            expected_stage = (
+                "top_100" if rank <= 100 else "rank_101_200" if rank <= 200 else "rank_below_200"
+            )
+            if stage != expected_stage or (row["item_id"], rank) in ranks:
+                raise ValueError("attribution stage/rank mismatch or duplicate rank")
+            ranks.add((row["item_id"], rank))
+        if item_strata.setdefault(row["item_id"], row["stratum_id"]) != row["stratum_id"]:
+            raise ValueError("attribution item stratum mismatch")
+    aggregates = {
+        "overall": _relation_counts(rows),
+        "by_stratum": {
+            s: _relation_counts([r for r in rows if r["stratum_id"] == s])
+            for s in sorted(set(item_strata.values()))
+        },
+        "rank_distance_below_200": dict(
+            Counter(str(r["rank"] - 200) for r in rows if r["stage"] == "rank_below_200")
+        ),
+    }
+    for key, value in aggregates.items():
+        if report.get(key) != value:
+            raise ValueError(f"attribution aggregate mismatch: {key}")
     pairs = {(r["item_id"], r["iri"]) for r in rows}
     if len(pairs) != len(rows):
         raise ValueError("depth reconciliation duplicate relation")
