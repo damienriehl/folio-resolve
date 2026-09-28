@@ -1,4 +1,4 @@
-"""Offline launcher for uncapped recall attribution collection."""
+"""Offline launcher for uncapped recall attribution collection and reconciled JSON finalization."""
 
 from __future__ import annotations
 
