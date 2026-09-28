@@ -474,9 +474,27 @@ def test_pinned_model_prices_and_unknown_fail_closed():
         consumers.pinned_price("unknown-model")
 
 
+def _is_lfs_pointer(path: Path) -> bool:
+    return path.read_text().startswith("version https://git-lfs.github.com/spec/v1")
+
+
+def test_is_lfs_pointer(tmp_path):
+    pointer = tmp_path / "pointer.json"
+    pointer.write_text(
+        f"version https://git-lfs.github.com/spec/v1\noid sha256:{'a' * 64}\nsize 123\n"
+    )
+    assert _is_lfs_pointer(pointer)
+    report = tmp_path / "report.json"
+    report.write_text('{"stacks": {}}')
+    assert not _is_lfs_pointer(report)
+
+
 def test_arm_scores_reproduce_committed_pilot():
     root = Path(__file__).resolve().parents[1]
-    report = json.loads((root / "eval/reports/synthetic-comparison-v1.json").read_text())
+    report_path = root / "eval/reports/synthetic-comparison-v1.json"
+    if _is_lfs_pointer(report_path):
+        pytest.skip("LFS object not fetched")
+    report = json.loads(report_path.read_text())
     corpus = [
         json.loads(line)
         for line in (root / "eval/synthetic/corpus_v1.jsonl").read_text().splitlines()
