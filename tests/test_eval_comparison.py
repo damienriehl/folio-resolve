@@ -144,8 +144,12 @@ def test_version_skew_aborts(tmp_path: Path) -> None:
 @pytest.mark.parametrize("field", ["folio_resolve_version", "folio_python_version"])
 def test_parse_rejects_empty_version_strings(tmp_path: Path, field: str) -> None:
     header = {
-        "kind": "synthetic-stack-run", "stack": "s", "lane": "candidate",
-        "folio_resolve_version": "1", "folio_python_version": "1", "config": {},
+        "kind": "synthetic-stack-run",
+        "stack": "s",
+        "lane": "candidate",
+        "folio_resolve_version": "1",
+        "folio_python_version": "1",
+        "config": {},
     }
     header[field] = "  "
     path = tmp_path / "empty.jsonl"
@@ -227,7 +231,9 @@ def test_items_and_stage_snapshots_are_leak_gated(tmp_path: Path) -> None:
     salt = b"0123456789abcdef"
     manifest = build_manifest(["Alpha beta"], salt=salt, gold_version="g", gold_content_sha256="h")
     with pytest.raises(ComparisonError, match="items leak"):
-        emit_items_file(_corpus(tmp_path), tmp_path / "items.jsonl", leak_manifest=manifest, salt=salt)
+        emit_items_file(
+            _corpus(tmp_path), tmp_path / "items.jsonl", leak_manifest=manifest, salt=salt
+        )
     run = _run("folio-resolve", "candidate", {"one": set()})
     run = replace(run, stages={"one": {"note": "Alpha beta"}})
     with pytest.raises(ComparisonError, match="stage snapshot leak"):
@@ -621,9 +627,7 @@ def test_versioned_public_metadata_exempts_only_exact_comparison_paths() -> None
         ["--config", "eval/synthetic/answer_rule_config_synthetic_v1.json"]
     )
     with pytest.raises(ComparisonError, match="missing or duplicated"):
-        preflight_comparison_publication(
-            duplicate_option, manifest, salt, public_metadata=metadata
-        )
+        preflight_comparison_publication(duplicate_option, manifest, salt, public_metadata=metadata)
 
     mixed_duplicate_option = deepcopy(equals_form)
     mixed_duplicate_option["provenance"]["comparison_invocation"]["argv"].extend(
@@ -834,16 +838,40 @@ def test_local_stack_emits_attribution_ready_candidate_stages(tmp_path: Path) ->
         suppression_counters={"blocklist": 1, "score_floor": 1},
         traces=(
             CandidateTrace(
-                "iri:a", "A", "", "multi_strategy_recall", "Alpha beta", 90.0, 88.0,
-                "survived", True, "short label demotion",
+                "iri:a",
+                "A",
+                "",
+                "multi_strategy_recall",
+                "Alpha beta",
+                90.0,
+                88.0,
+                "survived",
+                True,
+                "short label demotion",
             ),
             CandidateTrace(
-                "iri:b", "B", "", "aho_corasick", "B", 100.0, None,
-                "blocklist", False, "alias_blocklist",
+                "iri:b",
+                "B",
+                "",
+                "aho_corasick",
+                "B",
+                100.0,
+                None,
+                "blocklist",
+                False,
+                "alias_blocklist",
             ),
             CandidateTrace(
-                "iri:c", "C", "", "multi_strategy_recall", "beta", 40.0, 40.0,
-                "score_floor", False, "",
+                "iri:c",
+                "C",
+                "",
+                "multi_strategy_recall",
+                "beta",
+                40.0,
+                40.0,
+                "score_floor",
+                False,
+                "",
             ),
         ),
     )
@@ -1012,14 +1040,16 @@ def test_consumer_runner_translates_deterministic_lane_to_incumbent(
     monkeypatch.setattr(
         comparison_module,
         "_probe_environment",
-        lambda spec: probed.append(spec)
-        or {
-            "folio_resolve_version": "0.4.0",
-            "folio_resolve_file": str(
-                tmp_path / ".venv" / "lib" / "site-packages" / "folio_resolve" / "__init__.py"
-            ),
-            "folio_python_version": "0.3.6",
-        },
+        lambda spec: (
+            probed.append(spec)
+            or {
+                "folio_resolve_version": "0.4.0",
+                "folio_resolve_file": str(
+                    tmp_path / ".venv" / "lib" / "site-packages" / "folio_resolve" / "__init__.py"
+                ),
+                "folio_python_version": "0.3.6",
+            }
+        ),
     )
     monkeypatch.setattr(comparison_module, "clean_tree_guard", lambda _root: nullcontext())
     monkeypatch.setattr(
@@ -1122,3 +1152,43 @@ def test_consumer_runner_translates_timeout_to_domain_error(
 
     with pytest.raises(ConsumerRunError, match="timed out after 2s"):
         run_consumer_stack(spec, items_path, timeout=1.5)
+
+
+def test_consumer_environment_uses_only_selected_own_key() -> None:
+    parent = {
+        "PATH": "/fake/bin",
+        "HOME": "/fake/home",
+        "GOOGLE_API_KEY": "sentinel-" + "generic-google",
+        "OPENAI_API_KEY": "sentinel-" + "generic-openai",
+        "FOLIO_ENRICH_GOOGLE_API_KEY": "sentinel-" + "enrich-google",
+        "FOLIO_ENRICH_LLM_CONCEPT_MODEL": "unapproved-task-model",
+        "PYTHONPATH": "/unapproved",
+    }
+    before = parent.copy()
+    env = comparison_module.consumer_environment(
+        "folio-enrich", "google", "gemini-3-flash-preview", parent=parent
+    )
+    assert set(env) == {
+        "PATH",
+        "HOME",
+        "PYTHONHASHSEED",
+        "FOLIO_ENRICH_LLM_PROVIDER",
+        "FOLIO_ENRICH_LLM_MODEL",
+        "FOLIO_ENRICH_GOOGLE_API_KEY",
+    }
+    assert env["FOLIO_ENRICH_GOOGLE_API_KEY"] == parent["FOLIO_ENRICH_GOOGLE_API_KEY"]
+    assert parent == before
+    assert set(comparison_module.consumer_environment("folio-enrich", parent=parent)) == {
+        "PATH",
+        "HOME",
+        "PYTHONHASHSEED",
+    }
+
+
+def test_consumer_tail_redacts_before_truncation() -> None:
+    key = "sentinel-" + 'credential-with-quote"'
+    tail = "failure " + key + json.dumps(key) + " useful tail"
+    scrubbed = comparison_module._scrub_consumer_output(tail, (key,))
+    assert key not in scrubbed
+    assert json.dumps(key)[1:-1] not in scrubbed
+    assert "useful tail" in scrubbed

@@ -270,9 +270,7 @@ class SyntheticCheckpointStore:
             "candidates": [
                 {
                     "iri": candidate.iri,
-                    "rank_tiebreak_score": float(
-                        getattr(candidate, "rank_tiebreak_score", 0.0)
-                    ),
+                    "rank_tiebreak_score": float(getattr(candidate, "rank_tiebreak_score", 0.0)),
                     "score": candidate.score,
                 }
                 for candidate in canonical[: self.retained_limit]
@@ -430,3 +428,222 @@ def _nonnegative_int(value: object, field: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
         raise CheckpointError(f"checkpoint {field} must be a nonnegative integer")
     return value
+
+
+ATTRIBUTION_CHECKPOINT_KIND = "recall-attribution-checkpoint"
+ATTRIBUTION_CHECKPOINT_SCHEMA_VERSION = 1
+
+
+@dataclass(frozen=True, slots=True)
+class AttributionTrace:
+    """Only lifecycle evidence; source surfaces and labels are deliberately omitted."""
+
+    iri: str
+    gate_disposition: str
+    gate_reason: str
+    pre_gate_score: float
+    post_gate_score: float | None
+
+
+@dataclass(frozen=True, slots=True)
+class AttributionAdapterResult(CheckpointAdapterResult):
+    traces: tuple[AttributionTrace, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class AttributionCheckpointStore:
+    """Separate uncapped schema, sharing the scoring store's durable primitives."""
+
+    root: Path
+    fingerprint: CheckpointFingerprint
+    shard_count: int
+    expected_item_count: int
+
+    @property
+    def manifest_path(self) -> Path:
+        return self.root / "manifest.json"
+
+    @property
+    def items_dir(self) -> Path:
+        return self.root / "items"
+
+    @classmethod
+    def create(
+        cls,
+        root: Path,
+        *,
+        fingerprint: CheckpointFingerprint,
+        shard_count: int,
+        expected_item_count: int,
+    ) -> AttributionCheckpointStore:
+        if shard_count < 1 or expected_item_count < 0:
+            raise ValueError("invalid shard or item count")
+        store = cls(root, fingerprint, shard_count, expected_item_count)
+        expected = {
+            "kind": ATTRIBUTION_CHECKPOINT_KIND,
+            "schema_version": ATTRIBUTION_CHECKPOINT_SCHEMA_VERSION,
+            "fingerprint": fingerprint.to_json(),
+            "fingerprint_sha256": fingerprint.content_sha256(),
+            "shard_count": shard_count,
+            "expected_item_count": expected_item_count,
+        }
+        _atomic_create(store.manifest_path, expected)
+        try:
+            observed = json.loads(store.manifest_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise CheckpointError("attribution checkpoint manifest is corrupt") from exc
+        if observed != expected:
+            raise CheckpointError("attribution checkpoint manifest or fingerprint mismatch")
+        store.items_dir.mkdir(parents=True, exist_ok=True)
+        return store
+
+    def item_path(self, kind: SyntheticItemKind, item_id: str) -> Path:
+        return self.items_dir / f"{checkpoint_item_key(kind, item_id)}.json"
+
+    def item_paths(self) -> tuple[Path, ...]:
+        return tuple(sorted(self.items_dir.glob("*.json")))
+
+    def maybe_load_item(
+        self, kind: SyntheticItemKind, item_id: str
+    ) -> AttributionAdapterResult | None:
+        try:
+            payload = json.loads(self.item_path(kind, item_id).read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return None
+        except (OSError, json.JSONDecodeError) as exc:
+            raise CheckpointError("attribution checkpoint item is unreadable") from exc
+        return self._validate_item(
+            payload, expected_key=checkpoint_item_key(kind, item_id), expected_kind=kind
+        )
+
+    def load_item(self, kind: SyntheticItemKind, item_id: str) -> AttributionAdapterResult:
+        result = self.maybe_load_item(kind, item_id)
+        if result is None:
+            raise CheckpointError("attribution checkpoint incomplete: missing item")
+        return result
+
+    def write_item(
+        self,
+        kind: SyntheticItemKind,
+        item_id: str,
+        *,
+        candidates: Sequence[CandidateLike],
+        raw_candidate_count: int,
+        suppression_counters: Mapping[str, int],
+        traces: Sequence[AttributionTrace],
+    ) -> AttributionAdapterResult:
+        existing = self.maybe_load_item(kind, item_id)
+        if existing is not None:
+            return existing
+        key = checkpoint_item_key(kind, item_id)
+        payload: dict[str, object] = {
+            "candidates": [
+                {
+                    "iri": c.iri,
+                    "score": c.score,
+                    "rank_tiebreak_score": float(getattr(c, "rank_tiebreak_score", 0.0)),
+                }
+                for c in sorted(
+                    candidates,
+                    key=lambda c: (-c.score, -float(getattr(c, "rank_tiebreak_score", 0.0)), c.iri),
+                )
+            ],
+            "traces": [asdict(t) for t in sorted(traces, key=lambda t: t.iri)],
+            "fingerprint_sha256": self.fingerprint.content_sha256(),
+            "item_key": key,
+            "kind": kind,
+            "raw_candidate_count": raw_candidate_count,
+            "schema_version": ATTRIBUTION_CHECKPOINT_SCHEMA_VERSION,
+            "suppression_counters": dict(suppression_counters),
+            "survivor_count": len(candidates),
+        }
+        payload["payload_sha256"] = _payload_sha256(payload)
+        self._validate_item(payload, expected_key=key, expected_kind=kind)
+        _atomic_create(self.item_path(kind, item_id), payload)
+        return self.load_item(kind, item_id)
+
+    def _validate_item(
+        self, payload: object, *, expected_key: str, expected_kind: SyntheticItemKind
+    ) -> AttributionAdapterResult:
+        if not isinstance(payload, dict):
+            raise CheckpointError("attribution checkpoint item must be an object")
+        original = dict(payload)
+        digest = original.pop("payload_sha256", None)
+        if not isinstance(digest, str) or SHA256_RE.fullmatch(digest) is None:
+            raise CheckpointError("attribution checkpoint digest is invalid")
+        if not hmac.compare_digest(digest, _payload_sha256(original)):
+            raise CheckpointError("attribution checkpoint digest mismatch")
+        if original.get("schema_version") != ATTRIBUTION_CHECKPOINT_SCHEMA_VERSION:
+            raise CheckpointError("attribution checkpoint schema version mismatch")
+        raw_traces = original.pop("traces", None)
+        if not isinstance(raw_traces, list):
+            raise CheckpointError("attribution checkpoint traces must be a list")
+        # Reuse the existing strict candidate/count validator with an uncapped
+        # limit. This translation is in memory only: neither schema is rewritten.
+        survivor_count = _nonnegative_int(original.get("survivor_count"), "survivor_count")
+        original["schema_version"] = CHECKPOINT_SCHEMA_VERSION
+        original["payload_sha256"] = _payload_sha256(original)
+        validator = SyntheticCheckpointStore(
+            self.root,
+            self.fingerprint,
+            self.shard_count,
+            self.expected_item_count,
+            max(1, survivor_count),
+        )
+        base = validator._validate_item(
+            original, expected_key=expected_key, expected_kind=expected_kind
+        )
+        survivors = {c.iri: c.score for c in base.candidates}
+        traces = []
+        seen: set[str] = set()
+        counters = dict.fromkeys(SUPPRESSION_CATEGORIES, 0)
+        for raw in raw_traces:
+            if not isinstance(raw, dict) or set(raw) != {
+                "iri",
+                "gate_disposition",
+                "gate_reason",
+                "pre_gate_score",
+                "post_gate_score",
+            }:
+                raise CheckpointError("attribution trace fields are invalid")
+            iri, disposition, reason = raw["iri"], raw["gate_disposition"], raw["gate_reason"]
+            if not isinstance(iri, str) or not iri or iri in seen:
+                raise CheckpointError("attribution trace IRI is invalid or duplicated")
+            if not isinstance(disposition, str) or disposition not in {*counters, "survived"}:
+                raise CheckpointError("attribution trace disposition is invalid")
+            if not isinstance(reason, str):
+                raise CheckpointError("attribution trace reason is invalid")
+            pre = _attribution_score(raw["pre_gate_score"])
+            post = (
+                None
+                if raw["post_gate_score"] is None
+                else _attribution_score(raw["post_gate_score"])
+            )
+            if disposition == "survived":
+                if iri not in survivors or post != survivors[iri]:
+                    raise CheckpointError("attribution survivor trace mismatch")
+            else:
+                if iri in survivors:
+                    raise CheckpointError("attribution removed trace is a survivor")
+                counters[disposition] += 1
+            seen.add(iri)
+            traces.append(AttributionTrace(iri, disposition, reason, pre, post))
+        if (
+            len(traces) != base.raw_candidate_count
+            or counters != base.suppression_counters
+            or not survivors.keys() <= seen
+        ):
+            raise CheckpointError("attribution trace count invariant failed")
+        return AttributionAdapterResult(
+            base.candidates,
+            base.raw_candidate_count,
+            base.survivor_count,
+            base.suppression_counters,
+            tuple(traces),
+        )
+
+
+def _attribution_score(value: object) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+        raise CheckpointError("attribution trace score must be finite")
+    return float(value)

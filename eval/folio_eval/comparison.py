@@ -176,9 +176,7 @@ def load_public_comparison_metadata(
                     if field_name is not None
                 ]
             except ValueError as exc:
-                raise ComparisonError(
-                    "unsupported comparison public metadata template"
-                ) from exc
+                raise ComparisonError("unsupported comparison public metadata template") from exc
             if replacement_fields != [("working_directory", "", None)]:
                 raise ComparisonError("unsupported comparison public metadata template")
         if field_path in fields:
@@ -227,9 +225,7 @@ def _atomic_write_text(
     path.parent.mkdir(parents=True, exist_ok=True)
     temp_parent = path.parent if temporary_dir is None else temporary_dir
     temp_parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_name = tempfile.mkstemp(
-        dir=temp_parent, prefix=temporary_prefix, suffix=".tmp"
-    )
+    fd, tmp_name = tempfile.mkstemp(dir=temp_parent, prefix=temporary_prefix, suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             handle.write(text)
@@ -261,12 +257,8 @@ def _selected_cohort(
         if not requested or len(requested) != len(set(requested)):
             raise ValueError("item_ids must be nonempty and unique")
         requested_set = set(requested)
-        scoreable = tuple(
-            item for item in corpus.scoreable_items if item.item_id in requested_set
-        )
-        nomatch = tuple(
-            item for item in corpus.nomatch_items if item.item_id in requested_set
-        )
+        scoreable = tuple(item for item in corpus.scoreable_items if item.item_id in requested_set)
+        nomatch = tuple(item for item in corpus.nomatch_items if item.item_id in requested_set)
         if not include_nomatch and nomatch:
             raise ValueError("item_ids includes no-match rows while include_nomatch is false")
         observed = {item.item_id for item in (*scoreable, *nomatch)}
@@ -358,11 +350,7 @@ def _git_repository_state(
             raise ComparisonError("allowed untracked path is outside its repository") from exc
         allowed_entries.add(f"?? {relative.as_posix()}")
     raw_status = git_status_porcelain(repo_root)
-    status = "".join(
-        f"{line}\n"
-        for line in raw_status.splitlines()
-        if line not in allowed_entries
-    )
+    status = "".join(f"{line}\n" for line in raw_status.splitlines() if line not in allowed_entries)
     if status:
         raise ComparisonError(
             f"comparison repository must be clean before execution: {repo_root} "
@@ -394,6 +382,54 @@ def _file_fingerprint(path: Path, *, root: Path) -> dict[str, object]:
     }
 
 
+def _consumer_secrets(parent: Mapping[str, str]) -> tuple[str, ...]:
+    return tuple(
+        value
+        for key, value in parent.items()
+        if value and (key.endswith("_API_KEY") or key.endswith("_TOKEN") or key.endswith("_SECRET"))
+    )
+
+
+def _scrub_consumer_output(text: str, secrets: Sequence[str]) -> str:
+    for value in sorted(secrets, key=len, reverse=True):
+        text = text.replace(value, "[REDACTED]")
+        text = text.replace(json.dumps(value)[1:-1], "[REDACTED]")
+    return text
+
+
+def consumer_environment(
+    name: str,
+    provider: str | None = None,
+    model: str | None = None,
+    *,
+    parent: Mapping[str, str] | None = None,
+) -> dict[str, str]:
+    """Build a new allowlisted environment; never mutate the parent's credentials."""
+    source = os.environ if parent is None else parent
+    env = {key: source[key] for key in ("PATH", "HOME", "PYTHONHASHSEED") if key in source}
+    env.setdefault("PYTHONHASHSEED", "0")
+    if (provider is None) != (model is None):
+        raise StackContractError("provider and model must be specified together")
+    if provider is None:
+        return env
+    if provider not in {"google", "openai"} or not model:
+        raise StackContractError("unsupported consumer provider/model")
+    key_name = f"{provider.upper()}_API_KEY"
+    if name == "folio-enrich":
+        destination = f"FOLIO_ENRICH_{key_name}"
+        env.update(FOLIO_ENRICH_LLM_PROVIDER=provider, FOLIO_ENRICH_LLM_MODEL=model)
+    elif name == "folio-mapper":
+        destination = key_name
+        env["FOLIO_MAPPER_LLM_MODEL"] = model
+    else:
+        raise StackContractError("unknown consumer")
+    key = source.get(destination) or source.get(key_name)
+    if not key:
+        raise StackContractError("missing consumer provider credential")
+    env[destination] = key
+    return env
+
+
 def _probe_environment(spec: ConsumerSpec) -> dict[str, str]:
     code = """
 import importlib.metadata, json, os, folio_resolve
@@ -404,11 +440,16 @@ print(json.dumps({
 }, sort_keys=True))
 """
     completed = subprocess.run(
-        [str(spec.venv_python), "-c", code], capture_output=True, text=True, timeout=30
+        [str(spec.venv_python), "-c", code],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        env=consumer_environment(spec.name),
     )
     if completed.returncode != 0:
         raise IncumbentInstallMismatch(
-            f"could not probe pinned incumbent in {spec.name}: {completed.stderr.strip()[-2000:]}"
+            f"could not probe pinned incumbent in {spec.name}: "
+            f"{_scrub_consumer_output(completed.stderr, _consumer_secrets(os.environ)).strip()[-2000:]}"
         )
     try:
         payload = json.loads(completed.stdout.strip().splitlines()[-1])
@@ -455,11 +496,12 @@ def prepare_incumbent(spec: ConsumerSpec, version: str = "0.4.0") -> dict[str, s
         capture_output=True,
         text=True,
         timeout=120,
+        env=consumer_environment(spec.name),
     )
     if completed.returncode != 0:
         raise ConsumerRunError(
             f"pinned incumbent install into {spec.name} failed (rc={completed.returncode}):\n"
-            f"{completed.stderr.strip()[-4000:]}"
+            f"{_scrub_consumer_output(completed.stderr, _consumer_secrets(os.environ)).strip()[-4000:]}"
         )
     return assert_incumbent_probe(_probe_environment(spec), version)
 
@@ -576,9 +618,7 @@ def _assert_consumer_rows(run: StackRun, expected_ids: Sequence[str]) -> None:
             for key, value in stage.items()
         }
         if any(
-            not iri.startswith(FOLIO_IRI_ROOT)
-            for values in lists.values()
-            for iri in values
+            not iri.startswith(FOLIO_IRI_ROOT) for values in lists.values() for iri in values
         ) or any(not iri.startswith(FOLIO_IRI_ROOT) for iri in run.rows[item_id]):
             raise StackContractError(
                 f"{run.stack} emitted a non-canonical FOLIO IRI for {item_id!r}"
@@ -605,6 +645,40 @@ def _assert_consumer_rows(run: StackRun, expected_ids: Sequence[str]) -> None:
                 )
 
 
+def _assert_consumer_llm_rows(run: StackRun, expected_ids: Sequence[str]) -> None:
+    """Validate the consumers' native LLM snapshots without deterministic assumptions."""
+    if set(run.rows) != set(expected_ids) or set(run.stages) != set(expected_ids):
+        raise StackContractError("LLM item IDs differ from shared input")
+    for item_id in expected_ids:
+        stages = run.stages[item_id]
+        lists: list[list[str]] = [list(run.rows[item_id])]
+        if not stages:
+            raise StackContractError("LLM stages are empty")
+        if run.stack == "folio-enrich":
+            lists.extend(
+                _assert_string_list(value, context="enrich LLM stage") for value in stages.values()
+            )
+        elif run.stack == "folio-mapper":
+            committed = _assert_string_list(stages.get("committed"), context="mapper committed")
+            if set(committed) != set(run.rows[item_id]):
+                raise StackContractError("mapper committed differs from emitted IRIs")
+            lists.append(committed)
+            for key, value in stages.items():
+                if key == "committed":
+                    continue
+                if key == "stage0_prescan":
+                    if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
+                        raise StackContractError("mapper prescan must contain text")
+                    continue
+                counts = list(value.values()) if isinstance(value, dict) else [value]
+                if not counts or any(type(v) is not int or v < 0 for v in counts):
+                    raise StackContractError("mapper LLM stages must contain nonnegative counts")
+        else:
+            raise StackContractError("unknown LLM consumer")
+        if any(not iri.startswith(FOLIO_IRI_ROOT) for values in lists for iri in values):
+            raise StackContractError("LLM stage contains a non-canonical FOLIO IRI")
+
+
 def run_consumer_stack(
     spec: ConsumerSpec,
     items_path: Path,
@@ -612,6 +686,8 @@ def run_consumer_stack(
     version: str = "0.4.0",
     timeout: float = DEFAULT_COMPARISON_TIMEOUT_S,
     prepare: bool = True,
+    llm_provider: str | None = None,
+    llm_model: str | None = None,
 ) -> StackRun:
     """Prepare and run one incumbent consumer through its own interpreter."""
     relative_runner = {
@@ -620,6 +696,9 @@ def run_consumer_stack(
     }.get(spec.name)
     if relative_runner is None:
         raise ComparisonError(f"unknown comparison consumer: {spec.name}")
+    child_env = consumer_environment(spec.name, llm_provider, llm_model)
+    secrets = _consumer_secrets(os.environ)
+    expected_lane = "llm-on" if llm_provider else "deterministic"
     repository = _git_repository_state(spec.repo_root)
     expected_ids: list[str] = []
     for line in items_path.read_text(encoding="utf-8").splitlines():
@@ -640,6 +719,8 @@ def run_consumer_stack(
             "--lane",
             "deterministic",
         ]
+        if llm_provider:
+            command.append("--llm-on")
         with clean_tree_guard(spec.repo_root):
             if prepare:
                 prepare_incumbent(spec, version)
@@ -652,18 +733,21 @@ def run_consumer_stack(
                     capture_output=True,
                     text=True,
                     timeout=timeout,
+                    env=child_env,
                 )
-            except subprocess.TimeoutExpired as exc:
+            except subprocess.TimeoutExpired:
                 raise ConsumerRunError(
                     f"{spec.name} synthetic runner timed out after {timeout:.0f}s"
-                ) from exc
+                ) from None
             if completed.returncode != 0:
                 raise ConsumerRunError(
                     f"{spec.name} synthetic runner failed (rc={completed.returncode}):\n"
-                    f"{(completed.stdout + completed.stderr).strip()[-4000:]}"
+                    f"{_scrub_consumer_output(completed.stdout + completed.stderr, secrets).strip()[-4000:]}"
                 )
+            if out_path.exists():
+                out_path.write_text(_scrub_consumer_output(out_path.read_text(), secrets))
             run = parse_stack_output(out_path)
-    if run.stack != spec.name or run.lane != "deterministic":
+    if run.stack != spec.name or run.lane != expected_lane:
         raise StackContractError(
             f"{spec.name} runner identity mismatch: stack={run.stack!r} lane={run.lane!r}"
         )
@@ -671,11 +755,24 @@ def run_consumer_stack(
         raise IncumbentInstallMismatch(
             f"{spec.name} runner reported folio-resolve {run.folio_resolve_version}, expected {version}"
         )
-    _assert_consumer_config(run)
-    _assert_consumer_rows(run, expected_ids)
+    if run.config.get("llm_provider") != llm_provider or run.config.get("llm_model") != llm_model:
+        raise StackContractError("consumer LLM provider/model identity mismatch")
+    if llm_provider:
+        tasks = run.config.get("llm_tasks", {})
+        if not isinstance(tasks, dict) or any(
+            not isinstance(task, dict)
+            or task.get("provider") != llm_provider
+            or task.get("model") != llm_model
+            for task in tasks.values()
+        ):
+            raise StackContractError("consumer task provider/model identity mismatch")
+        _assert_consumer_llm_rows(run, expected_ids)
+    else:
+        _assert_consumer_config(run)
+        _assert_consumer_rows(run, expected_ids)
     return replace(
         run,
-        lane="incumbent",
+        lane=f"llm-on-{llm_provider}-{llm_model}" if llm_provider else "incumbent",
         invocation=tuple(command),
         invocation_working_directory=str(spec.repo_root.resolve()),
         repository=repository,
@@ -738,9 +835,7 @@ def run_local_stack(
             len(traces) != adapted.raw_candidate_count
             or adapted.raw_candidate_count != len(candidates) + suppressed_count
         ):
-            raise StackContractError(
-                f"candidate lifecycle accounting failed for {item.item_id!r}"
-            )
+            raise StackContractError(f"candidate lifecycle accounting failed for {item.item_id!r}")
         candidate_rows: list[dict[str, object]] = []
         for trace in sorted(traces, key=lambda value: value.iri):
             ranked_candidate = ranked_by_iri.get(trace.iri)
@@ -949,10 +1044,7 @@ def build_comparison(
             },
             "repository": dict(run.repository),
             "metrics": metrics,
-            "items": {
-                item_id: sorted(run.rows[item_id])
-                for item_id in sorted(selected_ids)
-            },
+            "items": {item_id: sorted(run.rows[item_id]) for item_id in sorted(selected_ids)},
             "stage_snapshot": {
                 "items": len(stage_by_item),
                 "field_counts": dict(sorted(stage_fields.items())),
@@ -1010,9 +1102,7 @@ def build_comparison(
             "comparison_invocation": comparison_receipt,
             "cohort_selection": {
                 "rule": (
-                    "explicit_item_ids"
-                    if item_ids is not None
-                    else "corpus_manifest_order_prefix"
+                    "explicit_item_ids" if item_ids is not None else "corpus_manifest_order_prefix"
                 ),
                 "scoreable_limit": limit,
                 "include_nomatch": include_nomatch,
@@ -1082,9 +1172,7 @@ def _comparison_value_and_resolved_path(
     return value, tuple(resolved)
 
 
-def _comparison_value_at_path(
-    payload: Mapping[str, object], path: tuple[str, ...]
-) -> object:
+def _comparison_value_at_path(payload: Mapping[str, object], path: tuple[str, ...]) -> object:
     return _comparison_value_and_resolved_path(payload, path)[0]
 
 
@@ -1122,7 +1210,9 @@ def preflight_comparison_publication(
                 expected = expected.format(working_directory=working_directory.rstrip("/"))
             actual, resolved_path = _comparison_value_and_resolved_path(payload, path)
             if actual != expected:
-                raise ComparisonError(f"comparison public metadata value mismatch at path: {path!r}")
+                raise ComparisonError(
+                    f"comparison public metadata value mismatch at path: {path!r}"
+                )
             resolved_value = _comparison_value_at_path(payload, resolved_path)
             if not isinstance(resolved_value, str):
                 raise ComparisonError(
@@ -1142,8 +1232,7 @@ def preflight_comparison_publication(
             }
         if isinstance(value, list):
             return [
-                leakcheck_value(nested, (*path, str(index)))
-                for index, nested in enumerate(value)
+                leakcheck_value(nested, (*path, str(index))) for index, nested in enumerate(value)
             ]
         return value
 
@@ -1240,7 +1329,8 @@ def run_synthetic_comparison(
             include_nomatch=include_nomatch,
             item_ids=item_ids,
             extractor=adapter.phrase_extractor,
-            leak_manifest=leak_manifest, salt=salt,
+            leak_manifest=leak_manifest,
+            salt=salt,
         )
         items_fingerprint = _file_fingerprint(items_path, root=FOLIO_RESOLVE_ROOT)
         runs: list[StackRun] = []
