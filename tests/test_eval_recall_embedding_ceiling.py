@@ -181,8 +181,9 @@ def test_r9_exact_quarter_boundary(gold_count: int, qualifies: bool) -> None:
     assert result["r9"]["qualifies"] is qualifies
 
 
+@pytest.mark.parametrize("ontology_case", ["exact", "extra", "missing", "pin_mismatch"])
 def test_main_binds_inputs_and_writes_numeric_report(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, ontology_case: str
 ) -> None:
     from types import SimpleNamespace
 
@@ -212,9 +213,19 @@ def test_main_binds_inputs_and_writes_numeric_report(
     monkeypatch.setattr(
         ceiling,
         "load_folio_index",
-        lambda: (SimpleNamespace(iris={c.iri for c in four_concepts()}), "b" * 64, "fake"),
+        lambda: (
+            SimpleNamespace(iris={c.iri for c in four_concepts()}),
+            ("e" if ontology_case == "pin_mismatch" else "b") * 64,
+            "fake",
+        ),
     )
-    monkeypatch.setattr(ceiling.baseline, "load_corpus", lambda *_: four_concepts())
+    concepts = four_concepts()
+    if ontology_case == "extra":
+        concepts.append(Concept("https://example.org/ontology#extra", "Excluded concept"))
+    elif ontology_case == "missing":
+        # Missing even a non-gold dictionary IRI must prevent evaluation.
+        concepts.pop()
+    monkeypatch.setattr(ceiling.baseline, "load_corpus", lambda *_: concepts)
     monkeypatch.setattr(ceiling, "load_manifest", lambda _: manifest)
     monkeypatch.setattr(
         ceiling, "load_local_provider", lambda _: (HashingEmbeddingProvider(), token_count)
@@ -236,10 +247,24 @@ def test_main_binds_inputs_and_writes_numeric_report(
         "--output",
         str(output),
     ]
+    if ontology_case in {"missing", "pin_mismatch"}:
+        output.write_text("prior output")
+        monkeypatch.setattr(ceiling, "load_local_provider", lambda _: pytest.fail("model loaded"))
+        with pytest.raises(ValueError, match="embedding ontology differs from eval ontology"):
+            ceiling.main(args)
+        assert output.read_text() == "prior output"
+        return
     assert ceiling.main(args) == 0
     report = json.loads(output.read_text())
     assert report["attribution_sha256"] == digest
     assert report["never_produced_count"] == 1
+    assert report["ontology_sha256"] == "b" * 64
+    assert report["ontology_class_count"] == 4
+    assert report["excluded_concept_count"] == (1 if ontology_case == "extra" else 0)
+    for arm in ceiling.ARMS:
+        assert report["rankings"][arm]["100"]["suggestion_count"] == 4
+    assert "https://example.org/ontology#extra" not in output.read_text()
+    assert "Excluded concept" not in output.read_text()
     assert "zebra sanctuary conservation" not in output.read_text()
     output.unlink()
     corpus.manifest.content_sha256 = "d" * 64
