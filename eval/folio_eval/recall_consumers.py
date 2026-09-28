@@ -90,6 +90,41 @@ ENRICH_LLM_STAGES = (
     "metadata",
 )
 ENRICH_DETERMINISTIC_STAGES = ("EntityRuler", "Reconciliation", "Resolution", "StringMatch")
+# Publication vocabulary only; pinned snapshots and attribution retain internal names.
+APP_STAGE_DISPLAY_LABELS = {
+    "ingestion": "ingestion",
+    "normalization": "normalization",
+    "entity_ruler": "entity_ruler",
+    "llm_concept_identification": "llm_concept_identification",
+    "early_individual_extraction": "early_individual_extraction",
+    "early_proposition": "early_proposition",
+    "early_property_extraction": "early_property_extraction",
+    "early_triple": "early_triple",
+    "document_type_classification": "document_type_classification",
+    "reconciliation": "reconciliation",
+    "resolution": "resolution",
+    "contextual_rerank": "contextual_rerank",
+    "branch_judge": "branch_judge",
+    "string_matching": "string_matching",
+    "llm_individual_linking": "llm_individual_match",
+    "llm_property_linking": "llm_property_match",
+    "triple_enrichment": "triple_enrichment",
+    "metadata": "metadata",
+    "EntityRuler": "EntityRuler",
+    "Reconciliation": "Reconciliation",
+    "Resolution": "Resolution",
+    "StringMatch": "StringMatch",
+    "parallel_production": "parallel_production",
+    "stage1_filter": "stage1_filter",
+    "embedding_rerank": "embedding_rerank",
+    "stage0_prescan": "stage0_prescan",
+    "stage1b_expand": "stage1b_expand",
+    "stage3_judge": "stage3_judge",
+    "committed": "committed",
+    "not_committed": "not_committed",
+    "final_output": "final_output",
+    "never_produced": "never_produced",
+}
 PAID_ARM_KEYS = frozenset(
     f"folio-{app}-{model}"
     for app in ("enrich", "mapper")
@@ -872,29 +907,32 @@ def pricing_json(value: object) -> Any:
     return json.loads(json.dumps(value, sort_keys=True, default=str))
 
 
+def display_app_stages(rows: Mapping[str, Any]) -> dict[str, Any]:
+    """Label published app aggregates, accepting already published report inputs."""
+    result = {}
+    for stage, row in rows.items():
+        if stage in APP_STAGE_DISPLAY_LABELS:
+            label = APP_STAGE_DISPLAY_LABELS[stage]
+        elif stage in APP_STAGE_DISPLAY_LABELS.values():
+            label = stage
+        else:
+            raise ValueError("unknown app stage")
+        if label in result:
+            raise ValueError("duplicate app display stage")
+        result[label] = row
+    return result
+
+
 def consumer_output_preflight(arms: Sequence[ConsumerArm]) -> dict[str, Any]:
     """Complete fixed report vocabulary with numeric placeholders, before execution."""
-    stages = (
-        *STAGES,
-        *ENRICH_LLM_STAGES,
-        "parallel_production",
-        *ENRICH_DETERMINISTIC_STAGES,
-        "stage1_filter",
-        "embedding_rerank",
-        "stage0_prescan",
-        "stage1b_expand",
-        "stage3_judge",
-        "committed",
-        "not_committed",
-        "final_output",
-        "never_produced",
-    )
     metrics = MicroCounts().to_json()
     metrics.update(nomatch_items=0, nomatch_false_positives=0, nomatch_fp_rate=0)
     arm_report = {
         "metrics": metrics,
         "gold_relation_count": 0,
-        "overall": {s: {"count": 0, "by_agreement": {"2": 0, "3": 0}} for s in stages},
+        "overall": display_app_stages(
+            {s: {"count": 0, "by_agreement": {"2": 0, "3": 0}} for s in APP_STAGE_DISPLAY_LABELS}
+        ),
         "resolve_misses": {
             "by_stage": {
                 s: {"count": 0, "produced": 0, "committed": 0, "produced_unknown": 0}
@@ -1091,7 +1129,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 )
                 arm_reports[arm.key] = {
                     "metrics": result["metrics"],
-                    "overall": result["overall"],
+                    "overall": display_app_stages(result["overall"]),
                     "gold_relation_count": result["gold_relation_count"],
                     "resolve_misses": {"by_stage": result["resolve_misses"]["by_stage"]},
                 }

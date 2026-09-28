@@ -483,3 +483,47 @@ def test_review_publication_gates(damage):
 def test_review_all_fixed_prose_preflight(heading):
     with pytest.raises(ValueError, match="leak check"):
         report.preflight(manifest([heading]), b"fake-salt")
+
+
+def test_linking_manifest_preflight_and_publication(tmp_path):
+    m = manifest(["linking"])
+    report.preflight(m, b"fake-salt")
+    arms = full_apps()
+    for arm in arms:
+        arm["overall"] = {
+            name: {"count": 50, "by_agreement": {"2": 0, "3": 50}}
+            for name in ("llm_individual_linking", "llm_property_linking")
+        }
+    for published_input in (False, True):
+        if published_input:
+            from folio_eval.recall_consumers import display_app_stages
+
+            for arm in arms:
+                arm["overall"] = display_app_stages(arm["overall"])
+        p = report.build_report(
+            source({"never_produced": 100}),
+            arms,
+            ceiling(),
+            dict(publishable=1, per_item={}, item_count=0, embedding_sha256="b" * 64),
+            {"embedding": "b" * 64},
+        )
+        report.write_reports(p, tmp_path, m, b"fake-salt")
+        for path in tmp_path.iterdir():
+            assert "_linking" not in path.read_text()
+            assert "llm_individual_match" in path.read_text()
+            assert "llm_property_match" in path.read_text()
+        if not published_input:
+            assert "llm_individual_linking" in arms[0]["overall"]
+
+
+def test_unknown_app_stage_fails_closed():
+    arms = full_apps()
+    arms[0]["overall"]["unknown_stage"] = arms[0]["overall"].pop("committed")
+    with pytest.raises(ValueError, match="unknown app stage"):
+        report.build_report(
+            source({"never_produced": 100}),
+            arms,
+            ceiling(),
+            dict(publishable=1, per_item={}, item_count=0, embedding_sha256="b" * 64),
+            {"embedding": "b" * 64},
+        )

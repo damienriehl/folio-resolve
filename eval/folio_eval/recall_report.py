@@ -20,6 +20,7 @@ from .experiment import (
     start_attempt,
 )
 from .leakcheck import Manifest, _atomic_write_text, load_manifest, scan_json_value, scan_text
+from .recall_consumers import APP_STAGE_DISPLAY_LABELS, display_app_stages
 from .verifier_report import require_pristine
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -293,7 +294,7 @@ def build_report(
                 lane=arm["lane"],
                 model=arm.get("model", arm.get("llm_model")),
                 metrics=arm["metrics"],
-                stages=_stages(arm["overall"], arm["gold_relation_count"]),
+                stages=_stages(display_app_stages(arm["overall"]), arm["gold_relation_count"]),
             )
             for arm in apps
         ],
@@ -447,32 +448,17 @@ def preflight(manifest: Manifest, salt: bytes) -> None:
         },
     }
     from .recall_attribution import STAGES
-    from .recall_consumers import ENRICH_DETERMINISTIC_STAGES, ENRICH_LLM_STAGES
 
     stage = dict(count=0, share=0, by_agreement={str(n): dict(count=0, share=0) for n in (2, 3)})
-    labels = (
-        *STAGES,
-        *ENRICH_LLM_STAGES,
-        *ENRICH_DETERMINISTIC_STAGES,
-        "stage0_prescan",
-        "stage1b_expand",
-        "stage3_judge",
-        "committed",
-        "not_committed",
-        "stage1_filter",
-        "embedding_rerank",
-        "contextual_rerank",
-        "final_output",
-        "never_produced",
-    )
-    placeholder["stages"] = dict.fromkeys(labels, stage)
-    placeholder["strata"] = {"0": dict.fromkeys(labels, stage)}
+    placeholder["stages"] = dict.fromkeys(STAGES, stage)
+    placeholder["strata"] = {"0": dict.fromkeys(STAGES, stage)}
+    app_stages = display_app_stages(dict.fromkeys(APP_STAGE_DISPLAY_LABELS, stage))
     placeholder["apps"] = [
         dict(
             stack=stack,
             lane="deterministic" if model is None else "llm-on",
             model=model,
-            stages=dict.fromkeys(labels, stage),
+            stages=app_stages,
             metrics=dict(precision=0, recall=0, f1=0, nomatch_fp_rate=0),
         )
         for stack in ("folio-enrich", "folio-mapper")

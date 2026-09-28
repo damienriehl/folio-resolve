@@ -1001,9 +1001,18 @@ def test_round2_parallel_production_join(lost_at, producer):
     assert result["metrics"]["recall"] == (0 if lost_at else 1)
 
 
-def test_round2_paid_then_deterministic_retains_projection(cli_fixture):
+def test_round2_paid_then_deterministic_retains_projection(cli_fixture, runner):
     args, output, _ = cli_fixture
+    script = runner[0][0].repo_root / "backend/eval/synthetic_runner.py"
+    script.write_text(
+        script.read_text().replace(
+            "['entity_ruler','llm_concept_identification']", repr(list(consumers.ENRICH_LLM_STAGES))
+        )
+    )
     consumers.main([*args, "--arms", ALL_PAID_SELECTORS, *paid_bounds_cli()])
+    assert "_linking" not in output.read_text()
+    assert "llm_individual_match" in output.read_text()
+    assert "llm_property_match" in output.read_text()
     paid = json.loads(output.read_text())["campaign"]
     assert Decimal(paid["projection_usd"]) > 0
     output.unlink()
@@ -1032,3 +1041,30 @@ def test_round2_deterministic_revalidates_paid_projection(cli_fixture, runner, t
         consumers.main([*args, "--arms", "enrich:deterministic,mapper:deterministic"])
     assert output.read_bytes() == before
     assert [s.repo_root.joinpath("calls.jsonl").read_text() for s in runner[0]] == calls
+
+
+@pytest.mark.parametrize("internal", ["llm_individual_linking", "llm_property_linking"])
+def test_public_stage_labels_preserve_internal_attribution(internal):
+    from folio_eval.leakcheck import build_manifest, scan_json_value
+
+    stages = {name: ["x"] for name in consumers.ENRICH_LLM_STAGES}
+    stages[internal] = []
+    run = attribution_run("folio-enrich", {"a": stages}, {"a": frozenset()}, "llm-on")
+    result = attribute_fixture(run, {"a": {"x"}})
+    assert result["relations"][0]["stage"] == internal
+    assert result["overall"][internal]["count"] == 1
+    published = consumers.display_app_stages(result["overall"])
+    assert published[internal.replace("_linking", "_match")]["count"] == 1
+    assert "_linking" not in json.dumps(published)
+    assert internal in run.stages["a"]
+    assert internal in result["overall"]
+    arm = consumers.ConsumerArm(
+        ConsumerSpec("folio-enrich", Path("/fake"), Path(sys.executable)), "bb576ac"
+    )
+    m = build_manifest(["linking"], b"fake-salt", gold_version="fake", gold_content_sha256="a" * 64)
+    assert scan_json_value(consumers.consumer_output_preflight([arm]), m, b"fake-salt") == 0
+
+
+def test_unknown_public_stage_fails_closed():
+    with pytest.raises(ValueError, match="unknown app stage"):
+        consumers.display_app_stages({"unknown_stage": {}})
