@@ -11,10 +11,11 @@ import fcntl
 import json
 import re
 import subprocess
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping, Sequence, Set
 from dataclasses import asdict, dataclass
 from decimal import Decimal
 from pathlib import Path
+from typing import Any
 
 from .comparison import (
     ComparisonError,
@@ -27,7 +28,10 @@ from .comparison import (
     run_consumer_stack,
 )
 from .downstream import FOLIO_RESOLVE_ROOT, ConsumerSpec
+from .grade import DEFAULT_FLOOR
 from .intake import sha256_text
+from .recall_attribution import STAGES
+from .score import MicroCounts
 
 CAP_USD = Decimal("25")
 
@@ -59,13 +63,32 @@ class ModelPrice:
             raise PriceUnavailable("invalid dated model price")
 
 
-# Checked offline 2026-09-27: no list prices in this repo or enrich's pricing.py.
-# That module fetches LiteLLM dynamically; it provides no pinned price evidence.
-# TODO: orchestrator must supply sourced, dated list prices before any paid run.
+# User-supplied pins; Gemini output pricing includes thinking tokens.
 PINNED_PRICES: Mapping[str, ModelPrice | None] = {
-    "gemini-3-flash-preview": None,
-    "gpt-6-luna": None,
+    "gemini-3-flash-preview": ModelPrice(
+        Decimal("0.50"),
+        Decimal("3.00"),
+        "2026-09-24",
+        "https://ai.google.dev/gemini-api/docs/pricing",
+    ),
+    "gpt-6-luna": ModelPrice(
+        Decimal("0.10"),
+        Decimal("0.50"),
+        "2026-09-27",
+        "https://developers.openai.com/api/docs/models/gpt-6-luna",
+    ),
 }
+
+
+def pinned_price(
+    model: str,
+    prices: Mapping[str, ModelPrice | None] = PINNED_PRICES,
+) -> ModelPrice:
+    """Return a dated price or fail before any paid invocation."""
+    price = prices.get(model)
+    if price is None:
+        raise PriceUnavailable("missing pinned price for consumer model")
+    return price
 
 
 @dataclass(frozen=True)
@@ -182,6 +205,7 @@ def _serialize_run(run: StackRun) -> dict[str, object]:
         "config": dict(run.config),
         "rows": {k: sorted(v) for k, v in run.rows.items()},
         "stages": dict(run.stages),
+        "stage_order": {k: list(v) for k, v in run.stages.items()},
         "repository": dict(run.repository),
     }
 
@@ -194,6 +218,23 @@ def _load_run(payload: dict[str, object]) -> StackRun:
         raise ComparisonError("malformed persisted consumer batch")
     assert isinstance(rows, dict) and isinstance(config, dict)
     assert isinstance(stages, dict) and isinstance(repository, dict)
+    order = payload.get("stage_order")
+    if order is not None:
+        if not isinstance(order, dict) or set(order) != set(stages):
+            raise ComparisonError("invalid persisted stage order")
+        ordered = {}
+        for item_id, names in order.items():
+            if (
+                not isinstance(names, list)
+                or not all(isinstance(n, str) for n in names)
+                or len(names) != len(set(names))
+                or set(names) != set(stages[item_id])
+            ):
+                raise ComparisonError("invalid persisted stage order")
+            ordered[item_id] = {name: stages[item_id][name] for name in names}
+        stages = ordered
+    elif payload["stack"] == "folio-enrich" and payload["lane"] == "llm-on":
+        raise ComparisonError("persisted enrich LLM snapshot lacks runner stage order")
     return StackRun(
         stack=str(payload["stack"]),
         lane=str(payload["lane"]),
@@ -228,9 +269,7 @@ def run_consumer_campaign(
     costs: dict[str, Decimal] = {}
     for arm in arms:
         if arm.provider:
-            price = prices.get(arm.model or "")
-            if price is None:
-                raise PriceUnavailable("missing pinned price for consumer model")
+            price = pinned_price(arm.model or "", prices)
             if arm.key not in bounds:
                 raise ComparisonError("missing conservative per-item token bound")
             costs[arm.key] = bounds[arm.key].cost(price)
@@ -382,4 +421,184 @@ def _run_locked(
         "projection_usd": str(projection),
         "reserved_usd": str(guard.spent),
         "snapshots": fingerprints,
+    }
+
+
+def _stage_sets(run: StackRun, item_id: str) -> dict[str, frozenset[str]]:
+    """Read snapshots in pipeline order, never alphabetic report order."""
+    raw = run.stages[item_id]
+    order: tuple[str, ...]
+    if run.stack == "folio-mapper":
+        order = (
+            ("committed",)
+            if run.lane == "llm-on"
+            else ("stage1_filter", "embedding_rerank", "committed")
+        )
+    elif run.lane == "llm-on":
+        order = tuple(raw)
+    else:
+        order = ("EntityRuler", "StringMatch", "Reconciliation", "Resolution")
+    if not order or (run.lane != "llm-on" and set(raw) != set(order)):
+        raise ValueError("missing or unexpected consumer stages")
+    snapshots = {}
+    for stage in order:
+        values = raw.get(stage)
+        if not isinstance(values, (list, tuple, set, frozenset)) or not all(
+            isinstance(value, str) and value for value in values
+        ):
+            raise ValueError("consumer snapshot must contain IRIs")
+        snapshots[stage] = frozenset(values)
+    if run.stack == "folio-mapper" and snapshots["committed"] != run.rows[item_id]:
+        raise ValueError("committed snapshot differs from final output")
+    # Reserve "committed" for survival, rather than a loss at the commit step.
+    if run.stack == "folio-mapper":
+        del snapshots["committed"]
+    snapshots["final_output"] = run.rows[item_id]
+    return snapshots
+
+
+def attribute_consumer(
+    run: StackRun,
+    gold: Mapping[str, Set[str]],
+    *,
+    resolved_votes: Mapping[str, Sequence[Mapping[str, float]]],
+    resolve_attribution: Mapping[str, Any],
+    nomatch_ids: Sequence[str] = (),
+) -> dict[str, Any]:
+    """Pure first-loss attribution and strict scores for one consumer arm.
+
+    Gold contains only positive, scoreable items; no-match IDs are separate, as
+    in comparison.score_stack. Votes must come from U2.resolve_grader_votes.
+    Enrich LLM mappings must retain the runner's stage order. First loss wins
+    even when a later stage recovers the relation; scores use final output.
+    Resolve misses mean all U2 stages outside top_100. Count-only mapper LLM
+    stages cannot establish production of uncommitted IRIs: those are unknown,
+    not false, in the cross-tab. No input is mutated and no runner is invoked.
+    """
+    if run.stack not in {"folio-enrich", "folio-mapper"} or run.lane not in {
+        "deterministic",
+        "incumbent",
+        "llm-on",
+    }:
+        raise ValueError("unknown consumer stack or lane")
+    ids = set(gold) | set(nomatch_ids)
+    if (
+        set(gold) & set(nomatch_ids)
+        or len(set(nomatch_ids)) != len(nomatch_ids)
+        or any(not iris for iris in gold.values())
+    ):
+        raise ValueError("gold and no-match cohorts must be disjoint and explicit")
+    if set(run.rows) != ids or set(run.stages) != ids:
+        raise ValueError("consumer snapshot item IDs differ from scoring cohort")
+    baseline = {}
+    for row in resolve_attribution["relations"]:
+        key = (row["item_id"], row["iri"])
+        if key in baseline or row["stage"] not in STAGES:
+            raise ValueError("duplicate or invalid resolve attribution relation")
+        baseline[key] = row["stage"]
+    if set(baseline) != {(k, iri) for k, iris in gold.items() for iri in iris}:
+        raise ValueError("resolve attribution gold relations differ from consumer cohort")
+
+    counts = MicroCounts()
+    relations: list[dict[str, Any]] = []
+    missed: list[dict[str, Any]] = []
+    stage_names: dict[str, None] = {}
+    opaque = run.stack == "folio-mapper" and run.lane == "llm-on"
+    for item_id in sorted(ids):
+        snapshots = _stage_sets(run, item_id)
+        predicted = run.rows[item_id]
+        if item_id not in gold:
+            continue
+        iris = gold[item_id]
+        counts.items += 1
+        counts.gold += len(iris)
+        counts.predicted += len(predicted)
+        counts.tp += len(predicted & iris)
+        counts.fp += len(predicted - iris)
+        counts.fn += len(iris - predicted)
+        counts.exact_items += predicted == iris
+        counts.empty_prediction_items += not predicted
+        votes = resolved_votes.get(item_id, ())
+        if len(votes) > 3:
+            raise ValueError("more than three grader votes")
+        stage_names.update(
+            dict.fromkeys(
+                ("committed", "not_committed")
+                if opaque
+                else (*snapshots, "never_produced", "committed")
+            )
+        )
+        for iri in sorted(iris):
+            agreement = sum(v.get(iri, 0.0) >= DEFAULT_FLOOR for v in votes)
+            if agreement < 2:
+                raise ValueError("gold relation has fewer than two qualifying votes")
+            produced: bool | None = any(iri in values for values in snapshots.values())
+            if opaque:
+                stage = "committed" if iri in predicted else "not_committed"
+                produced = True if iri in predicted else None
+            else:
+                seen = False
+                stage = "never_produced"
+                for name, values in snapshots.items():
+                    if iri in values:
+                        seen = True
+                        stage = "committed"
+                    elif seen:
+                        stage = name
+                        break
+            relation = dict(item_id=item_id, iri=iri, stage=stage, agreement=agreement)
+            relations.append(relation)
+            resolve_stage = baseline[(item_id, iri)]
+            if resolve_stage != "top_100":
+                missed.append(
+                    dict(
+                        **relation,
+                        resolve_stage=resolve_stage,
+                        produced=produced,
+                        committed=iri in predicted,
+                    )
+                )
+    metrics = counts.to_json()
+    fp = sum(bool(run.rows[k]) for k in nomatch_ids)
+    metrics.update(
+        nomatch_items=len(nomatch_ids),
+        nomatch_false_positives=fp,
+        nomatch_fp_rate=round(fp / len(nomatch_ids), 6) if nomatch_ids else 0.0,
+    )
+    return {
+        "schema_version": 1,
+        "stack": run.stack,
+        "lane": run.lane,
+        "metrics": metrics,
+        "relations": relations,
+        "gold_relation_count": len(relations),
+        "overall": {
+            stage: {
+                "count": sum(r["stage"] == stage for r in relations),
+                "by_agreement": {
+                    str(n): sum(r["stage"] == stage and r["agreement"] == n for r in relations)
+                    for n in (2, 3)
+                },
+            }
+            for stage in stage_names
+        },
+        "resolve_misses": {
+            "relations": missed,
+            "by_stage": {
+                stage: {
+                    "count": sum(r["resolve_stage"] == stage for r in missed),
+                    "produced": sum(
+                        r["resolve_stage"] == stage and r["produced"] is True for r in missed
+                    ),
+                    "committed": sum(
+                        r["resolve_stage"] == stage and r["committed"] for r in missed
+                    ),
+                    "produced_unknown": sum(
+                        r["resolve_stage"] == stage and r["produced"] is None for r in missed
+                    ),
+                }
+                for stage in STAGES
+                if stage != "top_100"
+            },
+        },
     }

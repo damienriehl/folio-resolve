@@ -299,3 +299,266 @@ def test_successful_runner_diagnostics_never_escape(runner, tmp_path, capsys):
     outputs += "".join(p.read_text() for p in (tmp_path / "state").rglob("*") if p.is_file())
     assert "[REDACTED]" in outputs
     assert all(key not in outputs for key in runner[1].values())
+
+
+def attribution_run(stack, stages, rows, lane="deterministic"):
+    return comparison.StackRun(stack, lane, "test", "test", {}, rows, stages)
+
+
+def attribute_fixture(run, gold, *, nomatch_ids=(), resolve_stages=None, votes=None):
+    return consumers.attribute_consumer(
+        run,
+        gold,
+        resolved_votes=votes or {k: [dict.fromkeys(v, 1.0)] * 2 for k, v in gold.items()},
+        resolve_attribution={
+            "relations": [
+                {
+                    "item_id": k,
+                    "iri": iri,
+                    "stage": (resolve_stages or {}).get(iri, "never_produced"),
+                }
+                for k, values in gold.items()
+                for iri in values
+            ]
+        },
+        nomatch_ids=nomatch_ids,
+    )
+
+
+def test_mapper_first_loss_and_resolve_cross_tab():
+    run = attribution_run(
+        "folio-mapper",
+        {
+            "a": {
+                "committed": ["kept"],
+                "embedding_rerank": ["kept"],
+                "stage1_filter": ["lost", "kept"],
+            }
+        },
+        {"a": frozenset({"kept"})},
+    )
+    result = attribute_fixture(run, {"a": {"lost", "kept", "absent"}})
+    assert {r["iri"]: r["stage"] for r in result["relations"]} == {
+        "lost": "embedding_rerank",
+        "kept": "committed",
+        "absent": "never_produced",
+    }
+    assert result["resolve_misses"]["by_stage"]["never_produced"] == {
+        "count": 3,
+        "produced": 2,
+        "committed": 1,
+        "produced_unknown": 0,
+    }
+    assert result["overall"]["embedding_rerank"]["by_agreement"] == {"2": 1, "3": 0}
+
+
+def test_mapper_llm_counts_do_not_invent_produced_sets():
+    run = attribution_run(
+        "folio-mapper",
+        {
+            "a": {
+                "stage1_filter": 15,
+                "embedding_rerank": 8,
+                "stage3_judge": {"judged": 8},
+                "committed": ["kept"],
+            }
+        },
+        {"a": frozenset({"kept"})},
+        "llm-on",
+    )
+    result = attribute_fixture(run, {"a": {"kept", "lost"}})
+    assert {r["stage"] for r in result["relations"]} == {"committed", "not_committed"}
+    assert result["resolve_misses"]["by_stage"]["never_produced"] == {
+        "count": 2,
+        "produced": 1,
+        "committed": 1,
+        "produced_unknown": 1,
+    }
+
+
+def test_enrich_order_never_produced_late_appearance_and_final_loss():
+    run = attribution_run(
+        "folio-enrich",
+        {
+            "a": {
+                "EntityRuler": ["lost"],
+                "Reconciliation": ["late"],
+                "Resolution": ["late"],
+                "StringMatch": ["lost", "late"],
+            }
+        },
+        {"a": frozenset()},
+    )
+    result = attribute_fixture(run, {"a": {"lost", "late", "absent"}})
+    assert {r["iri"]: r["stage"] for r in result["relations"]} == {
+        "lost": "Reconciliation",
+        "late": "final_output",
+        "absent": "never_produced",
+    }
+
+
+def test_enrich_llm_reads_runner_stage_order_and_keeps_first_loss():
+    run = attribution_run(
+        "folio-enrich",
+        {"a": {"z_extract": ["x"], "a_judge": [], "recovered": ["x"]}},
+        {"a": frozenset({"x"})},
+        "llm-on",
+    )
+    result = attribute_fixture(run, {"a": {"x"}}, votes={"a": [{"x": 1.0}] * 3})
+    assert result["relations"][0]["stage"] == "a_judge"
+    assert result["overall"]["a_judge"]["by_agreement"] == {"2": 0, "3": 1}
+    assert result["metrics"]["recall"] == 1.0
+
+
+def test_arm_micro_hand_count_and_nomatch_rate():
+    rows = {
+        "a": frozenset({"x", "wrong"}),
+        "b": frozenset({"y"}),
+        "c": frozenset(),
+        "n1": frozenset({"wrong", "another"}),
+        "n2": frozenset(),
+    }
+    run = attribution_run(
+        "folio-mapper",
+        {
+            k: {"stage1_filter": list(v), "embedding_rerank": list(v), "committed": list(v)}
+            for k, v in rows.items()
+        },
+        rows,
+    )
+    result = attribute_fixture(
+        run,
+        {"a": {"x", "missing"}, "b": {"y"}, "c": {"z"}},
+        nomatch_ids=("n1", "n2"),
+        resolve_stages={"x": "top_100", "y": "blocklist"},
+    )
+    m = result["metrics"]
+    assert (m["tp"], m["fp"], m["fn"]) == (2, 1, 2)
+    assert (m["precision"], m["recall"], m["f1"]) == (0.666667, 0.5, 0.571429)
+    assert (m["nomatch_false_positives"], m["nomatch_fp_rate"]) == (1, 0.5)
+    assert len(result["resolve_misses"]["relations"]) == 3
+    assert result["resolve_misses"]["by_stage"]["blocklist"]["committed"] == 1
+
+
+@pytest.mark.parametrize("votes", [[{"x": 1.0}], [{"x": 1.0}] * 4])
+def test_arm_agreement_fails_closed(votes):
+    run = attribution_run(
+        "folio-enrich",
+        {"a": {k: [] for k in ("EntityRuler", "StringMatch", "Reconciliation", "Resolution")}},
+        {"a": frozenset()},
+    )
+    with pytest.raises(ValueError, match="votes"):
+        attribute_fixture(run, {"a": {"x"}}, votes={"a": votes})
+
+
+def test_pinned_model_prices_and_unknown_fail_closed():
+    for model, inp, out, date, source in [
+        (
+            "gemini-3-flash-preview",
+            "0.50",
+            "3.00",
+            "2026-09-24",
+            "https://ai.google.dev/gemini-api/docs/pricing",
+        ),
+        (
+            "gpt-6-luna",
+            "0.10",
+            "0.50",
+            "2026-09-27",
+            "https://developers.openai.com/api/docs/models/gpt-6-luna",
+        ),
+    ]:
+        price = consumers.pinned_price(model)
+        assert (price.input_per_million, price.output_per_million) == (Decimal(inp), Decimal(out))
+        assert (price.date, price.source) == (date, source)
+        assert consumers.TokenBound(1000000, 1000000).cost(price) == Decimal(inp) + Decimal(out)
+    with pytest.raises(consumers.PriceUnavailable):
+        consumers.pinned_price("unknown-model")
+
+
+def test_arm_scores_reproduce_committed_pilot():
+    root = Path(__file__).resolve().parents[1]
+    report = json.loads((root / "eval/reports/synthetic-comparison-v1.json").read_text())
+    corpus = [
+        json.loads(line)
+        for line in (root / "eval/synthetic/corpus_v1.jsonl").read_text().splitlines()
+    ]
+    nomatch = [
+        json.loads(line)["item_id"]
+        for line in (root / "eval/synthetic/nomatch_v1.jsonl").read_text().splitlines()
+    ]
+    for stack in ("folio-enrich", "folio-mapper"):
+        pilot = report["stacks"][stack + ":incumbent"]
+        run = attribution_run(
+            stack,
+            pilot["stage_snapshot"]["by_item"],
+            {k: frozenset(v) for k, v in pilot["items"].items()},
+        )
+        gold = {r["item_id"]: set(r["gold_iris"]) for r in corpus if r["item_id"] in run.rows}
+        result = attribute_fixture(run, gold, nomatch_ids=[k for k in nomatch if k in run.rows])
+        assert result["metrics"] == pilot["metrics"]
+
+
+def test_mapper_final_loss_is_not_labeled_committed():
+    run = attribution_run(
+        "folio-mapper",
+        {"a": {"stage1_filter": ["x"], "embedding_rerank": ["x"], "committed": []}},
+        {"a": frozenset()},
+    )
+    result = attribute_fixture(run, {"a": {"x"}})
+    assert result["relations"][0]["stage"] == "final_output"
+
+
+def test_persisted_enrich_llm_keeps_runner_stage_order():
+    run = attribution_run(
+        "folio-enrich", {"a": {"z_first": ["x"], "a_next": []}}, {"a": frozenset()}, "llm-on"
+    )
+    payload = json.loads(json.dumps(consumers._serialize_run(run), sort_keys=True))
+    restored = consumers._load_run(payload)
+    assert tuple(restored.stages["a"]) == ("z_first", "a_next")
+    assert attribute_fixture(restored, {"a": {"x"}})["relations"][0]["stage"] == "a_next"
+
+
+def test_consumer_uses_u2_resolved_votes():
+    from folio_eval.grade import GraderVote
+    from folio_eval.recall_attribution import resolve_grader_votes
+    from folio_eval.resolve_labels import IndexedConcept, LabelIndex
+
+    dictionary = LabelIndex.from_concepts([IndexedConcept("x", ("Alpha",), ("Alternate",))])
+    votes = resolve_grader_votes(
+        [
+            GraderVote("a", str(i), str(i), labels, "gen")
+            for i, labels in enumerate(
+                [{"Alpha": 0.95, "Alternate": 0.2}, {"Alternate": 0.95}, {"Alpha": 0.1}]
+            )
+        ],
+        dictionary,
+    )
+    run = attribution_run(
+        "folio-mapper",
+        {"a": {"stage1_filter": ["x"], "embedding_rerank": [], "committed": []}},
+        {"a": frozenset()},
+    )
+    result = attribute_fixture(run, {"a": {"x"}}, votes=votes)
+    assert result["overall"]["embedding_rerank"]["by_agreement"] == {"2": 1, "3": 0}
+
+
+@pytest.mark.parametrize(
+    "fault", ["missing_item", "missing_stage", "wrong_committed", "bad_baseline"]
+)
+def test_consumer_incomplete_evidence_fails_closed(fault):
+    run = attribution_run(
+        "folio-mapper",
+        {"a": {"stage1_filter": ["x"], "embedding_rerank": ["x"], "committed": ["x"]}},
+        {"a": frozenset({"x"})},
+    )
+    if fault == "missing_item":
+        run.rows.clear()
+    elif fault == "missing_stage":
+        del run.stages["a"]["stage1_filter"]
+    elif fault == "wrong_committed":
+        run.stages["a"]["committed"] = []
+    with pytest.raises(ValueError):
+        attribute_fixture(
+            run, {"a": {"x"}}, resolve_stages={"x": "invalid"} if fault == "bad_baseline" else None
+        )
