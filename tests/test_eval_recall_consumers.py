@@ -562,3 +562,239 @@ def test_consumer_incomplete_evidence_fails_closed(fault):
         attribute_fixture(
             run, {"a": {"x"}}, resolve_stages={"x": "invalid"} if fault == "bad_baseline" else None
         )
+
+
+@pytest.fixture
+def cli_fixture(runner, tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from folio_eval.resolve_labels import IndexedConcept, LabelIndex
+    from folio_eval.synthesize import LoadedCorpus, SyntheticItem
+
+    iri = "https://folio.openlegalstandard.org/Ra"
+    items = tuple(
+        SyntheticItem(
+            str(i),
+            "contract",
+            "US",
+            "Private passage sentinel",
+            ("Private label sentinel",),
+            frozenset({iri}),
+            "human",
+            {
+                "grader_votes": [
+                    dict(
+                        item_id=str(i),
+                        grader_id=str(j),
+                        model_family=str(j),
+                        concepts={"Private label sentinel": 0.95},
+                        generator_id_claimed="gen",
+                    )
+                    for j in range(3)
+                ]
+            },
+        )
+        for i in range(7)
+    )
+    corpus = LoadedCorpus(
+        SimpleNamespace(
+            scoreable=True,
+            content_sha256="c" * 64,
+            nomatch_content_sha256="n" * 64,
+            ontology_cache_sha256="o" * 64,
+        ),
+        items,
+        (
+            SyntheticItem(
+                "negative",
+                "contract",
+                "US",
+                "Private passage sentinel",
+                provenance={"no_match": True},
+            ),
+        ),
+    )
+    monkeypatch.setattr(consumers, "load_corpus", lambda _: corpus)
+    dictionary = LabelIndex.from_concepts([IndexedConcept(iri, ("Private label sentinel",), ())])
+    monkeypatch.setattr(consumers, "assert_ontology_pin", lambda _: None)
+    monkeypatch.setattr(consumers, "load_folio_index", lambda: (dictionary, "o" * 64, None))
+    monkeypatch.setattr(consumers, "enrich_spec", lambda _: runner[0][0])
+    monkeypatch.setattr(consumers, "mapper_spec", lambda _: runner[0][1])
+    from folio_eval.leakcheck import build_manifest, scan_json_value
+
+    manifest = build_manifest(
+        ["Private passage sentinel", "Private label sentinel"],
+        b"test salt",
+        gold_version="test",
+        gold_content_sha256="a" * 64,
+    )
+    monkeypatch.setattr(consumers, "load_manifest", lambda _: manifest)
+    scans = []
+
+    def scan(value, manifest, salt):
+        scans.append(value)
+        return scan_json_value(value, manifest, salt)
+
+    monkeypatch.setattr(consumers, "scan_json_value", scan)
+    baseline = tmp_path / "attribution.json"
+    baseline.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "fingerprint": {
+                    "corpus_content_sha256": "c" * 64,
+                    "nomatch_content_sha256": "n" * 64,
+                    "ontology_cache_sha256": "o" * 64,
+                },
+                "relations": [
+                    dict(item_id=str(i), iri=iri, stage="never_produced") for i in range(7)
+                ],
+            }
+        )
+    )
+    salt = tmp_path / "salt"
+    salt.write_bytes(b"test salt")
+    output = tmp_path / "output.json"
+    args = [
+        "--corpus-manifest",
+        str(tmp_path / "manifest.json"),
+        "--enrich-checkout",
+        str(runner[0][0].repo_root),
+        "--mapper-checkout",
+        str(runner[0][1].repo_root),
+        "--mapper-commit",
+        "a" * 40,
+        "--campaign-dir",
+        str(tmp_path / "campaign"),
+        "--attribution",
+        str(baseline),
+        "--attribution-sha256",
+        consumers.sha256_text(baseline.read_text()),
+        "--leak-manifest",
+        str(tmp_path / "leak.json"),
+        "--salt-file",
+        str(salt),
+        "--output",
+        str(output),
+    ]
+    return args, output, scans
+
+
+def test_cli_deterministic_only_needs_no_bounds(cli_fixture, runner, capsys):
+    args, output, scans = cli_fixture
+    assert consumers.main([*args, "--arms", "enrich:deterministic,mapper:deterministic"]) == 0
+    report = json.loads(output.read_text())
+    assert set(report["arms"]) == {"folio-enrich-deterministic", "folio-mapper-deterministic"}
+    assert all(value["metrics"]["recall"] == 1 for value in report["arms"].values())
+    assert all("relations" not in value for value in report["arms"].values())
+    assert "Private passage sentinel" not in output.read_text()
+    assert "Private label sentinel" not in output.read_text()
+    assert scans[-1] == report
+    assert output.with_suffix(".json.sha256").read_text().strip() == consumers.sha256_text(
+        output.read_text()
+    )
+    assert "Reserved spend total: $0" in capsys.readouterr().out
+    for spec in runner[0]:
+        assert len(spec.repo_root.joinpath("calls.jsonl").read_text().splitlines()) == 2
+
+
+def test_cli_paid_without_bounds_rejected_before_launch(cli_fixture, runner):
+    args, _, _ = cli_fixture
+    with pytest.raises(SystemExit):
+        consumers.main([*args, "--arms", "enrich:gemini-3-flash-preview"])
+    assert not any(s.repo_root.joinpath("calls.jsonl").exists() for s in runner[0])
+
+
+def test_cli_canary_only_and_resume(cli_fixture, runner, capsys):
+    args, output, _ = cli_fixture
+    paid = [
+        "--arms",
+        "mapper:gpt-6-luna",
+        "--input-token-bound",
+        "100",
+        "--output-token-bound",
+        "100",
+    ]
+    assert consumers.main([*args, *paid, "--canary-only"]) == 0
+    spec = runner[0][1]
+
+    def calls():
+        return [
+            json.loads(x) for x in spec.repo_root.joinpath("calls.jsonl").read_text().splitlines()
+        ]
+
+    assert calls() == [["0"], ["0", "1", "2", "3", "4"]]
+    assert not output.exists()
+    assert "projection_usd" in capsys.readouterr().out
+    assert consumers.main(args + paid) == 0
+    assert calls() == [["0"], ["0", "1", "2", "3", "4"], ["5", "6", "negative"]]
+    assert (
+        json.loads(output.read_text())["arms"]["folio-mapper-gpt-6-luna"]["metrics"]["items"] == 7
+    )
+
+
+def test_cli_leak_scan_prevents_output_write(cli_fixture, monkeypatch):
+    args, output, _ = cli_fixture
+    output.write_text("existing artifact")
+    from folio_eval.leakcheck import build_manifest
+
+    manifest = build_manifest(
+        ["committed"], b"test salt", gold_version="test", gold_content_sha256="a" * 64
+    )
+    monkeypatch.setattr(consumers, "load_manifest", lambda _: manifest)
+    with pytest.raises(ValueError, match="leak check"):
+        consumers.main([*args, "--arms", "mapper:deterministic"])
+    assert output.read_text() == "existing artifact"
+    assert not output.with_suffix(".json.sha256").exists()
+
+
+def test_cli_shared_ledger_blocks_full_run(cli_fixture, runner, capsys, tmp_path):
+    args, output, _ = cli_fixture
+    consumers.SpendGuard(tmp_path / "campaign/spend.json").reserve(Decimal("24.9995"))
+    with pytest.raises(consumers.SpendLimitError, match="ledger projects"):
+        consumers.main(
+            [
+                *args,
+                "--arms",
+                "mapper:gpt-6-luna",
+                "--input-token-bound",
+                "100",
+                "--output-token-bound",
+                "100",
+            ]
+        )
+    calls = runner[0][1].repo_root.joinpath("calls.jsonl").read_text().splitlines()
+    assert [len(json.loads(x)) for x in calls] == [1, 5]
+    assert "projected_ledger_usd" in capsys.readouterr().out
+    assert not output.exists()
+
+
+def test_cli_attribution_digest_rejected_before_launch(cli_fixture, runner):
+    args, _, _ = cli_fixture
+    args[args.index("--attribution-sha256") + 1] = "0" * 64
+    with pytest.raises(ValueError, match="SHA-256 mismatch"):
+        consumers.main([*args, "--arms", "mapper:deterministic"])
+    assert not any(s.repo_root.joinpath("calls.jsonl").exists() for s in runner[0])
+
+
+def test_cli_all_paid_arms_and_deterministic_share_ledger(cli_fixture, runner, tmp_path):
+    args, output, _ = cli_fixture
+    consumers.main([*args, "--arms", "enrich:deterministic,mapper:deterministic"])
+    consumers.main(
+        [
+            *args,
+            "--arms",
+            "enrich:gpt-6-luna,mapper:gpt-6-luna,enrich:gemini-3-flash-preview,mapper:gemini-3-flash-preview",
+            "--input-token-bound",
+            "100",
+            "--output-token-bound",
+            "100",
+        ]
+    )
+    report = json.loads(output.read_text())
+    assert len(report["arms"]) == 4
+    assert all(value["metrics"]["recall"] == 1 for value in report["arms"].values())
+    assert all(value["metrics"]["nomatch_fp_rate"] == 1 for value in report["arms"].values())
+    assert consumers.SpendGuard(tmp_path / "campaign/spend.json").spent == Decimal("0.00738")
+    for spec in runner[0]:
+        assert len(spec.repo_root.joinpath("calls.jsonl").read_text().splitlines()) == 8
