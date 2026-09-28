@@ -163,6 +163,33 @@ def choose_lever(
     recovered = max(rankings[arm]["50"]["recovered_count"] for arm in rankings)
     never = embedding["never_produced_count"]
     local_ok = never > 0 and recovered * 4 >= never
+    # AE3 precedes fallback to a smaller category. "Substantial" means at
+    # least ceil(25% of never-produced relations), the same count as R9's bar.
+    ranking = counts["rank_101_200"] + counts["rank_below_200"]
+    gates = sum(counts[g] for g in GATES)
+    llm_never_recovery = max(
+        [llm.get("recovered", 0)]
+        + [
+            sum(
+                r["committed"] and r["resolve_stage"] == "never_produced"
+                for r in arm["resolve_misses"]["relations"]
+            )
+            if "relations" in arm["resolve_misses"]
+            else arm["resolve_misses"]["by_stage"].get("never_produced", {}).get("committed", 0)
+            for arm in apps
+            if arm["lane"] == "llm-on"
+        ]
+    )
+    if (
+        counts["never_produced"] > max(ranking, gates)
+        and not local_ok
+        and 4 * llm_never_recovery >= never
+        and never > 0
+    ):
+        return dict(
+            base,
+            reason="Never-produced misses dominate; only LLM recovery meets the 25% bar; ask Damien.",
+        )
     choices = [
         ("ranking", counts["rank_101_200"] + counts["rank_below_200"]),
         ("gate_tuning", sum(counts[g] for g in GATES)),
@@ -205,6 +232,33 @@ def _stages(rows: Mapping[str, Any], total: int) -> dict[str, Any]:
     }
 
 
+def validate_app_arms(apps: Sequence[Mapping[str, Any]], attribution: Mapping[str, Any]) -> None:
+    """Require exactly six full scoreable/control cohorts before publication."""
+    expected = {
+        (stack, model)
+        for stack in ("folio-enrich", "folio-mapper")
+        for model in (None, "gemini-3-flash-preview", "gpt-6-luna")
+    }
+    identities = [(a.get("stack"), a.get("model", a.get("llm_model"))) for a in apps]
+    if len(identities) != 6 or set(identities) != expected:
+        raise ValueError("report requires exactly six unique complete app arms")
+    total = attribution["gold_relation_count"]
+    items = attribution["scoreable_item_count"]
+    for arm, (_, model) in zip(apps, identities, strict=True):
+        metrics = arm.get("metrics", {})
+        stages = arm.get("overall", {})
+        if (
+            arm.get("lane") != ("deterministic" if model is None else "llm-on")
+            or arm.get("gold_relation_count") != total
+            or metrics.get("gold") != total
+            or metrics.get("items") != items
+            or metrics.get("nomatch_items") != 30
+            or sum(row["count"] for row in stages.values()) != total
+            or any(sum(row["by_agreement"].values()) != row["count"] for row in stages.values())
+        ):
+            raise ValueError("report requires six complete app arms with matching populations")
+
+
 def build_report(
     attribution: Mapping[str, Any],
     apps: Sequence[Mapping[str, Any]],
@@ -214,6 +268,14 @@ def build_report(
 ) -> dict[str, Any]:
     if not llm.get("publishable"):
         raise ValueError("LLM ceiling is not publishable; inputs are intact")
+    validate_app_arms(apps, attribution)
+    if not hashes.get("embedding") or llm.get("embedding_sha256") != hashes["embedding"]:
+        raise ValueError("LLM embedding SHA-256 binding mismatch")
+    from .recall_embedding_ceiling import residual_item_ids
+
+    residual = residual_item_ids(embedding)
+    if set(llm.get("per_item", {})) != set(residual) or llm.get("item_count") != len(residual):
+        raise ValueError("LLM residual population differs from bound embedding")
     total = attribution["gold_relation_count"]
     result = dict(
         schema_version=1,
@@ -359,7 +421,7 @@ def render_markdown(report: Mapping[str, Any]) -> str:
 
 def preflight(manifest: Manifest, salt: bytes) -> None:
     """Render placeholder prose before loading artifacts or running the bootstrap."""
-    placeholder = {
+    placeholder: dict[str, Any] = {
         "input_sha256": {},
         "stages": {},
         "strata": {},
@@ -384,7 +446,62 @@ def preflight(manifest: Manifest, salt: bytes) -> None:
             ),
         },
     }
+    from .recall_attribution import STAGES
+    from .recall_consumers import ENRICH_DETERMINISTIC_STAGES, ENRICH_LLM_STAGES
+
+    stage = dict(count=0, share=0, by_agreement={str(n): dict(count=0, share=0) for n in (2, 3)})
+    labels = (
+        *STAGES,
+        *ENRICH_LLM_STAGES,
+        *ENRICH_DETERMINISTIC_STAGES,
+        "stage0_prescan",
+        "stage1b_expand",
+        "stage3_judge",
+        "committed",
+        "not_committed",
+        "stage1_filter",
+        "embedding_rerank",
+        "contextual_rerank",
+        "final_output",
+        "never_produced",
+    )
+    placeholder["stages"] = dict.fromkeys(labels, stage)
+    placeholder["strata"] = {"0": dict.fromkeys(labels, stage)}
+    placeholder["apps"] = [
+        dict(
+            stack=stack,
+            lane="deterministic" if model is None else "llm-on",
+            model=model,
+            stages=dict.fromkeys(labels, stage),
+            metrics=dict(precision=0, recall=0, f1=0, nomatch_fp_rate=0),
+        )
+        for stack in ("folio-enrich", "folio-mapper")
+        for model in (None, "gemini-3-flash-preview", "gpt-6-luna")
+    ]
+    placeholder["embedding"] = {
+        "rankings": {
+            arm: {
+                str(n): dict(recovered_count=0, non_gold_count=0, suggestion_count=0)
+                for n in (10, 25, 50, 100)
+            }
+            for arm in ("whole_passage", "sentence_windows")
+        },
+        "passages": {},
+    }
+    placeholder["campaign"] = dict(projection_usd=0, reserved_usd=0)
+    placeholder["input_sha256"] = dict.fromkeys(("attribution", "apps", "embedding", "llm"), "0")
+    # Scan every alternate fixed decision sentence as well as every rendered heading.
+    reasons = (
+        "Misses have an excess 2-of-3 share with a 95% interval above zero.",
+        "Port or improve the no-LLM path to committed output; its recovery meets the 10% bar.",
+        "Largest eligible share of misses; local search requires 25% recovery at depth 50.",
+        "Only LLM recovery qualifies; ask Damien.",
+        "Never-produced misses dominate; only LLM recovery meets the 25% bar; ask Damien.",
+        "ranking gate_tuning local_source app_stage brainstorm Recall attribution",
+    )
     check_outputs(placeholder, manifest, salt)
+    if scan_text("\n".join(reasons), manifest, salt):
+        raise ValueError("leak check failed; inputs are intact; before compute")
 
 
 def check_outputs(report: Mapping[str, Any], manifest: Manifest, salt: bytes) -> str:

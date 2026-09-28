@@ -361,7 +361,8 @@ def test_committed_depth_shape_reconciles_363_relations():
     assert sum(row["count"] for row in report["overall"].values()) == 363
     assert report["overall"]["top_100"]["count"] == 70
     assert report["overall"]["rank_101_200"]["count"] == 13
-    reconcile_depth(survivors, {"s": iris}, expected)
+    with pytest.raises(ValueError, match="population"):
+        reconcile_depth(survivors, {"s": iris}, expected)
     with pytest.raises(ValueError, match="reconciliation"):
         reconcile_depth({"s": candidates(112)}, {"s": iris}, expected)
     with pytest.raises(ValueError, match="reconciliation"):
@@ -443,3 +444,133 @@ def test_finalize_uses_gold_record_strata_and_excludes_nomatch(runner):
     result = runner.module.finalize_attribution(corpus, store, assembled, dictionary, expected)
     assert {r["item_id"] for r in result["relations"]} == {first.item_id}
     assert set(result["by_stratum"]) == {corpus.gold_item_records()[0].stratum_id}
+
+
+def test_review_wrong_population_rejected():
+    import json
+
+    from folio_eval.recall_attribution import reconcile_depth
+
+    committed = json.loads(Path("docs/benchmarks/verifier-shortlist-depth.json").read_text())
+    iris = frozenset([*(f"i{i}" for i in range(1, 71)), *(f"i{i}" for i in range(101, 114))])
+    with pytest.raises(ValueError, match="reconciliation"):
+        reconcile_depth({"s": candidates(200)}, {"s": iris}, committed)
+
+
+def test_review_heading_collision_before_retrieval(runner):
+    runner.manifest(["Distance past rank 200"])
+    with pytest.raises(ValueError, match="leak check"):
+        runner.module.main(runner.args)
+    assert runner.calls == []
+
+
+def reconciled_fixture():
+    import json
+
+    from folio_eval.recall_attribution import attribute_relations
+
+    expected = json.loads(Path("docs/benchmarks/verifier-shortlist-depth.json").read_text())
+    gold = {
+        "s": frozenset(
+            [
+                *(f"i{i}" for i in range(1, 71)),
+                *(f"i{i}" for i in range(101, 114)),
+                *(f"m{i}" for i in range(56)),
+            ]
+        )
+    }
+    gold.update({f"p{i}": frozenset({f"missing{i}"}) for i in range(224)})
+    survivors = {key: candidates(200) if key == "s" else () for key in gold}
+    iris = frozenset().union(*gold.values())
+    report = attribute_relations(
+        survivors,
+        {},
+        gold,
+        iris,
+        {key: [dict.fromkeys(values, 0.6)] * 3 for key, values in gold.items()},
+        dict.fromkeys(gold, "brief"),
+    )
+    report["fingerprint"] = {
+        key: value for key, value in expected.items() if key.endswith("_sha256")
+    }
+    return report, expected, survivors, gold
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "corpus_content_sha256",
+        "nomatch_content_sha256",
+        "ontology_cache_sha256",
+        "answer_rule_config_sha256",
+        "adapter_sha256",
+    ],
+)
+def test_review_provenance_fails_closed(key):
+    from folio_eval.recall_attribution import reconcile_depth
+
+    report, expected, survivors, gold = reconciled_fixture()
+    reconcile_depth(survivors, gold, expected, report["fingerprint"])
+    report["fingerprint"][key] = "0" * 64
+    with pytest.raises(ValueError, match="fingerprint"):
+        reconcile_depth(survivors, gold, expected, report["fingerprint"])
+
+
+def test_review_verify_finalized_read_only(tmp_path, monkeypatch):
+    import hashlib
+    import json
+
+    from folio_eval import recall_attribution as module
+
+    report, expected, _, _ = reconciled_fixture()
+    adapter_hash = report["fingerprint"].pop("adapter_sha256")
+    report["fingerprint"]["git_head"] = "a" * 40
+    adapter = Path("eval/folio_eval/synthetic_score.py").read_bytes()
+    assert hashlib.sha256(adapter).hexdigest() == adapter_hash
+    calls = []
+
+    def git_show(command, **kwargs):
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0, stdout=adapter)
+
+    monkeypatch.setattr(module.subprocess, "run", git_show)
+    path = tmp_path / "attribution.json"
+    path.write_text(json.dumps(report))
+    before = path.read_bytes()
+    digest = hashlib.sha256(before).hexdigest()
+    module.verify_finalized_attribution(path, expected, digest)
+    assert path.read_bytes() == before
+    assert calls == [["git", "show", "a" * 40 + ":eval/folio_eval/synthetic_score.py"]]
+    expected["scoreable_item_count"] += 1
+    with pytest.raises(ValueError, match="population"):
+        module.verify_finalized_attribution(path, expected, digest)
+
+
+def test_review_verify_cli_does_not_collect(runner, monkeypatch):
+    import hashlib
+    import json
+
+    runner.module.main(runner.args)
+    path = runner.root / "checkpoint/attribution.json"
+    before = path.read_bytes()
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("reverification must not collect or require a pristine current tree")
+
+    monkeypatch.setattr(runner.module, "collect_checkpoint", forbidden)
+    monkeypatch.setattr(runner.module, "build_checkpoint_fingerprint", forbidden)
+    args = [
+        "--verify-finalized",
+        str(path),
+        "--leak-manifest",
+        "unused",
+        "--salt-file",
+        str(runner.root / "salt"),
+    ]
+    assert runner.module.main(args) == 0
+    assert hashlib.sha256(path.read_bytes()).hexdigest() == hashlib.sha256(before).hexdigest()
+    value = json.loads(before)
+    value["fingerprint"]["corpus_content_sha256"] = "0" * 64
+    path.write_text(json.dumps(value))
+    with pytest.raises(ValueError, match="SHA-256"):
+        runner.module.main(args)

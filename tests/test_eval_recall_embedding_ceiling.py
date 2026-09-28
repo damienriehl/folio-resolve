@@ -247,3 +247,42 @@ def test_main_binds_inputs_and_writes_numeric_report(
     with pytest.raises(ValueError, match="fingerprint"):
         ceiling.main(args)
     assert not output.exists()
+
+
+def test_review_heading_collision_before_model_or_corpus(tmp_path, monkeypatch):
+    def forbidden(*args):
+        pytest.fail("compute started before fixed prose check")
+
+    monkeypatch.setattr(ceiling, "load_corpus", forbidden)
+    monkeypatch.setattr(ceiling, "load_local_provider", forbidden)
+    monkeypatch.setattr(
+        ceiling,
+        "load_manifest",
+        lambda _: build_manifest(
+            ["Distance past rank 200"],
+            b"fake-salt",
+            gold_version="fake",
+            gold_content_sha256="a" * 64,
+        ),
+    )
+    salt = tmp_path / "salt"
+    salt.write_bytes(b"fake-salt")
+    with pytest.raises(ValueError, match="leak check"):
+        ceiling.main(
+            [
+                "--attribution",
+                "unused",
+                "--attribution-sha256",
+                "unused",
+                "--corpus-manifest",
+                "unused",
+                "--model-path",
+                "unused",
+                "--leak-manifest",
+                "unused",
+                "--salt-file",
+                str(salt),
+                "--output",
+                "unused",
+            ]
+        )

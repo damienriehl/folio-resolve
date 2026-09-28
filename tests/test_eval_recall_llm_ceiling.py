@@ -65,7 +65,18 @@ def inputs(tmp_path: Path) -> dict[str, Any]:
         for n, item in enumerate(ids)
     ]
     path = tmp_path / "u2.json"
-    path.write_text(json.dumps({"schema_version": 1, "relations": relations}))
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "relations": relations,
+                "fingerprint": {
+                    "corpus_content_sha256": "a" * 64,
+                    "ontology_cache_sha256": "b" * 64,
+                },
+            }
+        )
+    )
     votes = [
         GraderVote(item, str(i), family, {"Gold": 0.9 if i < 2 or n % 2 else 0.59}, "generator")
         for n, item in enumerate(ids)
@@ -79,7 +90,33 @@ def inputs(tmp_path: Path) -> dict[str, Any]:
         gold_content_sha256="a" * 64,
         scrypt_params=ScryptParams(n=16, r=1, p=1, dklen=16, test_params=True),
     )
+    embedding = tmp_path / "embedding.json"
+    embedding.write_text(
+        json.dumps(
+            {
+                "attribution_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                "rankings": {
+                    arm: {"50": {"recovered_count": 0}}
+                    for arm in ("whole_passage", "sentence_windows")
+                },
+                "passages": {
+                    item: {
+                        "never_produced_count": 1,
+                        **{
+                            arm: {"100": {"recovered_count": 0}}
+                            for arm in ("whole_passage", "sentence_windows")
+                        },
+                    }
+                    for item in ids
+                },
+            }
+        )
+    )
     return dict(
+        embedding=embedding,
+        embedding_sha256=hashlib.sha256(embedding.read_bytes()).hexdigest(),
+        corpus_content_sha256="a" * 64,
+        ontology_cache_sha256="b" * 64,
         item_ids=set(ids),
         attribution=path,
         attribution_sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
@@ -250,10 +287,9 @@ def test_no_lemma_matching_and_alias_deduplication(inputs: dict[str, Any]) -> No
 
 def test_empty_selection_never_calls_runner(inputs: dict[str, Any]) -> None:
     fake = Fake()
-    report = collect(**{**inputs, "item_ids": set()}, runner=fake)
-    assert report is not None
-    assert fake.calls == 0 and report["item_count"] == report["recovered"] == 0
-    assert report["publishable"] == 1
+    with pytest.raises(ValueError, match="residual"):
+        collect(**{**inputs, "item_ids": set()}, runner=fake)
+    assert fake.calls == 0
 
 
 def test_cli_pinned_owl_limit_resume_and_numeric_artifact(
@@ -312,7 +348,19 @@ def test_cli_pinned_owl_limit_resume_and_numeric_artifact(
     salt = tmp_path / "salt"
     salt.write_bytes(inputs["salt"])
     output = tmp_path / "out.json"
+    attribution = json.loads(inputs["attribution"].read_text())
+    attribution["fingerprint"]["ontology_cache_sha256"] = digest
+    inputs["attribution"].write_text(json.dumps(attribution))
+    inputs["attribution_sha256"] = hashlib.sha256(inputs["attribution"].read_bytes()).hexdigest()
+    local = json.loads(inputs["embedding"].read_text())
+    local["attribution_sha256"] = inputs["attribution_sha256"]
+    inputs["embedding"].write_text(json.dumps(local))
+    inputs["embedding_sha256"] = hashlib.sha256(inputs["embedding"].read_bytes()).hexdigest()
     args = [
+        "--embedding",
+        str(inputs["embedding"]),
+        "--embedding-sha256",
+        inputs["embedding_sha256"],
         "--item-ids",
         str(ids),
         "--attribution",
@@ -338,3 +386,81 @@ def test_cli_pinned_owl_limit_resume_and_numeric_artifact(
     assert report["recovered"] == 20
     assert "Public legal passage" not in output.read_text()
     assert "Alternate-name" not in output.read_text()
+
+    # Same IDs and votes, different text and validated corpus digest.
+    from dataclasses import replace
+
+    changed = LoadedCorpus(
+        replace(manifest, content_sha256="c" * 64),
+        tuple(replace(item, text="Changed public passage.") for item in items),
+        (),
+    )
+    monkeypatch.setattr(module, "load_corpus", lambda _: changed)
+
+    def forbidden_prompt(*args):
+        pytest.fail("prompt constructed for a changed corpus")
+
+    monkeypatch.setattr(module, "render_prompt", forbidden_prompt)
+    fake = Fake()
+    with pytest.raises(ValueError, match="fingerprint"):
+        launcher.main(args, runner=fake)
+    assert fake.calls == 0
+
+
+def test_review_stale_empty_residual_refused(inputs):
+    fake = Fake()
+    with pytest.raises(ValueError, match="residual"):
+        collect(**{**inputs, "item_ids": set()}, runner=fake)
+    assert fake.calls == 0
+
+
+def test_review_changed_corpus_refused_before_prompts(inputs, monkeypatch):
+    import folio_eval.recall_llm_ceiling as module
+
+    def forbidden(*args):
+        pytest.fail("prompt constructed before provenance validation")
+
+    monkeypatch.setattr(module, "render_prompt", forbidden)
+    with pytest.raises(ValueError, match="fingerprint"):
+        collect(
+            **{**inputs, "corpus_content_sha256": "changed", "ontology_cache_sha256": "b" * 64},
+            runner=Fake(),
+        )
+
+
+def test_review_llm_heading_collision_precedes_prompts(inputs, monkeypatch):
+    import folio_eval.recall_llm_ceiling as module
+
+    def forbidden(*args):
+        pytest.fail("prompt constructed before preflight")
+
+    monkeypatch.setattr(module, "render_prompt", forbidden)
+    inputs["manifest"] = build_manifest(
+        ["Distance past rank 200"],
+        inputs["salt"],
+        gold_version="fake",
+        gold_content_sha256="a" * 64,
+    )
+    fake = Fake()
+    with pytest.raises(ValueError, match="leak check"):
+        collect(**inputs, runner=fake)
+    assert fake.calls == 0
+
+
+def test_review_no_free_form_residual_needed(inputs):
+    del inputs["item_ids"]
+    result = collect(**inputs, runner=Fake())
+    assert result["item_count"] == 20
+    assert result["embedding_sha256"] == inputs["embedding_sha256"]
+
+
+def test_review_empty_bound_residual_is_valid(inputs):
+    local = json.loads(inputs["embedding"].read_text())
+    for row in local["passages"].values():
+        row["whole_passage"]["100"]["recovered_count"] = 1
+    inputs["embedding"].write_text(json.dumps(local))
+    inputs["embedding_sha256"] = hashlib.sha256(inputs["embedding"].read_bytes()).hexdigest()
+    inputs["item_ids"] = set()
+    fake = Fake()
+    result = collect(**inputs, runner=fake)
+    assert result["item_count"] == 0 and fake.calls == 0

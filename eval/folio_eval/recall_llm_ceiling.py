@@ -172,7 +172,11 @@ def _checked_write(path: Path, payload: dict[str, Any], manifest: Manifest, salt
 
 def collect(
     *,
-    item_ids: Set[str],
+    item_ids: Set[str] | None = None,
+    embedding: Path,
+    embedding_sha256: str,
+    corpus_content_sha256: str,
+    ontology_cache_sha256: str,
     attribution: Path,
     attribution_sha256: str,
     passages: Mapping[str, str],
@@ -190,12 +194,27 @@ def collect(
     A limit saves a prefix without publishing. Resumes reuse terminal failed items
     as well as successes; a new retry campaign requires a new checkpoint directory.
     """
+    from .recall_embedding_ceiling import residual_item_ids
+    from .recall_report import load_bound, preflight
+
+    preflight(manifest, salt)
     raw = attribution.read_bytes()
     if hashlib.sha256(raw).hexdigest() != attribution_sha256:
         raise ValueError("attribution SHA-256 mismatch")
     source = _json(raw.decode("utf-8"))
     if not isinstance(source, dict) or source.get("schema_version") != 1:
         raise ValueError("invalid attribution schema")
+    for key, expected in (
+        ("corpus_content_sha256", corpus_content_sha256),
+        ("ontology_cache_sha256", ontology_cache_sha256),
+    ):
+        if source.get("fingerprint", {}).get(key) != expected:
+            raise ValueError("attribution corpus or ontology fingerprint mismatch")
+    local = load_bound(embedding, embedding_sha256, attribution_sha256)
+    derived = set(residual_item_ids(local))
+    if item_ids is not None and item_ids != derived:
+        raise ValueError("selected residual items differ from bound embedding artifact")
+    item_ids = derived
     relations = source.get("relations")
     if not isinstance(relations, list):
         raise ValueError("invalid attribution relations")
@@ -232,6 +251,7 @@ def collect(
     fingerprint = _digest(
         {
             "attribution_sha256": attribution_sha256,
+            "embedding_sha256": embedding_sha256,
             "prompts": prompts,
             "labels": [dictionary.norm_preferred, dictionary.norm_alternative],
             "votes": [
@@ -320,6 +340,7 @@ def collect(
     return {
         "schema_version": 1,
         "upper_bound": 1,
+        "embedding_sha256": embedding_sha256,
         "attribution_sha256": attribution_sha256,
         "fingerprint_sha256": fingerprint,
         "requested_model_sha256": hashlib.sha256(runner_identity.encode()).hexdigest(),
@@ -334,7 +355,12 @@ def collect(
 
 def write_report(path: Path, report: dict[str, Any], manifest: Manifest, salt: bytes) -> None:
     """Reports include counts and identifiers only; never passage or agent prose."""
-    digest_fields = {"attribution_sha256", "fingerprint_sha256", "requested_model_sha256"}
+    digest_fields = {
+        "attribution_sha256",
+        "embedding_sha256",
+        "fingerprint_sha256",
+        "requested_model_sha256",
+    }
     scalar_fields = {
         "schema_version",
         "upper_bound",
@@ -402,10 +428,14 @@ def load_dictionary(path: Path, expected_sha256: str) -> LabelIndex:
 def main(argv: list[str] | None = None, *, runner: Runner | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--item-ids", type=Path, required=True, help="JSON array of U5 residual item ids"
+        "--item-ids",
+        type=Path,
+        help="Optional residual assertion; must equal bound embedding result",
     )
     parser.add_argument("--attribution", type=Path, required=True)
     parser.add_argument("--attribution-sha256", required=True)
+    parser.add_argument("--embedding", type=Path, required=True)
+    parser.add_argument("--embedding-sha256", required=True)
     parser.add_argument("--model", required=True)
     parser.add_argument("--checkpoint", type=Path, required=True)
     parser.add_argument("--salt-file", type=Path, required=True)
@@ -421,13 +451,15 @@ def main(argv: list[str] | None = None, *, runner: Runner | None = None) -> int:
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--limit", type=int)
     args = parser.parse_args(argv)
-    ids = _json(args.item_ids.read_text())
-    if (
-        not isinstance(ids, list)
-        or any(not isinstance(item, str) or not item for item in ids)
-        or len(set(ids)) != len(ids)
-    ):
-        parser.error("--item-ids requires a JSON array of unique nonempty strings")
+    from .recall_embedding_ceiling import residual_item_ids
+    from .recall_report import load_bound, preflight
+
+    manifest, salt = load_manifest(args.surface_manifest), args.salt_file.read_bytes()
+    preflight(manifest, salt)
+    local = load_bound(args.embedding, args.embedding_sha256, args.attribution_sha256)
+    ids = residual_item_ids(local)
+    if args.item_ids and _json(args.item_ids.read_text()) != ids:
+        raise ValueError("selected residual items differ from bound embedding artifact")
     corpus = load_corpus(args.corpus_manifest)
     dictionary = load_dictionary(args.ontology_cache, corpus.manifest.ontology_cache_sha256)
     votes = []
@@ -441,9 +473,12 @@ def main(argv: list[str] | None = None, *, runner: Runner | None = None) -> int:
             if not isinstance(row, dict) or row.get("item_id") != item.item_id:
                 raise ValueError("invalid recorded grader vote")
             votes.append(GraderVote(**row))
-    manifest, salt = load_manifest(args.surface_manifest), args.salt_file.read_bytes()
     report = collect(
         item_ids=set(ids),
+        embedding=args.embedding,
+        embedding_sha256=args.embedding_sha256,
+        corpus_content_sha256=corpus.manifest.content_sha256,
+        ontology_cache_sha256=corpus.manifest.ontology_cache_sha256,
         attribution=args.attribution,
         attribution_sha256=args.attribution_sha256,
         passages={item.item_id: item.text for item in corpus.scoreable_items},

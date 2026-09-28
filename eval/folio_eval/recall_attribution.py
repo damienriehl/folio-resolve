@@ -10,6 +10,7 @@ import argparse
 import hashlib
 import json
 import os
+import subprocess
 import tempfile
 from collections import Counter
 from collections.abc import Callable, Mapping, Sequence, Set
@@ -18,7 +19,7 @@ from typing import Any, Protocol
 
 from .answer_rule import CandidateLike, load_config
 from .grade import DEFAULT_FLOOR, GraderVote, _resolve_vote
-from .leakcheck import load_manifest, scan_json_value, scan_text
+from .leakcheck import load_manifest, scan_json_value
 from .resolve_labels import LabelIndex, load_folio_index
 from .selftest import assert_ontology_pin, ensure_hash_seed
 from .synthesize import LoadedCorpus, SyntheticItem, load_corpus
@@ -36,7 +37,6 @@ from .synthetic_score import AdapterResult, DocumentAdapter, _assert_config
 from .verifier_depth import depth_curve
 
 ROOT = Path(__file__).resolve().parents[2]
-FIXED_REPORT_PROSE = "# Recall attribution\n\nUncapped survivors and gate lifecycle evidence.\n"
 
 
 STAGES = (
@@ -166,15 +166,82 @@ def reconcile_depth(
     survivors: Mapping[str, Sequence[CandidateLike]],
     gold: Mapping[str, Set[str]],
     committed: Mapping[str, Any],
+    fingerprint: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Fail closed against the committed cumulative depth counts."""
     computed = depth_curve(survivors, {k: v for k, v in gold.items() if v}, depths=(100, 200))
+    _verify_depth(computed, committed, fingerprint or {})
+    return computed
+
+
+def _verify_depth(
+    computed: Mapping[str, Any], committed: Mapping[str, Any], fingerprint: Mapping[str, Any]
+) -> None:
+    for key in ("gold_relation_count", "scoreable_item_count"):
+        if type(committed.get(key)) is not int or computed.get(key) != committed[key]:
+            raise ValueError(f"depth reconciliation population mismatch: {key}")
+    for key in (
+        "corpus_content_sha256",
+        "nomatch_content_sha256",
+        "ontology_cache_sha256",
+        "answer_rule_config_sha256",
+        "adapter_sha256",
+    ):
+        if key in committed and fingerprint.get(key) != committed[key]:
+            raise ValueError(f"depth reconciliation fingerprint mismatch: {key}")
     for depth in ("100", "200"):
         actual = computed["curve"][depth]["retrieved_gold_count"]
         expected = committed["curve"][depth]["retrieved_gold_count"]
         if type(expected) is not int or actual != expected:
             raise ValueError(f"depth reconciliation failed at {depth}: {actual} != {expected}")
-    return computed
+
+
+def verify_finalized_attribution(
+    path: Path, committed: Mapping[str, Any], expected_sha256: str | None = None
+) -> None:
+    """Read-only reconciliation of finalized bytes, including historical adapter provenance."""
+    raw = path.read_bytes()
+    expected = expected_sha256 or Path(str(path) + ".sha256").read_text().split()[0]
+    if hashlib.sha256(raw).hexdigest() != expected:
+        raise ValueError("attribution SHA-256 mismatch")
+    report = json.loads(raw)
+    rows = report["relations"]
+    pairs = {(r["item_id"], r["iri"]) for r in rows}
+    if len(pairs) != len(rows):
+        raise ValueError("depth reconciliation duplicate relation")
+    computed = dict(
+        gold_relation_count=len(rows),
+        scoreable_item_count=len({r["item_id"] for r in rows}),
+        curve={
+            str(n): {
+                "retrieved_gold_count": sum(r["rank"] is not None and r["rank"] <= n for r in rows)
+            }
+            for n in (100, 200)
+        },
+    )
+    for key in ("gold_relation_count", "scoreable_item_count"):
+        if report.get(key) != computed[key]:
+            raise ValueError("depth reconciliation artifact population mismatch")
+    fingerprint = dict(report["fingerprint"])
+    if "adapter_sha256" in committed and "adapter_sha256" not in fingerprint:
+        # Legacy artifacts bind the adapter through the checkpoint commit; never
+        # substitute the current checkout when verifying an earlier live run.
+        head = fingerprint.get("git_head", "")
+        if (
+            not isinstance(head, str)
+            or len(head) != 40
+            or any(c not in "0123456789abcdef" for c in head)
+        ):
+            raise ValueError("depth reconciliation invalid adapter commit")
+        adapter = subprocess.run(
+            ["git", "show", f"{head}:eval/folio_eval/synthetic_score.py"],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+        ).stdout
+        fingerprint["adapter_sha256"] = hashlib.sha256(adapter).hexdigest()
+    _verify_depth(computed, committed, fingerprint)
+    _verify_depth(report["depth_curve"], committed, fingerprint)
 
 
 def _atomic_write(path: Path, data: bytes) -> None:
@@ -205,7 +272,13 @@ def finalize_attribution(
     records = tuple(row for row in corpus.gold_item_records() if row.item_id in ids)
     gold = {row.item_id: row.gold_iris for row in records}
     survivors = {key: assembled[("scoreable", key)].candidates for key in gold}
-    reconcile_depth(survivors, gold, committed)
+    provenance = dict(
+        store.fingerprint.to_json(),
+        adapter_sha256=hashlib.sha256(
+            Path(__file__).with_name("synthetic_score.py").read_bytes()
+        ).hexdigest(),
+    )
+    reconcile_depth(survivors, gold, committed, provenance)
     votes = []
     for item in items:
         raw_votes = item.provenance.get("grader_votes", [])
@@ -224,7 +297,7 @@ def finalize_attribution(
         {row.item_id: row.stratum_id for row in records},
     )
     report["checkpoint_fingerprint_sha256"] = store.fingerprint.content_sha256()
-    report["fingerprint"] = store.fingerprint.to_json()
+    report["fingerprint"] = provenance
     return report
 
 
@@ -300,13 +373,15 @@ def make_adapter(corpus: LoadedCorpus) -> DocumentAdapter:
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--corpus-manifest", type=Path, required=True)
+    parser.add_argument("--corpus-manifest", type=Path)
     parser.add_argument(
         "--config", type=Path, default=ROOT / "eval/synthetic/answer_rule_config_synthetic_v1.json"
     )
     parser.add_argument("--leak-manifest", type=Path, required=True)
     parser.add_argument("--salt-file", type=Path, required=True)
-    parser.add_argument("--checkpoint-dir", type=Path, required=True)
+    parser.add_argument("--checkpoint-dir", type=Path)
+    parser.add_argument("--verify-finalized", type=Path)
+    parser.add_argument("--attribution-sha256")
     parser.add_argument("--shard-count", type=int, default=1)
     parser.add_argument("--shard-index", type=int, default=0)
     parser.add_argument("--finalize-only", action="store_true")
@@ -314,6 +389,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.shard_count < 1 or not 0 <= args.shard_index < args.shard_count:
         parser.error("shard-index must be within the positive shard-count")
+    from .recall_report import preflight
+
+    manifest = load_manifest(args.leak_manifest)
+    salt = args.salt_file.read_bytes()
+    preflight(manifest, salt)
+    if args.verify_finalized:
+        committed = json.loads((ROOT / "docs/benchmarks/verifier-shortlist-depth.json").read_text())
+        verify_finalized_attribution(args.verify_finalized, committed, args.attribution_sha256)
+        return 0
+    if not args.corpus_manifest or not args.checkpoint_dir:
+        parser.error("collection requires --corpus-manifest and --checkpoint-dir")
     ensure_hash_seed()
     corpus = load_corpus(args.corpus_manifest)
     config = load_config(args.config)
@@ -321,10 +407,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     if not corpus.manifest.scoreable:
         raise ValueError("corpus manifest is not scoreable")
     fingerprint = build_checkpoint_fingerprint(corpus, config, repo_root=ROOT)
-    manifest = load_manifest(args.leak_manifest)
-    salt = args.salt_file.read_bytes()
-    if scan_text(FIXED_REPORT_PROSE, manifest, salt):
-        raise ValueError("leak check failed for fixed report prose before collection")
     store = AttributionCheckpointStore.create(
         args.checkpoint_dir,
         fingerprint=fingerprint,

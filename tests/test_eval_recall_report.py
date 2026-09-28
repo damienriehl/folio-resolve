@@ -30,6 +30,7 @@ def source(stages: dict[str, int]) -> dict[str, Any]:
         "schema_version": 1,
         "relations": rows,
         "gold_relation_count": len(rows),
+        "scoreable_item_count": len(rows),
         "overall": counts,
         "by_stratum": {"s": counts},
         "rank_distance_below_200": {"50": stages.get("rank_below_200", 0)},
@@ -58,12 +59,27 @@ def app(n: int, lane: str = "deterministic") -> dict[str, Any]:
     return {
         "stack": "folio-mapper",
         "lane": lane,
-        "overall": {},
+        "overall": {"committed": {"count": 100, "by_agreement": {"2": 0, "3": 100}}},
         "gold_relation_count": 100,
-        "metrics": dict(precision=0.2, recall=0.3, f1=0.24, nomatch_fp_rate=0.1),
+        "metrics": dict(
+            precision=0.2,
+            recall=0.3,
+            f1=0.24,
+            nomatch_fp_rate=0.1,
+            gold=100,
+            items=100,
+            nomatch_items=30,
+        ),
         "resolve_misses": {
             "relations": [
-                dict(item_id=f"p{i}", iri=f"i{i}", committed=True, produced=True, stage="committed")
+                dict(
+                    item_id=f"p{i}",
+                    iri=f"i{i}",
+                    committed=True,
+                    produced=True,
+                    stage="committed",
+                    resolve_stage="never_produced",
+                )
                 for i in range(n)
             ]
         },
@@ -115,13 +131,21 @@ def manifest(words: list[str]) -> Any:
     return build_manifest(words, b"fake-salt", gold_version="fake", gold_content_sha256="a" * 64)
 
 
+def full_apps():
+    return [
+        dict(app(20), stack=stack, model=model, lane="deterministic" if model is None else "llm-on")
+        for stack in ("folio-enrich", "folio-mapper")
+        for model in (None, "gemini-3-flash-preview", "gpt-6-luna")
+    ]
+
+
 def payload() -> dict[str, Any]:
     return report.build_report(
         source({"never_produced": 100}),
-        [app(20)],
+        full_apps(),
         ceiling(),
-        dict(publishable=1, recovered=20, per_item={}),
-        {"attribution": "a" * 64},
+        dict(publishable=1, recovered=20, per_item={}, item_count=0, embedding_sha256="b" * 64),
+        {"attribution": "a" * 64, "embedding": "b" * 64},
     )
 
 
@@ -242,13 +266,17 @@ def test_numeric_app_adapter() -> None:
 def test_cli_bound_pipeline(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     inputs = {
         "attribution": source({"never_produced": 100}),
-        "apps": {"arms": [app(20)]},
+        "apps": {"arms": full_apps()},
         "embedding": ceiling(),
-        "llm": {"publishable": 1, "recovered": 0, "per_item": {}},
+        "llm": {"publishable": 1, "recovered": 0, "per_item": {}, "item_count": 0},
     }
     args = []
     digest = ""
     for name, value in inputs.items():
+        if name == "llm":
+            value["embedding_sha256"] = hashlib.sha256(
+                (tmp_path / "embedding.json").read_bytes()
+            ).hexdigest()
         if name != "attribution":
             value["attribution_sha256"] = digest
         path = tmp_path / f"{name}.json"
@@ -387,12 +415,71 @@ def test_largest_qualifying_app_wins() -> None:
 def test_stage_shares_and_distance_are_rendered() -> None:
     p = report.build_report(
         source({"rank_below_200": 60, "never_produced": 40}),
-        [app(20)],
+        full_apps(),
         ceiling(),
-        {"publishable": 1, "per_item": {}},
-        {},
+        {"publishable": 1, "per_item": {}, "item_count": 0, "embedding_sha256": "b" * 64},
+        {"embedding": "b" * 64},
     )
     assert p["stages"]["rank_below_200"]["share"] == 0.6
     assert p["stages"]["rank_below_200"]["by_agreement"]["3"]["share"] == 1
     assert "Doc type s" in report.render_markdown(p)
     assert "| 50 | 60 |" in report.render_markdown(p)
+
+
+def test_review_five_arms_refused():
+    arms = [
+        dict(app(20), stack=stack, model=model, lane="deterministic" if model is None else "llm-on")
+        for stack in ("folio-enrich", "folio-mapper")
+        for model in (None, "gemini-3-flash-preview", "gpt-6-luna")
+    ]
+    with pytest.raises(ValueError, match="six"):
+        report.build_report(
+            source({"never_produced": 100}),
+            arms[:5],
+            ceiling(),
+            dict(publishable=1, per_item={}),
+            {},
+        )
+
+
+def test_review_ae3_precedes_ranking():
+    local = ceiling(0.16)
+    local["never_produced_count"] = 80
+    decision = report.choose_lever(
+        source({"never_produced": 80, "rank_below_200": 20}), [], local, {"recovered": 60}
+    )
+    assert decision["route"] == "Damien"
+    assert decision["lever"] is None
+
+
+@pytest.mark.parametrize("damage", ["duplicate", "partial", "binding", "residual"])
+def test_review_publication_gates(damage):
+    arms = full_apps()
+    llm = dict(publishable=1, per_item={}, item_count=0, embedding_sha256="b" * 64)
+    if damage == "duplicate":
+        arms[-1] = arms[0]
+    elif damage == "partial":
+        arms[0]["metrics"]["items"] = 99
+    elif damage == "binding":
+        llm["embedding_sha256"] = "c" * 64
+    else:
+        llm["per_item"] = {"stale": {}}
+    with pytest.raises(ValueError):
+        report.build_report(
+            source({"never_produced": 100}), arms, ceiling(), llm, {"embedding": "b" * 64}
+        )
+
+
+@pytest.mark.parametrize(
+    "heading",
+    [
+        "Distance past rank 200",
+        "EntityRuler",
+        "Paid-arm projection",
+        "Non-gold proposals",
+        "Local search ceilings",
+    ],
+)
+def test_review_all_fixed_prose_preflight(heading):
+    with pytest.raises(ValueError, match="leak check"):
+        report.preflight(manifest([heading]), b"fake-salt")

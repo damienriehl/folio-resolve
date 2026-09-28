@@ -218,6 +218,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--residual-item-ids", type=Path, help="Write JSON passage IDs for U6 --item-ids"
     )
     args = parser.parse_args(argv)
+    from .recall_report import preflight
+
+    manifest = load_manifest(args.leak_manifest)
+    salt = args.salt_file.read_bytes()
+    preflight(manifest, salt)
     attribution = load_attribution(args.attribution, args.attribution_sha256)
     corpus = load_corpus(args.corpus_manifest)
     fingerprint = attribution.get("fingerprint", {})
@@ -234,8 +239,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     concepts = baseline.load_corpus(pin.path, pin.sha256)
     if ontology_sha256 != pin.sha256 or {c.iri for c in concepts} != dictionary.iris:
         raise ValueError("embedding ontology differs from eval ontology")
-    manifest = load_manifest(args.leak_manifest)
-    salt = args.salt_file.read_bytes()
     provider, count = load_local_provider(args.model_path)
     report = measure_ceiling(
         concepts,
