@@ -237,11 +237,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     pin = assert_ontology_pin(corpus.manifest.ontology_cache_sha256)
     dictionary, ontology_sha256, _ = load_folio_index()
     concepts = baseline.load_corpus(pin.path, pin.sha256)
-    if ontology_sha256 != pin.sha256 or {c.iri for c in concepts} != dictionary.iris:
+    if ontology_sha256 != pin.sha256 or not dictionary.iris <= {c.iri for c in concepts}:
         raise ValueError("embedding ontology differs from eval ontology")
+    eval_concepts = [c for c in concepts if c.iri in dictionary.iris]
+    excluded_concept_count = len(concepts) - len(eval_concepts)
     provider, count = load_local_provider(args.model_path)
     report = measure_ceiling(
-        concepts,
+        eval_concepts,
         {item.item_id: item.text for item in corpus.scoreable_items},
         attribution,
         provider,
@@ -250,6 +252,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     model_pin = json.loads(baseline.MODEL_FILES_PATH.read_text())
     report["attribution_sha256"] = args.attribution_sha256
     report["ontology_sha256"] = ontology_sha256
+    report["excluded_concept_count"] = excluded_concept_count
     report["model_revision"] = model_pin["revision"]
     report["model_files_sha256"] = model_pin["files"]
     residual = residual_item_ids(report)
