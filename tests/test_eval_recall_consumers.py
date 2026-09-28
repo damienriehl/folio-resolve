@@ -66,7 +66,7 @@ header={'kind':'synthetic-stack-run','stack':stack,'lane':control.get('lane','ll
 iri='https://folio.openlegalstandard.org/Ra'
 records=[header]
 for item in items:
- stages=({'stage0_prescan':['text'],'stage1_filter':1,'stage1b_expand':1,'embedding_rerank':1,'stage3_judge':{'judged':1},'committed':[iri]} if a.llm_on else {'stage1_filter':[iri],'embedding_rerank':[iri],'committed':[iri]}) if stack=='folio-mapper' else {k:[iri] for k in (['entity_ruler','llm_concept'] if a.llm_on else ['EntityRuler','Reconciliation','Resolution','StringMatch'])}
+ stages=({'stage0_prescan':['text'],'stage1_filter':1,'stage1b_expand':1,'embedding_rerank':1,'stage3_judge':{'judged':1},'committed':[iri]} if a.llm_on else {'stage1_filter':[iri],'embedding_rerank':[iri],'committed':[iri]}) if stack=='folio-mapper' else {k:[iri] for k in (['entity_ruler','llm_concept_identification'] if a.llm_on else ['EntityRuler','Reconciliation','Resolution','StringMatch'])}
  records.append({'item_id':item['item_id'],'iris':[iri],'stages':stages})
 pathlib.Path(a.out).write_text(''.join(json.dumps(x)+'\\n' for x in records))
 """)
@@ -152,35 +152,36 @@ def test_mapper_counts_only_pass_llm_validator(runner, tmp_path):
 
 def test_failed_batch_resumes_and_scrubs_tail(runner, tmp_path):
     spec = runner[0][0]
-    arm = arms_for([spec])[1]
     control = spec.repo_root / "control.json"
     control.write_text(json.dumps({"fail_item": "7"}))
     kwargs = dict(
-        arms=[arm],
+        arms=[a for a in arms_for(runner[0]) if a.provider],
         items_path=items_file(tmp_path),
         scoreable_ids=[str(i) for i in range(12)],
         local_dir=tmp_path / "state",
         batch_size=2,
         prices=fake_prices(),
-        bounds={arm.key: consumers.TokenBound(100, 100)},
+        bounds={
+            a.key: consumers.TokenBound(25000, 15000) for a in arms_for(runner[0]) if a.provider
+        },
         prepare=False,
     )
     with pytest.raises(ConsumerRunError) as error:
         consumers.run_consumer_campaign(**kwargs)
     assert "useful tail" in str(error.value)
     assert all(k not in str(error.value) for k in runner[1].values())
-    assert len(list((tmp_path / "state").glob("**/batch-*.json"))) == 2
+    assert len(list((tmp_path / "state").glob("**/batch-*.json"))) == 5
     control.unlink()
     result = consumers.run_consumer_campaign(**kwargs)
     calls = [json.loads(x) for x in (spec.repo_root / "calls.jsonl").read_text().splitlines()]
-    assert calls[:4] == [[str(i) for i in range(5)], ["5", "6"], ["7", "8"], ["7", "8"]]
-    assert result["projection_usd"] == "0.0024"
+    assert calls[:5] == [[str(i) for i in range(5)]] * 2 + [["5", "6"], ["7", "8"], ["7", "8"]]
+    assert result["projection_usd"] == "1.92"
     for path in (tmp_path / "state").rglob("*"):
         if path.is_file():
             assert all(k not in path.read_text() for k in runner[1].values())
 
 
-@pytest.mark.parametrize("projection,blocked", [("31", True), ("12", False)])
+@pytest.mark.parametrize("projection,blocked", [("31", True), ("16", False)])
 def test_canary_gate(runner, tmp_path, projection, blocked):
     arms = [a for a in arms_for(runner[0]) if a.provider]
     # 100 passages, four paid arms; conservative per-item token bound.
@@ -192,7 +193,7 @@ def test_canary_gate(runner, tmp_path, projection, blocked):
         local_dir=tmp_path / "state",
         batch_size=20,
         prices=fake_prices(),
-        bounds={a.key: consumers.TokenBound(token_count, 0) for a in arms},
+        bounds={a.key: consumers.TokenBound(token_count - 15000, 15000) for a in arms},
         prepare=False,
     )
     if blocked:
@@ -201,7 +202,7 @@ def test_canary_gate(runner, tmp_path, projection, blocked):
         for spec in runner[0]:
             assert len((spec.repo_root / "calls.jsonl").read_text().splitlines()) == 2
     else:
-        assert Decimal(consumers.run_consumer_campaign(**kwargs)["projection_usd"]) == 12
+        assert Decimal(consumers.run_consumer_campaign(**kwargs)["projection_usd"]) == 16
 
 
 def test_guard_reserves_failed_attempts_and_rejects_before_launch(tmp_path):
@@ -233,30 +234,26 @@ def test_missing_price_fails_before_calls(runner, tmp_path):
 
 def test_failed_batches_exhaust_cap_without_launching_next(runner, tmp_path):
     spec = runner[0][0]
-    arm = arms_for([spec])[1]
     (spec.repo_root / "control.json").write_text(json.dumps({"fail_item": "25"}))
+    arms = [a for a in arms_for(runner[0]) if a.provider]
     kwargs = dict(
-        arms=[arm],
+        arms=arms,
         items_path=items_file(tmp_path, 100),
         scoreable_ids=[str(i) for i in range(100)],
         local_dir=tmp_path / "state",
         batch_size=20,
         prices=fake_prices(),
-        bounds={arm.key: consumers.TokenBound(120000, 0)},
+        bounds={a.key: consumers.TokenBound(25000, 15000) for a in arms},
         prepare=False,
     )
-    for _ in range(9):
+    for _ in range(12):
         with pytest.raises(ConsumerRunError):
             consumers.run_consumer_campaign(**kwargs)
     calls = (spec.repo_root / "calls.jsonl").read_text()
-    with pytest.raises(consumers.SpendLimitError, match="next batch"):
+    with pytest.raises(consumers.SpendLimitError, match="ledger projects"):
         consumers.run_consumer_campaign(**kwargs)
     assert (spec.repo_root / "calls.jsonl").read_text() == calls
-    assert (
-        Decimal(json.loads((tmp_path / "state/projection.json").read_text())["projection_usd"])
-        == 12
-    )
-    assert consumers.SpendGuard(tmp_path / "state/spend.json").spent == Decimal("24.6")
+    assert consumers.SpendGuard(tmp_path / "state/spend.json").spent == Decimal("11.2")
 
 
 def test_resume_rejects_changed_input(runner, tmp_path):
@@ -290,7 +287,8 @@ def test_successful_runner_diagnostics_never_escape(runner, tmp_path, capsys):
         items_path=items_file(tmp_path),
         scoreable_ids=[str(i) for i in range(12)],
         local_dir=tmp_path / "state",
-        bounds={arm.key: consumers.TokenBound(100, 100)},
+        bounds={arm.key: consumers.TokenBound(4000, 4500)},
+        canary_only=True,
         prices=fake_prices(),
         prepare=False,
     )
@@ -400,13 +398,13 @@ def test_enrich_order_never_produced_late_appearance_and_final_loss():
 def test_enrich_llm_reads_runner_stage_order_and_keeps_first_loss():
     run = attribution_run(
         "folio-enrich",
-        {"a": {"z_extract": ["x"], "a_judge": [], "recovered": ["x"]}},
+        {"a": {"resolution": ["x"], "contextual_rerank": [], "string_matching": ["x"]}},
         {"a": frozenset({"x"})},
         "llm-on",
     )
     result = attribute_fixture(run, {"a": {"x"}}, votes={"a": [{"x": 1.0}] * 3})
-    assert result["relations"][0]["stage"] == "a_judge"
-    assert result["overall"]["a_judge"]["by_agreement"] == {"2": 0, "3": 1}
+    assert result["relations"][0]["stage"] == "contextual_rerank"
+    assert result["overall"]["contextual_rerank"]["by_agreement"] == {"2": 0, "3": 1}
     assert result["metrics"]["recall"] == 1.0
 
 
@@ -511,12 +509,15 @@ def test_mapper_final_loss_is_not_labeled_committed():
 
 def test_persisted_enrich_llm_keeps_runner_stage_order():
     run = attribution_run(
-        "folio-enrich", {"a": {"z_first": ["x"], "a_next": []}}, {"a": frozenset()}, "llm-on"
+        "folio-enrich",
+        {"a": {"resolution": ["x"], "contextual_rerank": []}},
+        {"a": frozenset()},
+        "llm-on",
     )
     payload = json.loads(json.dumps(consumers._serialize_run(run), sort_keys=True))
     restored = consumers._load_run(payload)
-    assert tuple(restored.stages["a"]) == ("z_first", "a_next")
-    assert attribute_fixture(restored, {"a": {"x"}})["relations"][0]["stage"] == "a_next"
+    assert tuple(restored.stages["a"]) == ("resolution", "contextual_rerank")
+    assert attribute_fixture(restored, {"a": {"x"}})["relations"][0]["stage"] == "contextual_rerank"
 
 
 def test_consumer_uses_u2_resolved_votes():
@@ -709,11 +710,8 @@ def test_cli_canary_only_and_resume(cli_fixture, runner, capsys):
     args, output, _ = cli_fixture
     paid = [
         "--arms",
-        "mapper:gpt-6-luna",
-        "--input-token-bound",
-        "100",
-        "--output-token-bound",
-        "100",
+        ALL_PAID_SELECTORS,
+        *paid_bounds_cli(),
     ]
     assert consumers.main([*args, *paid, "--canary-only"]) == 0
     spec = runner[0][1]
@@ -723,48 +721,50 @@ def test_cli_canary_only_and_resume(cli_fixture, runner, capsys):
             json.loads(x) for x in spec.repo_root.joinpath("calls.jsonl").read_text().splitlines()
         ]
 
-    assert calls() == [["0"], ["0", "1", "2", "3", "4"]]
+    assert calls() == [["0"], ["0"]] + [["0", "1", "2", "3", "4"]] * 2
     assert not output.exists()
     assert "projection_usd" in capsys.readouterr().out
-    assert consumers.main(args + paid) == 0
-    assert calls() == [["0"], ["0", "1", "2", "3", "4"], ["5", "6", "negative"]]
+    assert consumers.main([*args, "--arms", "mapper:gpt-6-luna", *paid_bounds_cli()]) == 0
+    assert calls() == [["0"], ["0"]] + [["0", "1", "2", "3", "4"]] * 2 + [["5", "6", "negative"]]
     assert (
         json.loads(output.read_text())["arms"]["folio-mapper-gpt-6-luna"]["metrics"]["items"] == 7
     )
 
 
-def test_cli_leak_scan_prevents_output_write(cli_fixture, monkeypatch):
+@pytest.mark.parametrize(
+    "surface",
+    ["committed", "contextual_rerank", "folio-enrich-gpt-6-luna", "aggregate bound is an estimate"],
+)
+def test_cli_leak_scan_prevents_output_write(cli_fixture, monkeypatch, runner, surface):
     args, output, _ = cli_fixture
     output.write_text("existing artifact")
     from folio_eval.leakcheck import build_manifest
 
     manifest = build_manifest(
-        ["committed"], b"test salt", gold_version="test", gold_content_sha256="a" * 64
+        [surface], b"test salt", gold_version="test", gold_content_sha256="a" * 64
     )
     monkeypatch.setattr(consumers, "load_manifest", lambda _: manifest)
     with pytest.raises(ValueError, match="leak check"):
         consumers.main([*args, "--arms", "mapper:deterministic"])
+    assert not any(s.repo_root.joinpath("calls.jsonl").exists() for s in runner[0])
     assert output.read_text() == "existing artifact"
     assert not output.with_suffix(".json.sha256").exists()
 
 
 def test_cli_shared_ledger_blocks_full_run(cli_fixture, runner, capsys, tmp_path):
     args, output, _ = cli_fixture
-    consumers.SpendGuard(tmp_path / "campaign/spend.json").reserve(Decimal("24.9995"))
+    consumers.SpendGuard(tmp_path / "campaign/spend.json").reserve(Decimal("24.3"))
     with pytest.raises(consumers.SpendLimitError, match="ledger projects"):
         consumers.main(
             [
                 *args,
                 "--arms",
-                "mapper:gpt-6-luna",
-                "--input-token-bound",
-                "100",
-                "--output-token-bound",
-                "100",
+                ALL_PAID_SELECTORS,
+                *paid_bounds_cli(),
             ]
         )
     calls = runner[0][1].repo_root.joinpath("calls.jsonl").read_text().splitlines()
-    assert [len(json.loads(x)) for x in calls] == [1, 5]
+    assert [len(json.loads(x)) for x in calls] == [1, 1, 5, 5]
     assert "projected_ledger_usd" in capsys.readouterr().out
     assert not output.exists()
 
@@ -780,21 +780,181 @@ def test_cli_attribution_digest_rejected_before_launch(cli_fixture, runner):
 def test_cli_all_paid_arms_and_deterministic_share_ledger(cli_fixture, runner, tmp_path):
     args, output, _ = cli_fixture
     consumers.main([*args, "--arms", "enrich:deterministic,mapper:deterministic"])
+    output.unlink()  # Aggregation must use campaign state, not the previous output.
     consumers.main(
         [
             *args,
             "--arms",
             "enrich:gpt-6-luna,mapper:gpt-6-luna,enrich:gemini-3-flash-preview,mapper:gemini-3-flash-preview",
-            "--input-token-bound",
-            "100",
-            "--output-token-bound",
-            "100",
+            *paid_bounds_cli(),
         ]
     )
     report = json.loads(output.read_text())
-    assert len(report["arms"]) == 4
+    assert len(report["arms"]) == 6
+    assert all(report["complete_arms"].values())
+    assert report["token_bound_floors"]["folio-enrich"]["code_enforced"] is False
+    assert "estimate" in report["token_bound_floors"]["folio-enrich"]["rationale"]
     assert all(value["metrics"]["recall"] == 1 for value in report["arms"].values())
     assert all(value["metrics"]["nomatch_fp_rate"] == 1 for value in report["arms"].values())
-    assert consumers.SpendGuard(tmp_path / "campaign/spend.json").spent == Decimal("0.00738")
+    assert consumers.SpendGuard(tmp_path / "campaign/spend.json").spent == Decimal("0.77085")
     for spec in runner[0]:
         assert len(spec.repo_root.joinpath("calls.jsonl").read_text().splitlines()) == 8
+
+
+@pytest.mark.parametrize("consumer", ["folio-enrich", "folio-mapper"])
+def test_review_bounds_below_floor_rejected(runner, tmp_path, consumer):
+    arm = next(a for a in arms_for(runner[0]) if a.spec.name == consumer and a.provider)
+    with pytest.raises(comparison.ComparisonError, match="floor"):
+        consumers.run_consumer_campaign(
+            arms=[arm],
+            items_path=items_file(tmp_path),
+            scoreable_ids=list(map(str, range(12))),
+            local_dir=tmp_path / "state",
+            bounds={arm.key: consumers.TokenBound(1, 0)},
+        )
+    assert not any(s.repo_root.joinpath("calls.jsonl").exists() for s in runner[0])
+
+
+def test_review_subset_requires_all_arm_projection(runner, tmp_path):
+    arm = arms_for(runner[0])[1]
+    with pytest.raises(comparison.ComparisonError, match=r"all.*arm projection"):
+        consumers.run_consumer_campaign(
+            arms=[arm],
+            items_path=items_file(tmp_path),
+            scoreable_ids=list(map(str, range(12))),
+            local_dir=tmp_path / "state",
+            bounds={arm.key: consumers.TokenBound(25000, 15000)},
+        )
+    assert not any(s.repo_root.joinpath("calls.jsonl").exists() for s in runner[0])
+
+
+def test_review_four_eight_dollar_arms_refused(runner, tmp_path):
+    arms = [a for a in arms_for(runner[0]) if a.provider]
+    with pytest.raises(consumers.SpendLimitError, match="32"):
+        consumers.run_consumer_campaign(
+            arms=arms,
+            items_path=items_file(tmp_path, 100),
+            scoreable_ids=list(map(str, range(100))),
+            local_dir=tmp_path / "state",
+            prices=fake_prices(),
+            bounds={a.key: consumers.TokenBound(65000, 15000) for a in arms},
+        )
+    for spec in runner[0]:
+        assert [
+            len(json.loads(row))
+            for row in (spec.repo_root / "calls.jsonl").read_text().splitlines()
+        ] == [5, 5]
+
+
+def test_review_enrich_sorted_serialized_shape():
+    names = (
+        "ingestion",
+        "normalization",
+        "entity_ruler",
+        "llm_concept_identification",
+        "early_individual_extraction",
+        "early_property_extraction",
+        "early_proposition",
+        "early_triple",
+        "document_type_classification",
+        "reconciliation",
+        "resolution",
+        "contextual_rerank",
+        "branch_judge",
+        "string_matching",
+        "llm_individual_linking",
+        "llm_property_linking",
+        "triple_enrichment",
+        "metadata",
+    )
+    stages = {name: [] for name in names}
+    stages["resolution"] = ["x"]
+    raw = json.loads(json.dumps({"item_id": "a", "iris": [], "stages": stages}, sort_keys=True))
+    run = attribution_run("folio-enrich", {"a": raw["stages"]}, {"a": frozenset()}, "llm-on")
+    assert attribute_fixture(run, {"a": {"x"}})["relations"][0]["stage"] == "contextual_rerank"
+    raw["stages"]["unknown_stage"] = []
+    with pytest.raises(ValueError, match="unexpected"):
+        attribute_fixture(run, {"a": {"x"}})
+
+
+ALL_PAID_SELECTORS = "enrich:gpt-6-luna,mapper:gpt-6-luna,enrich:gemini-3-flash-preview,mapper:gemini-3-flash-preview"
+
+
+def paid_bounds_cli():
+    return [
+        "--enrich-input-token-bound",
+        "25000",
+        "--enrich-output-token-bound",
+        "15000",
+        "--mapper-input-token-bound",
+        "4000",
+        "--mapper-output-token-bound",
+        "4500",
+    ]
+
+
+@pytest.mark.parametrize("change", ["bounds", "batch", "pin", "price", "canary"])
+def test_projection_rejects_stale_identity(cli_fixture, runner, monkeypatch, tmp_path, change):
+    args, _, _ = cli_fixture
+    consumers.main([*args, "--arms", ALL_PAID_SELECTORS, *paid_bounds_cli(), "--canary-only"])
+    calls = [s.repo_root.joinpath("calls.jsonl").read_text() for s in runner[0]]
+    bounds = paid_bounds_cli()
+    if change == "bounds":
+        bounds[1] = "26000"
+    elif change == "batch":
+        args += ["--batch-size", "2"]
+    elif change == "pin":
+        args[args.index("--mapper-commit") + 1] = "b" * 40
+    elif change == "price":
+        monkeypatch.setitem(
+            consumers.PINNED_PRICES,
+            "gpt-6-luna",
+            consumers.ModelPrice(Decimal("1"), Decimal("1"), "test", "test"),
+        )
+    else:
+        next(
+            (tmp_path / "campaign/batches/folio-enrich-gpt-6-luna").glob("batch-00000.json")
+        ).unlink()
+    with pytest.raises(comparison.ComparisonError):
+        consumers.main([*args, "--arms", "mapper:gpt-6-luna", *bounds])
+    assert calls == [s.repo_root.joinpath("calls.jsonl").read_text() for s in runner[0]]
+
+
+def test_full_batches_have_persisted_all_arm_projection(runner, tmp_path, monkeypatch):
+    original = consumers.run_consumer_stack
+    state = tmp_path / "state"
+    observed = []
+
+    def checked(spec, items_path, **kwargs):
+        ids = [json.loads(row)["item_id"] for row in items_path.read_text().splitlines()]
+        if "5" in ids:
+            proof = json.loads((state / "projection.json").read_text())
+            assert set(proof["paid_arms"]) == consumers.PAID_ARM_KEYS
+            assert Decimal(proof["projected_ledger_usd"]) < consumers.CAP_USD
+            observed.append(spec.name)
+        return original(spec, items_path, **kwargs)
+
+    monkeypatch.setattr(consumers, "run_consumer_stack", checked)
+    arms = [a for a in arms_for(runner[0]) if a.provider]
+    consumers.run_consumer_campaign(
+        arms=arms,
+        items_path=items_file(tmp_path),
+        scoreable_ids=list(map(str, range(12))),
+        local_dir=state,
+        bounds={a.key: consumers.TokenBound(25000, 15000) for a in arms},
+    )
+    assert len(observed) == 4
+
+
+def test_completed_arm_survives_later_arm_failure(cli_fixture, runner):
+    args, output, _ = cli_fixture
+    control = runner[0][1].repo_root / "control.json"
+    control.write_text(json.dumps({"fail_item": "0"}))
+    with pytest.raises(ConsumerRunError):
+        consumers.main([*args, "--arms", "enrich:deterministic,mapper:deterministic"])
+    assert not output.exists()
+    control.unlink()
+    consumers.main([*args, "--arms", "mapper:deterministic"])
+    report = json.loads(output.read_text())
+    assert set(report["arms"]) == {"folio-enrich-deterministic", "folio-mapper-deterministic"}
+    assert sum(report["complete_arms"].values()) == 2

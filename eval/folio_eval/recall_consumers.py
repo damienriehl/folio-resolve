@@ -17,7 +17,7 @@ from collections.abc import Mapping, Sequence, Set
 from dataclasses import asdict, dataclass, replace
 from decimal import Decimal
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
 
 from .comparison import (
     ComparisonError,
@@ -41,6 +41,60 @@ from .selftest import assert_ontology_pin
 from .synthesize import load_corpus
 
 CAP_USD = Decimal("25")
+
+
+class BoundFloor(TypedDict):
+    input_tokens: int
+    output_tokens: int
+    rationale: str
+    code_enforced: bool
+
+
+# Floors are aggregate per passage, including headroom; they are not usage telemetry.
+TOKEN_BOUND_FLOORS: dict[str, BoundFloor] = {
+    "folio-mapper": {
+        "input_tokens": 4000,
+        "output_tokens": 4500,
+        "rationale": "Pinned stage3_judge.py makes one LLM call with max_tokens=4096; input and output floors include headroom.",
+        "code_enforced": False,
+    },
+    "folio-enrich": {
+        "input_tokens": 25000,
+        "output_tokens": 15000,
+        "rationale": "Pinned bb576ac pipeline makes 7-13 calls per passage with no max_tokens or thinking cap; aggregate bound is an estimate, not a code-enforced limit.",
+        "code_enforced": False,
+    },
+}
+PROJECTION_BASIS = "conservative aggregate token estimate; includes all calls and retries"
+# bb576ac synthetic_runner._snapshot_pipeline_config uses stage.name, then sorts JSON.
+# The middle group runs concurrently (individual precedes proposition); this is the
+# orchestrator's declared topology order, not dict insertion or completion order.
+ENRICH_LLM_STAGES = (
+    "ingestion",
+    "normalization",
+    "entity_ruler",
+    "llm_concept_identification",
+    "early_individual_extraction",
+    "early_proposition",
+    "early_property_extraction",
+    "early_triple",
+    "document_type_classification",
+    "reconciliation",
+    "resolution",
+    "contextual_rerank",
+    "branch_judge",
+    "string_matching",
+    "llm_individual_linking",
+    "llm_property_linking",
+    "triple_enrichment",
+    "metadata",
+)
+ENRICH_DETERMINISTIC_STAGES = ("EntityRuler", "Reconciliation", "Resolution", "StringMatch")
+PAID_ARM_KEYS = frozenset(
+    f"folio-{app}-{model}"
+    for app in ("enrich", "mapper")
+    for model in ("gemini-3-flash-preview", "gpt-6-luna")
+)
 
 
 class SpendLimitError(ComparisonError):
@@ -104,6 +158,13 @@ class TokenBound:
 
     input_tokens: int
     output_tokens: int
+
+    def validate(self, consumer: str) -> None:
+        floor = TOKEN_BOUND_FLOORS[consumer]
+        if any(type(n) is not int for n in (self.input_tokens, self.output_tokens)) or (
+            self.input_tokens < floor["input_tokens"] or self.output_tokens < floor["output_tokens"]
+        ):
+            raise ComparisonError(f"token bound below documented {consumer} floor")
 
     def cost(self, price: ModelPrice) -> Decimal:
         if any(type(n) is not int or n < 0 for n in (self.input_tokens, self.output_tokens)):
@@ -204,6 +265,12 @@ class SpendGuard:
 
 
 def _serialize_run(run: StackRun) -> dict[str, object]:
+    stages = dict(run.stages)
+    if run.stack == "folio-enrich" and run.lane.startswith("llm-on"):
+        stages = {
+            item: {name: raw[name] for name in enrich_stage_order(raw)}
+            for item, raw in stages.items()
+        }
     return {
         "stack": run.stack,
         "lane": run.lane,
@@ -211,8 +278,8 @@ def _serialize_run(run: StackRun) -> dict[str, object]:
         "folio_python_version": run.folio_python_version,
         "config": dict(run.config),
         "rows": {k: sorted(v) for k, v in run.rows.items()},
-        "stages": dict(run.stages),
-        "stage_order": {k: list(v) for k, v in run.stages.items()},
+        "stages": stages,
+        "stage_order": {k: list(v) for k, v in stages.items()},
         "repository": dict(run.repository),
     }
 
@@ -240,7 +307,7 @@ def _load_run(payload: dict[str, object]) -> StackRun:
                 raise ComparisonError("invalid persisted stage order")
             ordered[item_id] = {name: stages[item_id][name] for name in names}
         stages = ordered
-    elif payload["stack"] == "folio-enrich" and payload["lane"] == "llm-on":
+    elif payload["stack"] == "folio-enrich" and str(payload["lane"]).startswith("llm-on"):
         raise ComparisonError("persisted enrich LLM snapshot lacks runner stage order")
     return StackRun(
         stack=str(payload["stack"]),
@@ -267,6 +334,7 @@ def run_consumer_campaign(
     canary_only: bool = False,
     identity_canary: bool = False,
     ledger_path: Path | None = None,
+    campaign_arms: Sequence[ConsumerArm] | None = None,
 ) -> dict[str, object]:
     """Canary all paid arms before full batches; return only portable fingerprints.
 
@@ -276,15 +344,28 @@ def run_consumer_campaign(
     """
     if batch_size < 1 or not arms or len({a.key for a in arms}) != len(arms):
         raise ComparisonError("invalid campaign arms or batch size")
+    universe = tuple(sorted(campaign_arms or arms, key=lambda a: a.key))
+    by_key = {a.key: a for a in universe}
+    if len(by_key) != len(universe) or any(by_key.get(a.key) != a for a in arms):
+        raise ComparisonError("selected arms differ from campaign arms")
+    paid_selected = any(a.provider for a in arms)
     costs: dict[str, Decimal] = {}
-    for arm in arms:
+    for arm in universe if paid_selected else arms:
         if arm.provider:
             price = pinned_price(arm.model or "", prices)
             if arm.key not in bounds:
                 raise ComparisonError("missing conservative per-item token bound")
+            bounds[arm.key].validate(arm.spec.name)
             costs[arm.key] = bounds[arm.key].cost(price)
         else:
             costs[arm.key] = Decimal(0)
+    if (
+        paid_selected
+        and not canary_only
+        and {a.key for a in arms if a.provider} != PAID_ARM_KEYS
+        and not (local_dir / "projection.json").exists()
+    ):
+        raise ComparisonError("full paid subset requires a valid all-arm projection")
     for root in (FOLIO_RESOLVE_ROOT, *(a.spec.repo_root for a in arms)):
         if local_dir.resolve().is_relative_to(root.resolve()):
             raise ComparisonError("consumer snapshots must be machine-local outside repositories")
@@ -314,6 +395,7 @@ def run_consumer_campaign(
             canary_only,
             identity_canary,
             ledger_path,
+            universe,
         )
 
 
@@ -330,31 +412,20 @@ def _run_locked(
     canary_only: bool,
     identity_canary: bool,
     ledger_path: Path | None,
+    universe: Sequence[ConsumerArm],
 ) -> dict[str, object]:
     identity = json.dumps(
         {
-            "schema": 2,
+            "schema": 3,
             "identity_canary": identity_canary,
             "ledger": str(ledger_path.resolve()) if ledger_path else None,
             "items": items,
             "scoreable_ids": list(scoreable_ids),
             "batch_size": batch_size,
             "arms": [
-                {
-                    "key": a.key,
-                    "commit": a.commit,
-                    "provider": a.provider,
-                    "model": a.model,
-                    "root": str(a.spec.repo_root.resolve()),
-                }
-                for a in arms
+                {"key": a.key, "commit": a.commit, "root": str(a.spec.repo_root.resolve())}
+                for a in universe
             ],
-            "prices": {
-                a.model: asdict(price)
-                for a in arms
-                if a.model and (price := prices[a.model]) is not None
-            },
-            "bounds": {k: asdict(v) for k, v in bounds.items()},
         },
         sort_keys=True,
         default=str,
@@ -371,6 +442,30 @@ def _run_locked(
         if not ledger.exists():
             SpendGuard(ledger).reserve(Decimal(0))
         _atomic_write_text(manifest, json.dumps({"sha256": fingerprint}))
+    paid = [a for a in universe if a.provider]
+    paid_selected = any(a.provider for a in arms)
+    pricing = {
+        a.key: {
+            "bound": asdict(bounds[a.key]),
+            "price": asdict(pinned_price(a.model or "", prices)),
+        }
+        for a in paid
+        if paid_selected
+    }
+    paid_manifest = local_dir / "paid.json"
+    if not paid_selected and paid_manifest.exists():
+        pricing = json.loads(paid_manifest.read_text())
+    paid_identity = sha256_text(json.dumps(pricing, sort_keys=True, default=str))
+    if paid_selected:
+        if paid_manifest.exists() and json.loads(paid_manifest.read_text()) != pricing_json(
+            pricing
+        ):
+            raise ComparisonError("paid checkpoint bounds or prices mismatch")
+        _atomic_write_text(paid_manifest, json.dumps(pricing_json(pricing), sort_keys=True))
+
+    def batch_identity(arm: ConsumerArm) -> str:
+        return sha256_text(fingerprint + (paid_identity if arm.provider else ""))
+
     guard = SpendGuard(ledger)
     fingerprints: dict[str, str] = {}
     canary_ids = set(scoreable_ids[:5])
@@ -382,7 +477,10 @@ def _run_locked(
         if path.exists():
             stored = json.loads(path.read_text())
             run = _load_run(stored["run"])
-            if stored["campaign_sha256"] != fingerprint or stored["item_ids"] != selected_ids:
+            if (
+                stored["campaign_sha256"] != batch_identity(arm)
+                or stored["item_ids"] != selected_ids
+            ):
                 raise ComparisonError("batch checkpoint identity mismatch")
             if sha256_text(json.dumps(stored["run"], sort_keys=True)) != stored["sha256"]:
                 raise ComparisonError("batch checkpoint fingerprint mismatch")
@@ -401,9 +499,13 @@ def _run_locked(
                 )
             finally:
                 input_path.unlink(missing_ok=True)
+            for item_id in selected_ids:
+                _stage_sets(
+                    replace(run, lane="llm-on" if arm.provider else "deterministic"), item_id
+                )
             payload = _serialize_run(run)
             stored = {
-                "campaign_sha256": fingerprint,
+                "campaign_sha256": batch_identity(arm),
                 "item_ids": selected_ids,
                 "run": payload,
                 "sha256": sha256_text(json.dumps(payload, sort_keys=True)),
@@ -416,6 +518,24 @@ def _run_locked(
             _assert_consumer_rows(run, selected_ids)
         fingerprints[f"{arm.key}/{number}"] = sha256_text(path.read_text())
 
+    projection_path = local_dir / "projection.json"
+    all_paid_selected = {a.key for a in arms if a.provider} == PAID_ARM_KEYS
+    if paid_selected and not all_paid_selected and not canary_only:
+        if not projection_path.exists():
+            raise ComparisonError("full paid subset requires a valid all-arm projection")
+        previous = json.loads(projection_path.read_text())
+        if (
+            previous.get("campaign_sha256") != fingerprint
+            or previous.get("paid_sha256") != paid_identity
+            or set(previous.get("paid_arms", [])) != PAID_ARM_KEYS
+        ):
+            raise ComparisonError("invalid all-arm projection identity")
+        # Revalidate the persisted canaries before any full batch.
+        for arm in paid:
+            for number in (-1, 0) if identity_canary else (0,):
+                if not (local_dir / arm.key / f"batch-{number:05d}.json").exists():
+                    raise ComparisonError("all-arm projection lacks completed canaries")
+                batch(arm, number, canary[:1] if number == -1 else canary)
     if identity_canary:
         for arm in arms:
             if arm.provider:
@@ -423,37 +543,44 @@ def _run_locked(
     for arm in arms:
         if arm.provider:
             batch(arm, 0, canary)
-    # Neither runner exposes structured usage: use the charged five-item bound.
-    projection = sum(
-        (costs[a.key] * (len(items) + int(identity_canary and bool(a.provider))) for a in arms),
-        Decimal(0),
+    projection = (
+        sum((costs[a.key] * (len(items) + int(identity_canary)) for a in paid), Decimal(0))
+        if paid_selected
+        else Decimal(0)
     )
-    projected_ledger = guard.spent
-    for arm in arms:
-        remaining = [
-            item for item in items if not arm.provider or item["item_id"] not in canary_ids
-        ]
-        for start in range(0, len(remaining), batch_size):
-            number = start // batch_size + (1 if arm.provider else 0)
-            if not (local_dir / arm.key / f"batch-{number:05d}.json").exists():
-                projected_ledger += costs[arm.key] * len(remaining[start : start + batch_size])
-    _atomic_write_text(
-        local_dir / "projection.json",
-        json.dumps(
-            {
-                "projection_usd": str(projection),
-                "projected_ledger_usd": str(projected_ledger),
-                "canary_items_per_paid_arm": 5,
-                "basis": "conservative aggregate token bound; includes all calls and retries",
-            }
-        ),
-    )
-    if projection >= CAP_USD:
-        raise SpendLimitError(f"canary projects ${projection}; full run must be under $25")
-    if ledger_path is not None and projected_ledger >= CAP_USD:
-        raise SpendLimitError(
-            f"campaign ledger projects ${projected_ledger}; full run must be under $25"
+
+    def remaining_cost() -> Decimal:
+        total = guard.spent
+        for arm in paid if paid_selected else ():
+            remaining = [item for item in items if item["item_id"] not in canary_ids]
+            for start in range(0, len(remaining), batch_size):
+                if not (local_dir / arm.key / f"batch-{start // batch_size + 1:05d}.json").exists():
+                    total += costs[arm.key] * len(remaining[start : start + batch_size])
+        return total
+
+    projected_ledger = remaining_cost()
+    if paid_selected and (all_paid_selected or not canary_only):
+        _atomic_write_text(
+            projection_path,
+            json.dumps(
+                {
+                    "campaign_sha256": fingerprint,
+                    "paid_sha256": paid_identity,
+                    "paid_arms": sorted(a.key for a in paid),
+                    "projection_usd": str(projection),
+                    "projected_ledger_usd": str(projected_ledger),
+                    "canary_items_per_paid_arm": 5,
+                    "basis": PROJECTION_BASIS,
+                    "token_bound_floors": TOKEN_BOUND_FLOORS,
+                }
+            ),
         )
+        if projection >= CAP_USD:
+            raise SpendLimitError(f"canary projects ${projection}; full run must be under $25")
+        if projected_ledger >= CAP_USD:
+            raise SpendLimitError(
+                f"campaign ledger projects ${projected_ledger}; full run must be under $25"
+            )
     if canary_only:
         return {
             "campaign_sha256": fingerprint,
@@ -467,11 +594,22 @@ def _run_locked(
             item for item in items if not arm.provider or item["item_id"] not in canary_ids
         ]
         for start in range(0, len(remaining), batch_size):
+            if arm.provider and remaining_cost() >= CAP_USD:
+                raise SpendLimitError("campaign ledger projects at least $25 before next batch")
             batch(
                 arm,
                 start // batch_size + (1 if arm.provider else 0),
                 remaining[start : start + batch_size],
             )
+    for arm in universe:
+        for path in sorted((local_dir / arm.key).glob("batch-*.json")):
+            stored = json.loads(path.read_text())
+            if stored["campaign_sha256"] != batch_identity(arm) or (
+                sha256_text(json.dumps(stored["run"], sort_keys=True)) != stored["sha256"]
+            ):
+                raise ComparisonError("batch checkpoint fingerprint or identity mismatch")
+            number = int(path.stem.removeprefix("batch-"))
+            fingerprints[f"{arm.key}/{number}"] = sha256_text(path.read_text())
     return {
         "campaign_sha256": fingerprint,
         "projection_usd": str(projection),
@@ -479,6 +617,12 @@ def _run_locked(
         "reserved_usd": str(guard.spent),
         "snapshots": fingerprints,
     }
+
+
+def enrich_stage_order(raw: Mapping[str, object]) -> tuple[str, ...]:
+    if not raw or set(raw) - set(ENRICH_LLM_STAGES):
+        raise ValueError("missing or unexpected consumer stages")
+    return tuple(name for name in ENRICH_LLM_STAGES if name in raw)
 
 
 def _stage_sets(run: StackRun, item_id: str) -> dict[str, frozenset[str]]:
@@ -492,9 +636,9 @@ def _stage_sets(run: StackRun, item_id: str) -> dict[str, frozenset[str]]:
             else ("stage1_filter", "embedding_rerank", "committed")
         )
     elif run.lane == "llm-on":
-        order = tuple(raw)
+        order = enrich_stage_order(raw)
     else:
-        order = ("EntityRuler", "StringMatch", "Reconciliation", "Resolution")
+        order = ENRICH_DETERMINISTIC_STAGES
     if not order or (run.lane != "llm-on" and set(raw) != set(order)):
         raise ValueError("missing or unexpected consumer stages")
     snapshots = {}
@@ -526,7 +670,7 @@ def attribute_consumer(
 
     Gold contains only positive, scoreable items; no-match IDs are separate, as
     in comparison.score_stack. Votes must come from U2.resolve_grader_votes.
-    Enrich LLM mappings must retain the runner's stage order. First loss wins
+    Enrich LLM mappings use the pinned runner's explicit topology order. First loss wins
     even when a later stage recovers the relation; scores use final output.
     Resolve misses mean all U2 stages outside top_100. Count-only mapper LLM
     stages cannot establish production of uncommitted IRIs: those are unknown,
@@ -687,6 +831,56 @@ def _campaign_run(arm: ConsumerArm, local_dir: Path, fingerprints: Mapping[str, 
     )
 
 
+def pricing_json(value: object) -> Any:
+    return json.loads(json.dumps(value, sort_keys=True, default=str))
+
+
+def consumer_output_preflight(arms: Sequence[ConsumerArm]) -> dict[str, Any]:
+    """Complete fixed report vocabulary with numeric placeholders, before execution."""
+    stages = (
+        *STAGES,
+        *ENRICH_LLM_STAGES,
+        *ENRICH_DETERMINISTIC_STAGES,
+        "stage1_filter",
+        "embedding_rerank",
+        "stage0_prescan",
+        "stage1b_expand",
+        "stage3_judge",
+        "committed",
+        "not_committed",
+        "final_output",
+        "never_produced",
+    )
+    metrics = MicroCounts().to_json()
+    metrics.update(nomatch_items=0, nomatch_false_positives=0, nomatch_fp_rate=0)
+    arm_report = {
+        "metrics": metrics,
+        "gold_relation_count": 0,
+        "overall": {s: {"count": 0, "by_agreement": {"2": 0, "3": 0}} for s in stages},
+        "resolve_misses": {
+            "by_stage": {
+                s: {"count": 0, "produced": 0, "committed": 0, "produced_unknown": 0}
+                for s in STAGES
+            }
+        },
+    }
+    return {
+        "schema_version": 1,
+        "attribution_sha256": "0" * 64,
+        "token_bound_floors": TOKEN_BOUND_FLOORS,
+        "complete_arms": {a.key: False for a in arms},
+        "arms": {a.key: arm_report for a in arms},
+        "campaign": {
+            "campaign_sha256": "0" * 64,
+            "projection_usd": "0",
+            "projected_ledger_usd": "0",
+            "reserved_usd": "0",
+            "basis": PROJECTION_BASIS,
+            "snapshots": {f"{a.key}/0": "0" * 64 for a in arms},
+        },
+    }
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--corpus-manifest", type=Path, required=True)
@@ -705,16 +899,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="reuse this machine-local directory for ALL arm selections and restarts",
     )
     parser.add_argument("--batch-size", type=int, default=5)
-    parser.add_argument(
-        "--input-token-bound",
-        type=int,
-        help="worst-case per-item input tokens across all calls and retries, for every paid arm",
-    )
-    parser.add_argument(
-        "--output-token-bound",
-        type=int,
-        help="worst-case per-item output tokens including thinking and retries, for every paid arm",
-    )
+    for consumer in ("enrich", "mapper"):
+        for direction in ("input", "output"):
+            parser.add_argument(
+                f"--{consumer}-{direction}-token-bound",
+                type=int,
+                help=f"aggregate per-item {direction} token estimate for {consumer}; see documented floors",
+            )
     parser.add_argument("--canary-only", action="store_true")
     parser.add_argument("--attribution", type=Path, required=True)
     parser.add_argument("--attribution-sha256", required=True)
@@ -736,11 +927,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     paid = [arm for arm in arms if arm.provider]
     bounds = {}
     if paid:
-        if args.input_token_bound is None or args.output_token_bound is None:
-            parser.error("paid arms require both conservative per-item token bounds")
-        bound = TokenBound(args.input_token_bound, args.output_token_bound)
-        for arm in paid:
-            bound.cost(pinned_price(arm.model or ""))
+        for arm in available:
+            if not arm.provider:
+                continue
+            name = arm.spec.name.removeprefix("folio-")
+            inp = getattr(args, f"{name}_input_token_bound")
+            out = getattr(args, f"{name}_output_token_bound")
+            if inp is None or out is None:
+                parser.error(
+                    "paid arms require enrich and mapper input/output bounds for the all-arm projection"
+                )
+            bound = TokenBound(inp, out)
+            bound.validate(arm.spec.name)
             bounds[arm.key] = bound
     if args.batch_size < 1:
         parser.error("batch-size must be positive")
@@ -798,11 +996,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             raise ValueError("invalid consumer gold agreement")
     manifest = load_manifest(args.leak_manifest)
     salt = args.salt_file.read_bytes()
-    if scan_json_value({"schema_version": 1}, manifest, salt):
+    if scan_json_value(consumer_output_preflight(available), manifest, salt):
         raise ValueError("leak check failed before consumer launch")
     args.campaign_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-    # Each subset has independent resumable batches but shares the cumulative cap.
-    local_dir = args.campaign_dir / sha256_text(",".join(sorted(selected)))
+    local_dir = args.campaign_dir / "batches"
     ledger = args.campaign_dir / "spend.json"
     with (args.campaign_dir / "launcher.lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -811,6 +1008,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             emit_items_file(corpus, items_path)
             campaign = run_consumer_campaign(
                 arms=arms,
+                campaign_arms=available,
                 items_path=items_path,
                 scoreable_ids=list(gold),
                 local_dir=local_dir,
@@ -833,9 +1031,18 @@ def main(argv: Sequence[str] | None = None) -> int:
             fingerprints = campaign["snapshots"]
             assert isinstance(fingerprints, dict)
             arm_reports = {}
-            for arm in arms:
+            expected_ids = set(gold) | {item.item_id for item in corpus.nomatch_items}
+            for arm in available:
+                if not any(
+                    key.startswith(arm.key + "/") and int(key.split("/")[1]) >= 0
+                    for key in fingerprints
+                ):
+                    continue
+                run = _campaign_run(arm, local_dir, fingerprints)
+                if set(run.rows) != expected_ids:
+                    continue
                 result = attribute_consumer(
-                    _campaign_run(arm, local_dir, fingerprints),
+                    run,
                     gold,
                     resolved_votes=resolved,
                     resolve_attribution=attribution,
@@ -849,6 +1056,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 }
             report = {
                 "schema_version": 1,
+                "complete_arms": {a.key: a.key in arm_reports for a in available},
+                "token_bound_floors": TOKEN_BOUND_FLOORS,
                 "attribution_sha256": args.attribution_sha256,
                 "campaign": campaign,
                 "arms": arm_reports,
