@@ -18,7 +18,11 @@ from folio_eval.downstream import ConsumerRunError, ConsumerSpec
 @pytest.fixture
 def runner(tmp_path, monkeypatch):
     monkeypatch.setattr(comparison, "clean_tree_guard", lambda _: nullcontext())
-    monkeypatch.setattr(comparison, "_git_repository_state", lambda _: {"git_sha": "a" * 40})
+    monkeypatch.setattr(
+        comparison,
+        "_git_repository_state",
+        lambda root: {"git_sha": "bb576ac" + "0" * 33 if root.name == "folio-enrich" else "a" * 40},
+    )
     monkeypatch.setattr(consumers, "assert_arm_checkout", lambda _: None)
     monkeypatch.setattr(
         comparison,
@@ -1089,3 +1093,188 @@ def test_required_campaign_set_and_mapper_projection(runner, tmp_path):
         "folio-mapper-gemini-3-flash-preview",
         "folio-mapper-gpt-6-luna",
     }
+
+
+def legacy_campaign(runner, tmp_path, monkeypatch):
+    """Write the pre-FIX7 schema, including its six-arm campaign hash."""
+    arms = arms_for(runner[0])
+    items = items_file(tmp_path)
+    state = tmp_path / "legacy"
+    kwargs = dict(
+        arms=[a for a in arms if not a.provider],
+        campaign_arms=arms,
+        items_path=items,
+        scoreable_ids=list(map(str, range(12))),
+        local_dir=state,
+        bounds={},
+    )
+    consumers.run_consumer_campaign(**kwargs)
+    entries = [dict(key=a.key, commit=a.commit, root=str(a.spec.repo_root.resolve())) for a in arms]
+    enrich = next(e for e in entries if e["key"] == "folio-enrich-deterministic")
+    entries += [
+        dict(enrich, key="folio-enrich-" + model)
+        for model in ("gemini-3-flash-preview", "gpt-6-luna")
+    ]
+    identity = dict(
+        schema=3,
+        identity_canary=False,
+        ledger=None,
+        items=[json.loads(x) for x in items.read_text().splitlines()],
+        scoreable_ids=kwargs["scoreable_ids"],
+        batch_size=5,
+        arms=sorted(entries, key=lambda e: e["key"]),
+    )
+    old = consumers.sha256_text(json.dumps(identity, sort_keys=True))
+    (state / "campaign.json").write_text(json.dumps({"sha256": old}))
+    for path in state.glob("*/batch-*.json"):
+        value = json.loads(path.read_text())
+        value.pop("deterministic_identity", None)
+        value["campaign_sha256"] = consumers.sha256_text(old)
+        value["run"]["lane"] = "incumbent"
+        value["run"]["repository"]["git_sha"] = next(
+            a.commit.ljust(40, "0") for a in arms if a.key == path.parent.name
+        )
+        value["sha256"] = consumers.sha256_text(json.dumps(value["run"], sort_keys=True))
+        path.write_text(json.dumps(value))
+    # Fake runners are not git checkouts; the migration's pinned-source check is
+    # separately exercised against real read-only checkouts during live inspection.
+    monkeypatch.setattr(consumers, "_verify_pinned_runner", lambda arm: None, raising=False)
+    return kwargs
+
+
+def test_fix8_adopts_six_arm_batches_without_launch(runner, tmp_path, monkeypatch):
+    kwargs = legacy_campaign(runner, tmp_path, monkeypatch)
+    before = [s.repo_root.joinpath("calls.jsonl").read_bytes() for s in runner[0]]
+    ledger = (kwargs["local_dir"] / "spend.json").read_bytes()
+    with pytest.raises(comparison.ComparisonError):
+        consumers.run_consumer_campaign(**kwargs)
+    result = consumers.run_consumer_campaign(**kwargs, adopt_deterministic_batches=True)
+    assert len(result["snapshots"]) == 6
+    assert (kwargs["local_dir"] / "deterministic-adoption.json").exists()
+    consumers.run_consumer_campaign(**kwargs)
+    assert before == [s.repo_root.joinpath("calls.jsonl").read_bytes() for s in runner[0]]
+    assert (kwargs["local_dir"] / "spend.json").read_bytes() == ledger
+
+
+@pytest.mark.parametrize("fault", ["pin", "corpus", "payload", "membership", "paid"])
+def test_fix8_legacy_adoption_refuses_drift(runner, tmp_path, monkeypatch, fault):
+    from dataclasses import replace
+
+    kwargs = legacy_campaign(runner, tmp_path, monkeypatch)
+    state = kwargs["local_dir"]
+    if fault == "pin":
+        kwargs["arms"] = [replace(a, commit="b" * 40) for a in kwargs["arms"]]
+        kwargs["campaign_arms"] = [
+            replace(a, commit="b" * 40) if not a.provider else a for a in kwargs["campaign_arms"]
+        ]
+    elif fault == "corpus":
+        kwargs["items_path"].write_text(
+            kwargs["items_path"].read_text().replace("Synthetic passage", "Changed corpus")
+        )
+    else:
+        path = next(state.glob("*/batch-*.json"))
+        value = json.loads(path.read_text())
+        if fault == "payload":
+            value["run"]["folio_python_version"] = "changed"
+        elif fault == "membership":
+            value["item_ids"] = ["wrong"]
+        else:
+            path = state / "folio-mapper-gpt-6-luna/batch-00000.json"
+            path.parent.mkdir()
+        path.write_text(json.dumps(value))
+    before = {str(p): p.read_bytes() for p in state.rglob("*.json")}
+    calls = [s.repo_root.joinpath("calls.jsonl").read_bytes() for s in runner[0]]
+    with pytest.raises(comparison.ComparisonError):
+        consumers.run_consumer_campaign(**kwargs, adopt_deterministic_batches=True)
+    assert before == {str(p): p.read_bytes() for p in state.rglob("*.json")}
+    assert calls == [s.repo_root.joinpath("calls.jsonl").read_bytes() for s in runner[0]]
+
+
+@pytest.mark.parametrize("fault", [None, "pin", "corpus_digest", "runner"])
+def test_fix8_modern_arm_identity(runner, tmp_path, fault):
+    from dataclasses import replace
+
+    arms = arms_for(runner[0])
+    kwargs = dict(
+        arms=[arms[0]],
+        campaign_arms=arms,
+        items_path=items_file(tmp_path),
+        scoreable_ids=list(map(str, range(12))),
+        local_dir=tmp_path / "modern",
+        bounds={},
+        input_fingerprints={"corpus": "a" * 64, "attribution": "b" * 64},
+    )
+    consumers.run_consumer_campaign(**kwargs)
+    calls = runner[0][0].repo_root.joinpath("calls.jsonl").read_bytes()
+    kwargs["campaign_arms"] = kwargs["arms"]  # Paid-arm declarations are irrelevant.
+    if fault == "pin":
+        kwargs["arms"] = kwargs["campaign_arms"] = [replace(arms[0], commit="c" * 40)]
+    elif fault == "corpus_digest":
+        kwargs["input_fingerprints"]["corpus"] = "c" * 64
+    elif fault == "runner":
+        script = runner[0][0].repo_root / "backend/eval/synthetic_runner.py"
+        script.write_text(script.read_text() + "\n# changed\n")
+    if fault:
+        with pytest.raises(comparison.ComparisonError):
+            consumers.run_consumer_campaign(**kwargs)
+    else:
+        consumers.run_consumer_campaign(**kwargs)
+    assert runner[0][0].repo_root.joinpath("calls.jsonl").read_bytes() == calls
+
+
+def test_fix8_paid_campaign_identity_remains_strict(runner, tmp_path):
+    arms = arms_for(runner[0])
+    kwargs = dict(
+        arms=arms,
+        campaign_arms=arms,
+        items_path=items_file(tmp_path),
+        scoreable_ids=list(map(str, range(12))),
+        local_dir=tmp_path / "paid",
+        bounds={a.key: consumers.TokenBound(4000, 4500) for a in arms if a.provider},
+    )
+    consumers.run_consumer_campaign(**kwargs)
+    calls = [s.repo_root.joinpath("calls.jsonl").read_bytes() for s in runner[0]]
+    ledger = (kwargs["local_dir"] / "spend.json").read_bytes()
+    kwargs["campaign_arms"] = kwargs["arms"] = [a for a in arms if a.spec.name == "folio-mapper"]
+    with pytest.raises(comparison.ComparisonError):
+        consumers.run_consumer_campaign(**kwargs, adopt_deterministic_batches=True)
+    assert calls == [s.repo_root.joinpath("calls.jsonl").read_bytes() for s in runner[0]]
+    assert (kwargs["local_dir"] / "spend.json").read_bytes() == ledger
+
+
+def test_fix8_cannot_rebind_ledger(runner, tmp_path):
+    arm = arms_for(runner[0])[0]
+    kwargs = dict(
+        arms=[arm],
+        items_path=items_file(tmp_path),
+        scoreable_ids=[],
+        local_dir=tmp_path / "state",
+        bounds={},
+    )
+    consumers.run_consumer_campaign(**kwargs)
+    new_ledger = tmp_path / "other-spend.json"
+    new_ledger.write_text('{"reserved_usd": "0"}')
+    with pytest.raises(comparison.ComparisonError):
+        consumers.run_consumer_campaign(**kwargs, ledger_path=new_ledger)
+
+
+def test_fix8_adoption_retry_preserves_receipt(runner, tmp_path, monkeypatch):
+    kwargs = legacy_campaign(runner, tmp_path, monkeypatch)
+    original = consumers._atomic_write_text
+    count = 0
+
+    def interrupted(path, text):
+        nonlocal count
+        if path.name.startswith("batch-"):
+            count += 1
+            if count == 2:
+                raise OSError("simulated interruption")
+        return original(path, text)
+
+    monkeypatch.setattr(consumers, "_atomic_write_text", interrupted)
+    with pytest.raises(OSError, match="simulated"):
+        consumers.run_consumer_campaign(**kwargs, adopt_deterministic_batches=True)
+    receipt = (kwargs["local_dir"] / "deterministic-adoption.json").read_bytes()
+    monkeypatch.setattr(consumers, "_atomic_write_text", original)
+    consumers.run_consumer_campaign(**kwargs, adopt_deterministic_batches=True)
+    assert (kwargs["local_dir"] / "deterministic-adoption.json").read_bytes() == receipt
