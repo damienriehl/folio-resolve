@@ -20,7 +20,11 @@ from .experiment import (
     start_attempt,
 )
 from .leakcheck import Manifest, _atomic_write_text, load_manifest, scan_json_value, scan_text
-from .recall_consumers import APP_STAGE_DISPLAY_LABELS, display_app_stages
+from .recall_consumers import (
+    APP_STAGE_DISPLAY_LABELS,
+    REQUIRED_PUBLISHED_ARMS,
+    display_app_stages,
+)
 from .verifier_report import require_pristine
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -87,11 +91,27 @@ def agreement_concentration(relations: Sequence[Mapping[str, Any]]) -> dict[str,
     )
 
 
-def _committed_misses(arm: Mapping[str, Any]) -> int:
+def _miss_count(arm: Mapping[str, Any], field: str) -> int:
     cross = arm["resolve_misses"]
     if "relations" in cross:
-        return len({(r["item_id"], r["iri"]) for r in cross["relations"] if r["committed"]})
-    return sum(int(row["committed"]) for row in cross["by_stage"].values())
+        return len({(r["item_id"], r["iri"]) for r in cross["relations"] if r.get(field) is True})
+    return sum(int(row.get(field, 0)) for row in cross["by_stage"].values())
+
+
+def _committed_misses(arm: Mapping[str, Any]) -> int:
+    return _miss_count(arm, "committed")
+
+
+def _producing_stages(arm: Mapping[str, Any]) -> dict[str, int]:
+    cross = arm["resolve_misses"]
+    if "relations" in cross:
+        pairs = {
+            (r["item_id"], r["iri"]): r["produced_stage"]
+            for r in cross["relations"]
+            if r.get("produced") is True and r.get("produced_stage")
+        }
+        return display_app_stages(dict(Counter(pairs.values())))
+    return display_app_stages(cross.get("by_producing_stage", {}))
 
 
 def app_arms(payload: Mapping[str, Any]) -> list[dict[str, Any]]:
@@ -143,22 +163,29 @@ def choose_lever(
     for arm in apps:
         if arm["lane"] not in ("deterministic", "incumbent"):
             continue
-        # U4 records first loss, not first production. Only committed gold proves
-        # usable recovery; do not relabel a loss stage as the stage that recovered it.
-        recovered_count = _committed_misses(arm)
+        recovered_count = _miss_count(arm, "produced")
         if misses and 10 * recovered_count >= misses:
-            candidates.append((recovered_count, arm["stack"]))
+            candidates.append((recovered_count, arm["stack"], arm))
     if candidates:
-        n, stack = sorted(candidates, key=lambda x: (-x[0], x[1]))[0]
+        n, stack, winner = sorted(candidates, key=lambda x: (-x[0], x[1]))[0]
+        producing = _producing_stages(winner)
+        stage = (
+            sorted(producing, key=lambda name: (-producing[name], name))[0]
+            if producing
+            else "unrecorded"
+        )
         return dict(
             base,
             lever="app_stage",
             route="brainstorm",
             app=stack,
-            stage="committed",
+            stage=stage,
+            produced=n,
+            committed=_committed_misses(winner),
+            by_producing_stage=producing,
             recovered=n,
             recovery_share=n / misses,
-            reason="Port or improve the no-LLM path to committed output; its recovery meets the 10% bar.",
+            reason="Port or improve the no-LLM candidate-producing stage; its produced recovery meets the 10% bar.",
         )
     rankings = embedding["rankings"]
     recovered = max(rankings[arm]["50"]["recovered_count"] for arm in rankings)
@@ -234,15 +261,11 @@ def _stages(rows: Mapping[str, Any], total: int) -> dict[str, Any]:
 
 
 def validate_app_arms(apps: Sequence[Mapping[str, Any]], attribution: Mapping[str, Any]) -> None:
-    """Require exactly six full scoreable/control cohorts before publication."""
-    expected = {
-        (stack, model)
-        for stack in ("folio-enrich", "folio-mapper")
-        for model in (None, "gemini-3-flash-preview", "gpt-6-luna")
-    }
+    """Require exactly four full scoreable/control cohorts before publication."""
+    expected = REQUIRED_PUBLISHED_ARMS
     identities = [(a.get("stack"), a.get("model", a.get("llm_model"))) for a in apps]
-    if len(identities) != 6 or set(identities) != expected:
-        raise ValueError("report requires exactly six unique complete app arms")
+    if len(identities) != len(expected) or set(identities) != expected:
+        raise ValueError("report requires exactly four unique complete app arms")
     total = attribution["gold_relation_count"]
     items = attribution["scoreable_item_count"]
     for arm, (_, model) in zip(apps, identities, strict=True):
@@ -257,7 +280,7 @@ def validate_app_arms(apps: Sequence[Mapping[str, Any]], attribution: Mapping[st
             or sum(row["count"] for row in stages.values()) != total
             or any(sum(row["by_agreement"].values()) != row["count"] for row in stages.values())
         ):
-            raise ValueError("report requires six complete app arms with matching populations")
+            raise ValueError("report requires four complete app arms with matching populations")
 
 
 def build_report(
@@ -294,6 +317,11 @@ def build_report(
                 lane=arm["lane"],
                 model=arm.get("model", arm.get("llm_model")),
                 metrics=arm["metrics"],
+                resolve_misses=dict(
+                    produced=_miss_count(arm, "produced"),
+                    committed=_committed_misses(arm),
+                    by_producing_stage=_producing_stages(arm),
+                ),
                 stages=_stages(display_app_stages(arm["overall"]), arm["gold_relation_count"]),
             )
             for arm in apps
@@ -348,13 +376,13 @@ def render_markdown(report: Mapping[str, Any]) -> str:
         "",
         "## App arms",
         "",
-        "| App | Arm | Model | P | R | F1 | No-match FP rate |",
-        "| --- | --- | --- | ---: | ---: | ---: | ---: |",
+        "| App | Arm | Model | P | R | F1 | No-match FP rate | Produced misses | Committed misses |",
+        "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
     for arm in report["apps"]:
         m = arm["metrics"]
         lines.append(
-            f"| {arm['stack']} | {arm['lane']} | {arm['model'] or 'none'} | {m['precision']:.4f} | {m['recall']:.4f} | {m['f1']:.4f} | {m['nomatch_fp_rate']:.4f} |"
+            f"| {arm['stack']} | {arm['lane']} | {arm['model'] or 'none'} | {m['precision']:.4f} | {m['recall']:.4f} | {m['f1']:.4f} | {m['nomatch_fp_rate']:.4f} | {arm['resolve_misses']['produced']} | {arm['resolve_misses']['committed']} |"
         )
     for arm in report["apps"]:
         stage_table(f"{arm['stack']} {arm['lane']} {arm['model'] or 'none'}", arm["stages"])
@@ -393,6 +421,7 @@ def render_markdown(report: Mapping[str, Any]) -> str:
         "## LLM ceiling: upper bound",
         "",
         "Shared grader tendencies can overstate recovery. Majority groups are shown separately.",
+        f"Mapping method: {llm.get('mapping_method', 'unrecorded')}.",
         "",
         f"Recovered: {llm.get('recovered', 0)}; Codex-only majority: {llm.get('recovered_codex_only_majority', 0)}; Claude-included majority: {llm.get('recovered_claude_included_majority', 0)}.",
         f"Ambiguous: {llm.get('ambiguous', 0)}; unmatched: {llm.get('unmatched', 0)}; failed passages: {llm.get('failed', 0)}.",
@@ -410,7 +439,7 @@ def render_markdown(report: Mapping[str, Any]) -> str:
         f"Lever: {d['lever'] or 'none'}. Route: {d['route']}.",
         d["reason"],
         f"App: {d.get('app', 'none')}; stage: {d.get('stage', 'none')}.",
-        "App evidence establishes committed recovery; finer stage credit needs stage-level recovery evidence.",
+        f"Produced misses: {d.get('produced', 0)}; committed misses: {d.get('committed', 0)}. Stage credit uses first candidate production.",
         f"2-of-3 share of misses: {a['miss_share']:.4f}; all gold: {a['base_share']:.4f}; difference: {a['difference']:.4f}; 95% interval: [{a['low']:.4f}, {a['high']:.4f}].",
         f"Bootstrap: {a['resamples']} draws over {a['item_count']} passages, seed {a['seed']}.",
         "",
@@ -422,6 +451,8 @@ def render_markdown(report: Mapping[str, Any]) -> str:
 
 def preflight(manifest: Manifest, salt: bytes) -> None:
     """Render placeholder prose before loading artifacts or running the bootstrap."""
+    from .recall_llm_ceiling import MAPPING_METHOD
+
     placeholder: dict[str, Any] = {
         "input_sha256": {},
         "stages": {},
@@ -429,7 +460,7 @@ def preflight(manifest: Manifest, salt: bytes) -> None:
         "rank_distance_below_200": {},
         "apps": [],
         "embedding": {"rankings": {}, "passages": {}},
-        "llm": {"per_item": {}},
+        "llm": {"per_item": {}, "mapping_method": MAPPING_METHOD},
         "guardrails": GUARDRAILS,
         "decision": {
             "lever": None,
@@ -460,9 +491,9 @@ def preflight(manifest: Manifest, salt: bytes) -> None:
             model=model,
             stages=app_stages,
             metrics=dict(precision=0, recall=0, f1=0, nomatch_fp_rate=0),
+            resolve_misses=dict(produced=0, committed=0, by_producing_stage={}),
         )
-        for stack in ("folio-enrich", "folio-mapper")
-        for model in (None, "gemini-3-flash-preview", "gpt-6-luna")
+        for stack, model in sorted(REQUIRED_PUBLISHED_ARMS, key=lambda arm: (arm[0], arm[1] or ""))
     ]
     placeholder["embedding"] = {
         "rankings": {

@@ -125,10 +125,16 @@ APP_STAGE_DISPLAY_LABELS = {
     "final_output": "final_output",
     "never_produced": "never_produced",
 }
+REQUIRED_PUBLISHED_ARMS = frozenset(
+    {
+        ("folio-enrich", None),
+        ("folio-mapper", None),
+        ("folio-mapper", "gemini-3-flash-preview"),
+        ("folio-mapper", "gpt-6-luna"),
+    }
+)
 PAID_ARM_KEYS = frozenset(
-    f"folio-{app}-{model}"
-    for app in ("enrich", "mapper")
-    for model in ("gemini-3-flash-preview", "gpt-6-luna")
+    f"{stack}-{model}" for stack, model in REQUIRED_PUBLISHED_ARMS if model is not None
 )
 
 
@@ -224,6 +230,10 @@ class ConsumerArm:
             r"[0-9a-f]{7,40}", self.commit
         ):
             raise ComparisonError("invalid consumer or pinned commit")
+        if self.spec.name == "folio-enrich" and (self.provider or self.model):
+            raise ComparisonError(
+                "enrich paid arms are disabled by owner decision; use enrich:deterministic"
+            )
         if (self.provider, self.model) not in {
             (None, None),
             ("google", "gemini-3-flash-preview"),
@@ -250,7 +260,8 @@ def consumer_arms(specs: Sequence[ConsumerSpec], *, mapper_commit: str) -> tuple
             ("google", "gemini-3-flash-preview"),
             ("openai", "gpt-6-luna"),
         ):
-            arms.append(ConsumerArm(spec, pin, provider, model))
+            if (spec.name, model) in REQUIRED_PUBLISHED_ARMS:
+                arms.append(ConsumerArm(spec, pin, provider, model))
     return tuple(arms)
 
 
@@ -805,7 +816,10 @@ def attribute_consumer(
             agreement = sum(v.get(iri, 0.0) >= DEFAULT_FLOOR for v in votes)
             if agreement < 2:
                 raise ValueError("gold relation has fewer than two qualifying votes")
-            produced: bool | None = any(iri in values for values in snapshots.values())
+            produced_stage = next(
+                (name for name, values in snapshots.items() if iri in values), None
+            )
+            produced: bool | None = produced_stage is not None
             if opaque:
                 stage = "committed" if iri in predicted else "not_committed"
                 produced = True if iri in predicted else None
@@ -828,6 +842,7 @@ def attribute_consumer(
                         **relation,
                         resolve_stage=resolve_stage,
                         produced=produced,
+                        produced_stage=produced_stage,
                         committed=iri in predicted,
                     )
                 )
@@ -857,6 +872,11 @@ def attribute_consumer(
         },
         "resolve_misses": {
             "relations": missed,
+            "by_producing_stage": {
+                name: sum(r["produced_stage"] == name for r in missed)
+                for name in stage_names
+                if any(r["produced_stage"] == name for r in missed)
+            },
             "by_stage": {
                 stage: {
                     "count": sum(r["resolve_stage"] == stage for r in missed),
@@ -934,10 +954,11 @@ def consumer_output_preflight(arms: Sequence[ConsumerArm]) -> dict[str, Any]:
             {s: {"count": 0, "by_agreement": {"2": 0, "3": 0}} for s in APP_STAGE_DISPLAY_LABELS}
         ),
         "resolve_misses": {
+            "by_producing_stage": dict.fromkeys(display_app_stages(APP_STAGE_DISPLAY_LABELS), 0),
             "by_stage": {
                 s: {"count": 0, "produced": 0, "committed": 0, "produced_unknown": 0}
                 for s in STAGES
-            }
+            },
         },
     }
     return {
@@ -966,7 +987,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--arms",
         required=True,
-        help="comma-separated enrich|mapper:deterministic|gemini-3-flash-preview|gpt-6-luna",
+        help="comma-separated enrich:deterministic and mapper:deterministic|gemini-3-flash-preview|gpt-6-luna",
     )
     parser.add_argument(
         "--campaign-dir",
@@ -997,6 +1018,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         f"{a.spec.name.removeprefix('folio-')}:{a.model or 'deterministic'}": a for a in available
     }
     selected = args.arms.split(",")
+    if any(key.startswith("enrich:") and key != "enrich:deterministic" for key in selected):
+        parser.error("enrich paid arms are disabled by owner decision; use enrich:deterministic")
     if len(set(selected)) != len(selected) or any(key not in selectors for key in selected):
         parser.error("arms must be a nonempty, unique subset of the documented selectors")
     arms = [selectors[key] for key in sorted(selected)]
@@ -1011,7 +1034,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             out = getattr(args, f"{name}_output_token_bound")
             if inp is None or out is None:
                 parser.error(
-                    "paid arms require enrich and mapper input/output bounds for the all-arm projection"
+                    "paid arms require mapper input/output bounds for the all-arm projection"
                 )
             bound = TokenBound(inp, out)
             bound.validate(arm.spec.name)
@@ -1131,7 +1154,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "metrics": result["metrics"],
                     "overall": display_app_stages(result["overall"]),
                     "gold_relation_count": result["gold_relation_count"],
-                    "resolve_misses": {"by_stage": result["resolve_misses"]["by_stage"]},
+                    "resolve_misses": {
+                        "by_stage": result["resolve_misses"]["by_stage"],
+                        "by_producing_stage": display_app_stages(
+                            result["resolve_misses"]["by_producing_stage"]
+                        ),
+                    },
                 }
             report = {
                 "schema_version": 1,
