@@ -52,6 +52,11 @@ FINALIZATION_REPAIR_KIND = "reviewed-finalization-repair"
 DEFAULT_LIMIT = 30
 INCUMBENT_VERSION = "0.4.0"
 PUBLISHED_COMPARISON_REPORT = Path("eval/reports/synthetic-comparison-v1.json")
+# Exact reviewed producer paths; never a filename pattern or a global text exemption.
+FINALIZATION_REPORT_PATHS = (
+    PUBLISHED_COMPARISON_REPORT,
+    Path("eval/data/reports/synthetic-comparison-v2.json"),
+)
 CHECKPOINT_AGGREGATE_CONSUMER_INVOCATION = (
     "folio_eval.comparison_pilot.aggregate_consumer_stack"
 )
@@ -2093,12 +2098,12 @@ def _checkpoint_finalization_public_metadata(
             CHECKPOINT_AGGREGATE_CONSUMER_INVOCATION,
         ),
     }
-    canonical_out = FOLIO_RESOLVE_ROOT / PUBLISHED_COMPARISON_REPORT
-    if args.out == canonical_out:
-        extensions[("provenance", "comparison_invocation", "argv", "--out")] = (
-            "value",
-            PUBLISHED_COMPARISON_REPORT.as_posix(),
-        )
+    for report_path in FINALIZATION_REPORT_PATHS:
+        if args.out == FOLIO_RESOLVE_ROOT / report_path:
+            extensions[("provenance", "comparison_invocation", "argv", "--out")] = (
+                "value",
+                report_path.as_posix(),
+            )
     if repair_identity is not None:
         checked_identity = _validate_repair_identity(repair_identity)
         for key, value in checked_identity.items():

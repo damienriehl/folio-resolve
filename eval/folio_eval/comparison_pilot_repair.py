@@ -11,7 +11,7 @@ from pathlib import Path
 from .comparison import ComparisonError, _git_repository_state
 from .comparison_pilot import (
     FINALIZATION_REPAIR_KIND,
-    PUBLISHED_COMPARISON_REPORT,
+    FINALIZATION_REPORT_PATHS,
     PilotCheckpointError,
 )
 from .comparison_pilot import (
@@ -75,7 +75,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     ):
         raise PilotCheckpointError("finalization repair cannot configure shard execution")
     output_path = Path(_option_value(pilot_argv, "--out")).resolve()
-    if output_path != candidate_root / PUBLISHED_COMPARISON_REPORT:
+    if output_path not in {candidate_root / path for path in FINALIZATION_REPORT_PATHS}:
         raise PilotCheckpointError("finalization repair requires the canonical report path")
     identity = _repair_identity(repair_root)
     return pilot_main(

@@ -246,8 +246,12 @@ def test_repair_launcher_rejects_dirty_project_code_before_import(tmp_path: Path
     assert not marker.exists()
 
 
+@pytest.mark.parametrize("output_relative", [
+    Path("eval/reports/synthetic-comparison-v1.json"),
+    Path("eval/data/reports/synthetic-comparison-v2.json"),
+])
 def test_repair_entrypoint_binds_separate_clean_checkout_and_cannot_run_shards(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, output_relative: Path
 ) -> None:
     candidate = tmp_path / "candidate"
     repair = tmp_path / "repair"
@@ -270,7 +274,7 @@ def test_repair_entrypoint_binds_separate_clean_checkout_and_cannot_run_shards(
     pilot_argv = [
         "--finalize-only",
         "--out",
-        str(candidate / pilot_module.PUBLISHED_COMPARISON_REPORT),
+        str(candidate / output_relative),
     ]
 
     assert (
@@ -290,7 +294,7 @@ def test_repair_entrypoint_binds_separate_clean_checkout_and_cannot_run_shards(
                 str(candidate),
                 "--finalize-only",
                 "--out",
-                str(candidate / pilot_module.PUBLISHED_COMPARISON_REPORT),
+                str(candidate / output_relative),
                 "--max-new-items=0",
             ]
         )
@@ -301,7 +305,7 @@ def test_repair_entrypoint_binds_separate_clean_checkout_and_cannot_run_shards(
                 str(repair),
                 "--finalize-only",
                 "--out",
-                str(repair / pilot_module.PUBLISHED_COMPARISON_REPORT),
+                str(repair / output_relative),
             ]
         )
     with pytest.raises(PilotCheckpointError, match="canonical report path"):
@@ -1975,8 +1979,12 @@ def test_finalization_invocation_records_supplied_input_paths(tmp_path: Path) ->
     }
 
 
+@pytest.mark.parametrize("output_relative", [
+    Path("eval/reports/synthetic-comparison-v1.json"),
+    Path("eval/data/reports/synthetic-comparison-v2.json"),
+])
 def test_checkpoint_finalization_extends_verified_v1_metadata_only_for_exact_producers(
-    tmp_path: Path,
+    tmp_path: Path, output_relative: Path,
 ) -> None:
     repair_identity = {
         "git_sha": "0123456789abcdef0123456789abcdef01234567",
@@ -1988,7 +1996,7 @@ def test_checkpoint_finalization_extends_verified_v1_metadata_only_for_exact_pro
         / "eval/synthetic/corpus_v1.manifest.json",
         config=pilot_module.FOLIO_RESOLVE_ROOT
         / "eval/synthetic/answer_rule_config_synthetic_v1.json",
-        out=pilot_module.FOLIO_RESOLVE_ROOT / pilot_module.PUBLISHED_COMPARISON_REPORT,
+        out=pilot_module.FOLIO_RESOLVE_ROOT / output_relative,
         checkpoint_dir=tmp_path / "checkpoint",
         leak_manifest=pilot_module.FOLIO_RESOLVE_ROOT
         / "eval/synthetic/firm-surface-manifest-v1.json",
@@ -2044,7 +2052,7 @@ def test_checkpoint_finalization_extends_verified_v1_metadata_only_for_exact_pro
         [
             "changed checkpoint aggregate",
             "folio_eval.comparison_pilot.aggregate_consumer_stack",
-            pilot_module.PUBLISHED_COMPARISON_REPORT.as_posix(),
+            output_relative.as_posix(),
             *repair_identity.values(),
         ],
         salt=salt,
@@ -2053,6 +2061,13 @@ def test_checkpoint_finalization_extends_verified_v1_metadata_only_for_exact_pro
     )
 
     preflight_comparison_publication(payload, manifest, salt, public_metadata=metadata)
+
+    copied_output = deepcopy(payload)
+    copied_output["note"] = output_relative.as_posix()
+    with pytest.raises(ComparisonError, match="collisions"):
+        preflight_comparison_publication(
+            copied_output, manifest, salt, public_metadata=metadata,
+        )
 
     wrong_path = deepcopy(payload)
     wrong_path["note"] = "folio_eval.comparison_pilot.aggregate_consumer_stack"
@@ -2078,7 +2093,7 @@ def test_checkpoint_finalization_extends_verified_v1_metadata_only_for_exact_pro
 
     duplicate_out = deepcopy(payload)
     duplicate_out["provenance"]["comparison_invocation"]["argv"].extend(
-        ["--out", pilot_module.PUBLISHED_COMPARISON_REPORT.as_posix()]
+        ["--out", output_relative.as_posix()]
     )
     with pytest.raises(ComparisonError, match="missing or duplicated"):
         preflight_comparison_publication(
