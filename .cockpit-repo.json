@@ -1,0 +1,10 @@
+{
+  "kind": "library",
+  "prod": {"package": {"name": "folio-resolve", "registry": "PyPI"}},
+  "deploy": "Publish a GitHub Release; the publish workflow uploads the build to PyPI through trusted publishing",
+  "uat": {
+    "status": "done",
+    "date": "2026-09-30",
+    "open_failures": ["Local mypy on a Python 3.13 venv fails in NumPy stubs (CI on 3.11 passes)"]
+  }
+}
