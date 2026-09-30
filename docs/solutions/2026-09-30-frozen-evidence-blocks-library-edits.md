@@ -7,7 +7,7 @@ problem_type: test_failure
 component: testing_framework
 severity: high
 symptoms:
-  - "Any edit under src/ fails core CI with `Ablation library_source_sha256 differs`, even when scoring is untouched"
+  - "Any edit to a hashed .py or .json file under src/folio_resolve fails core CI with `Ablation library_source_sha256 differs`, even when scoring is untouched"
   - "13 failures and 16 errors across the embedding lexical-boundary, precision, precision-relations and semantic-gate-replay suites"
 root_cause: logic_error
 resolution_type: test_fix
@@ -25,15 +25,16 @@ related:
 The committed embedding benchmark receipts (`docs/benchmarks/embedding-*.json`) each record a
 `library_source_sha256`: a digest of every `.py` and `.json` file under `src/folio_resolve/`
 (`benchmarks/embedding_semantic_gate_replay.py:87`, `source_identity`). The offline validators
-compared that recorded value with the digest of the **current** tree. Between 2026-09-19, when the
-receipts were frozen, and 2026-09-30 no library edit landed, so nobody noticed. The first one
-(PR #65: a `py.typed` marker and clearer missing-extra errors) failed core CI.
+compared that recorded value with the digest of the **current** tree. No hashed library file changed
+after the receipts were frozen on 2026-09-19 to 2026-09-21, so nobody noticed until 2026-09-30.
+The first such edit (PR #65: clearer missing-extra errors in `ontology.py` and `embedding.py`)
+failed core CI. Its `py.typed` marker alone would not have, since only `.py` and `.json` files are hashed.
 
 ## Symptoms
 
 - `ValueError: Ablation library_source_sha256 differs` from tests that never load a model.
 - 13 failures and 16 errors in `tests/test_embedding_{lexical_boundaries,precision,precision_relations,semantic_gate_replay}.py`.
-  They run in core CI, so every library PR would be blocked.
+  They run in core CI, so every PR that touches a hashed library file would be blocked.
 
 ## What didn't work
 
@@ -65,7 +66,8 @@ A **new** module, `benchmarks/evidence_replay.py`, that no receipt hashes, so it
    at `benchmarks/embedding_semantic_gate_replay.py:98`). The offline view passes the receipt's
    recorded digest, so every other identity check still runs byte-for-byte.
 4. **Collection stays strict.** `offline(module)` rebinds only the offline entry points
-   (`_OFFLINE_FUNCTIONS`). `run_collect`, `run_ablation`, `verify_pins` and `main` keep their
+   (`_OFFLINE_FUNCTIONS`), and replaces `run_replay` in the offline view with the authenticated
+   `_replay` adapter. `run_collect`, `run_ablation`, `verify_pins` and `main` keep their
    original globals and still reject current-source drift.
 
 ## Why this works
