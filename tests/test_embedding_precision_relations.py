@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 import pytest
+from test_evidence_replay import offline
 
 ROOT = Path(__file__).parents[1]
 
@@ -56,7 +57,7 @@ def test_frozen_collection_owner_categories_offline(monkeypatch):
 
     monkeypatch.setattr(mod.precision.baseline, "build_pipeline", forbidden)
     monkeypatch.setattr(mod.precision, "retrieve_once", forbidden)
-    result = mod.run_score(data, sheet, receipt)
+    result = offline(mod).run_score(data, sheet, receipt)
     assert result["coverage"] == {
         "pooled_pairs": 55,
         "direct_match": 10,
@@ -125,7 +126,7 @@ def test_reject_invalid_signed_sheet(mutation, message):
     mutation(sheet)
     receipt = approve(mod, sheet)
     with pytest.raises(ValueError, match=message):
-        mod.run_score(data, sheet, receipt)
+        offline(mod).run_score(data, sheet, receipt)
 
 
 def test_approval_checked_before_collection_and_source_drift_rejected():
@@ -137,16 +138,16 @@ def test_approval_checked_before_collection_and_source_drift_rejected():
     changed = copy.deepcopy(sheet)
     changed["judgments"][0]["judgment"] = "direct_match"
     with pytest.raises(ValueError, match="payload digest"):
-        mod.run_score({}, changed, receipt)
+        offline(mod).run_score({}, changed, receipt)
     with pytest.raises(ValueError, match="receipt digest"):
-        mod.run_score({}, sheet, "0" * 64)
+        offline(mod).run_score({}, sheet, "0" * 64)
     with pytest.raises(ValueError, match="approval digest required"):
-        mod.run_score({}, sheet)
+        offline(mod).run_score({}, sheet)
     data["provenance"]["source_sha256"]["benchmarks/embedding_precision.py"] = "changed"
     sheet = mod.prepare_judgments(data)
     receipt = approve(mod, sheet)
     with pytest.raises(ValueError, match="provenance/source"):
-        mod.run_score(data, sheet, receipt)
+        offline(mod).run_score(data, sheet, receipt)
 
 
 @pytest.mark.parametrize("field", ["judgment", "rationale", "parents"])
@@ -157,19 +158,19 @@ def test_missing_row_fields_cannot_be_repaired_by_projection(field):
     del sheet["judgments"][0][field]
     receipt = approve(mod, sheet)
     with pytest.raises(ValueError, match="metadata"):
-        mod.run_score(data, sheet, receipt)
+        offline(mod).run_score(data, sheet, receipt)
 
 
 def test_unapproved_blank_sheet_and_explicit_irrelevant_uncertain():
     mod = runner()
     data = collection()
     sheet = mod.prepare_judgments(data)
-    blank = mod.run_score(data, sheet)
+    blank = offline(mod).run_score(data, sheet)
     assert blank["coverage"]["missing"] == 55
     assert blank["approval_sha256"] is None
     sheet["judgments"][0]["judgment"] = "irrelevant"
     sheet["judgments"][1]["judgment"] = "uncertain"
-    result = mod.run_score(data, sheet, approve(mod, sheet))
+    result = offline(mod).run_score(data, sheet, approve(mod, sheet))
     assert result["coverage"]["annotated"] == 1
     assert result["coverage"]["uncertain"] == 1
     assert len(result["unresolved_pairs"]) == 54

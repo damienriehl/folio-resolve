@@ -4,6 +4,8 @@ import importlib.util
 from dataclasses import asdict
 from pathlib import Path
 
+from test_evidence_replay import offline
+
 from folio_resolve import InMemoryOntology, MatchCandidate, MatchPipeline
 
 
@@ -527,7 +529,7 @@ def test_offline_scoring_integration_and_fixed_approved_strata(monkeypatch):
     monkeypatch.setattr(mod.baseline, "build_pipeline", forbidden)
     monkeypatch.setattr(mod.baseline, "load_corpus", forbidden)
     monkeypatch.setattr(mod, "retrieve_once", forbidden)
-    result = mod.run_score(collection, sheet)
+    result = offline(mod).run_score(collection, sheet)
     assert result["coverage"] == dict(
         pooled_pairs=23, relevant=0, irrelevant=0, uncertain=0, missing=23
     )
@@ -546,7 +548,7 @@ def test_offline_scoring_integration_and_fixed_approved_strata(monkeypatch):
     for row in sheet["judgments"]:
         row["judgment"] = "irrelevant"
     receipt = approve_test_sheet(mod, sheet)
-    result = mod.run_score(collection, sheet, receipt)
+    result = offline(mod).run_score(collection, sheet, receipt)
     assert result["positive_groups"]["combined"]["baseline"]["p_at_5"] == 0
     assert result["coverage"]["missing"] == 0
 
@@ -576,7 +578,7 @@ def test_collection_drift_rejected_before_scoring():
         bad = copy.deepcopy(collection)
         mutate(bad)
         with pytest.raises(ValueError):
-            mod.run_score(bad, mod.prepare_judgments(bad))
+            offline(mod).run_score(bad, mod.prepare_judgments(bad))
 
 
 def test_receipt_binding_and_all_judgment_failure_modes():
@@ -641,6 +643,18 @@ def test_score_cli_writes_frozen_offline_result(tmp_path, monkeypatch, capsys):
             str(output),
         ],
     )
+    import pytest
+
+    # The writing path still rejects a source mismatch before creating output.
+    with monkeypatch.context() as strict:
+        strict.setattr(mod.replay, "source_identity", lambda: "d" * 64)
+        with pytest.raises(ValueError, match="library_source_sha256"):
+            mod.main()
+    assert not output.exists()
+
+    # Independently exercise serialization with an already verified offline result.
+    result = offline(mod).run_score(collection, sheet)
+    monkeypatch.setattr(mod, "run_score", lambda *args: result)
     mod.main()
     scored = json.loads(output.read_text())
     assert scored["collection_sha256"] == mod.baseline.stable_digest(collection)
@@ -683,4 +697,4 @@ def test_new_case_rank_drift_rejected_even_with_rebound_sheet():
         dict(iri="invented", extraction_path="semantic")
     )
     with pytest.raises(ValueError, match="ranked snapshot"):
-        mod.run_score(collection, mod.prepare_judgments(collection))
+        offline(mod).run_score(collection, mod.prepare_judgments(collection))

@@ -4,6 +4,7 @@ import importlib.util
 from pathlib import Path
 
 import pytest
+from test_evidence_replay import offline
 
 from folio_resolve.ontology import Concept, InMemoryOntology
 from folio_resolve.scoring import compute_relevance_score, content_words
@@ -356,7 +357,7 @@ def test_real_pipeline_decomposition_shared_semantics_and_fresh_ranking():
 def test_complete_controls_required_including_last_case():
     import copy
 
-    frozen = lexical.load_frozen_inputs()[0]
+    frozen = offline(lexical).load_frozen_inputs()[0]
     actual = copy.deepcopy(frozen["results"])
     lexical.precision.verify_controls(actual, frozen["results"])
     actual[-1]["selective"]["candidate_inputs"].append({"tampered": True})
@@ -371,7 +372,7 @@ def small_collection(monkeypatch):
 
     from folio_resolve import MatchPipeline
 
-    frozen, sheet = lexical.load_frozen_inputs()
+    frozen, sheet = offline(lexical).load_frozen_inputs()
     concepts = [
         Concept(iri="a", label="Riga"),
         Concept(iri="b", label="Surigao"),
@@ -418,12 +419,12 @@ def small_collection(monkeypatch):
         "concept_metadata_sha256": lexical.baseline.stable_digest(metadata),
         "controls_reproduced": True,
     }
-    lexical.validate_collection(value)
+    offline(lexical).validate_collection(value)
     return value
 
 
 def test_offline_new_schema_validates_without_model(small_collection):
-    lexical.validate_collection(small_collection)
+    offline(lexical).validate_collection(small_collection)
 
 
 @pytest.mark.parametrize(
@@ -445,7 +446,7 @@ def test_offline_provenance_tampering_blocked_even_with_new_digest(small_collect
         small_collection["provenance"]
     )
     with pytest.raises(ValueError, match=f"provenance {key} differs"):
-        lexical.validate_collection(small_collection)
+        offline(lexical).validate_collection(small_collection)
 
 
 @pytest.mark.parametrize(
@@ -478,7 +479,7 @@ def test_offline_evidence_corruption_blocked(small_collection, mutation, message
     else:
         small_collection["controls_reproduced"] = False
     with pytest.raises(ValueError, match=message):
-        lexical.validate_collection(small_collection)
+        offline(lexical).validate_collection(small_collection)
 
 
 def test_treatment_never_collected_when_control_fails(monkeypatch):
@@ -574,10 +575,10 @@ def test_scoring_miniature_fixed_gate_oracle():
 def test_transfer_real_frozen_categories_and_new_unknown():
     import copy
 
-    frozen, sheet = lexical.load_frozen_inputs()
+    frozen, sheet = offline(lexical).load_frozen_inputs()
     pool = copy.deepcopy(frozen["pool"])
     pool.append({**pool[0], "iri": "new-iri"})
-    labels = lexical.transfer_judgments(pool, frozen, sheet)
+    labels = offline(lexical).transfer_judgments(pool, frozen, sheet)
     assert sum(v is not None for v in labels.values()) == 29
     assert sum(v is None for v in labels.values()) == 27
     assert labels[pool[-1]["query_id"], "new-iri"] is None
@@ -585,26 +586,26 @@ def test_transfer_real_frozen_categories_and_new_unknown():
         assert labels[row["query_id"], row["iri"]] == row["judgment"]
     pool[0]["query"] += " changed"
     with pytest.raises(ValueError, match="metadata differs"):
-        lexical.transfer_judgments(pool, frozen, sheet)
+        offline(lexical).transfer_judgments(pool, frozen, sheet)
 
 
 def test_scoring_blocks_invalid_collection_and_receipt():
     import copy
 
     with pytest.raises(ValueError, match="schema differs"):
-        lexical.run_score({})
-    frozen, sheet = lexical.load_frozen_inputs()
+        offline(lexical).run_score({})
+    frozen, sheet = offline(lexical).load_frozen_inputs()
     sheet = copy.deepcopy(sheet)
     sheet["approval"]["owner"] = "changed"
     with pytest.raises(ValueError, match="approval receipt digest differs"):
-        lexical.transfer_judgments(frozen["pool"], frozen, sheet)
+        offline(lexical).transfer_judgments(frozen["pool"], frozen, sheet)
 
 
 def test_real_frozen_judgment_chain_identity_arithmetic():
     # Real historical evidence, NOT a claim of a new real-model lexical collection.
-    frozen, sheet = lexical.load_frozen_inputs()
-    expected = lexical.relations.run_score(frozen, sheet, lexical.OWNER_RECEIPT)
-    labels = lexical.transfer_judgments(frozen["pool"], frozen, sheet)
+    frozen, sheet = offline(lexical).load_frozen_inputs()
+    expected = offline(lexical.relations).run_score(frozen, sheet, lexical.OWNER_RECEIPT)
+    labels = offline(lexical).transfer_judgments(frozen["pool"], frozen, sheet)
     original_ids = [case["id"] for case in lexical.baseline.load_fixtures()["cases"]]
     rows = [
         {
@@ -643,7 +644,7 @@ def test_committed_boundary_evidence_reproduces_offline(monkeypatch):
 
     monkeypatch.setattr(lexical.baseline, "build_pipeline", forbidden)
     monkeypatch.setattr(lexical.baseline, "load_corpus", forbidden)
-    actual = lexical.run_score(collection)
+    actual = offline(lexical).run_score(collection)
     # Python versions can sum the same per-query fractions a few ulps apart.
     # Check only aggregate bounds against their integer-count oracle, then
     # compare every other field exactly (including candidate scores and hashes).
