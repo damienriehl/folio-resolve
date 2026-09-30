@@ -78,6 +78,7 @@ def app(n: int, lane: str = "deterministic") -> dict[str, Any]:
                     committed=True,
                     produced=True,
                     stage="committed",
+                    produced_stage="stage1_filter",
                     resolve_stage="never_produced",
                 )
                 for i in range(n)
@@ -135,7 +136,9 @@ def full_apps():
     return [
         dict(app(20), stack=stack, model=model, lane="deterministic" if model is None else "llm-on")
         for stack in ("folio-enrich", "folio-mapper")
-        for model in (None, "gemini-3-flash-preview", "gpt-6-luna")
+        for model in (
+            (None,) if stack == "folio-enrich" else (None, "gemini-3-flash-preview", "gpt-6-luna")
+        )
     ]
 
 
@@ -252,7 +255,10 @@ def test_numeric_app_adapter() -> None:
         {
             "arms": {
                 "folio-mapper-deterministic": {
-                    "resolve_misses": {"by_stage": {"never_produced": {"committed": 20}}}
+                    "resolve_misses": {
+                        "by_stage": {"never_produced": {"committed": 20, "produced": 20}},
+                        "by_producing_stage": {"stage1_filter": 20},
+                    }
                 }
             }
         }
@@ -426,16 +432,18 @@ def test_stage_shares_and_distance_are_rendered() -> None:
     assert "| 50 | 60 |" in report.render_markdown(p)
 
 
-def test_review_five_arms_refused():
+def test_review_three_arms_refused():
     arms = [
         dict(app(20), stack=stack, model=model, lane="deterministic" if model is None else "llm-on")
         for stack in ("folio-enrich", "folio-mapper")
-        for model in (None, "gemini-3-flash-preview", "gpt-6-luna")
+        for model in (
+            (None,) if stack == "folio-enrich" else (None, "gemini-3-flash-preview", "gpt-6-luna")
+        )
     ]
-    with pytest.raises(ValueError, match="six"):
+    with pytest.raises(ValueError, match="four"):
         report.build_report(
             source({"never_produced": 100}),
-            arms[:5],
+            arms[:3],
             ceiling(),
             dict(publishable=1, per_item={}),
             {},
@@ -478,6 +486,8 @@ def test_review_publication_gates(damage):
         "Paid-arm projection",
         "Non-gold proposals",
         "Local search ceilings",
+        "Stage recovery",
+        "Arm produced misses",
     ],
 )
 def test_review_all_fixed_prose_preflight(heading):
@@ -527,3 +537,133 @@ def test_unknown_app_stage_fails_closed():
             dict(publishable=1, per_item={}, item_count=0, embedding_sha256="b" * 64),
             {"embedding": "b" * 64},
         )
+
+
+def test_produced_recovery_with_zero_commits_names_producing_stage():
+    arm = app(10)
+    for row in arm["resolve_misses"]["relations"]:
+        row.update(committed=False, stage="embedding_rerank")
+    decision = report.choose_lever(
+        source({"top_100": 100, "never_produced": 100}), [arm], ceiling(), {}
+    )
+    assert decision["lever"] == "app_stage"
+    assert decision["app"] == "folio-mapper"
+    assert decision["stage"] == "stage1_filter"
+    assert decision["produced"] == 10
+    assert decision["committed"] == 0
+    assert decision["recovery_share"] == 0.1
+
+
+def test_four_required_arms_publish_produced_and_committed_counts():
+    result = payload()
+    assert len(result["apps"]) == 4
+    assert result["apps"][0]["resolve_misses"]["produced"] == 20
+    assert result["apps"][0]["resolve_misses"]["committed"] == 20
+    assert "Produced misses" in report.render_markdown(result)
+
+
+def test_aggregate_produced_recovery_with_zero_commits():
+    arm = app(0)
+    arm["resolve_misses"] = {
+        "by_stage": {"never_produced": {"produced": 10, "committed": 0}},
+        "by_producing_stage": {"stage1_filter": 10},
+    }
+    decision = report.choose_lever(source({"never_produced": 100}), [arm], ceiling(), {})
+    assert (decision["lever"], decision["stage"], decision["produced"], decision["committed"]) == (
+        "app_stage",
+        "stage1_filter",
+        10,
+        0,
+    )
+
+
+def test_preflight_rejects_candidate_production_recommendation_collision():
+    collision = "candidate-producing stage"
+    decision = report.choose_lever(source({"never_produced": 100}), [app(20)], ceiling(), {})
+    assert collision in decision["reason"]
+    with pytest.raises(ValueError, match="before compute"):
+        report.preflight(manifest([collision]), b"fake-salt")
+
+
+@pytest.mark.parametrize("aggregate", [False, True])
+def test_split_arm_total_does_not_qualify_a_stage(aggregate):
+    arm = staged_app({"EntityRuler": 5, "StringMatch": 5}, aggregate)
+    decision = report.choose_lever(source({"never_produced": 100}), [arm], ceiling(0.2), {})
+    assert decision["lever"] is None
+    assert "stage" not in decision
+
+
+def staged_app(stages, aggregate, stack="folio-enrich"):
+    arm = dict(app(sum(stages.values())), stack=stack)
+    if aggregate:
+        arm["resolve_misses"] = {
+            "by_stage": {"never_produced": {"produced": sum(stages.values()), "committed": 0}},
+            "by_producing_stage": stages,
+        }
+    else:
+        for row, stage in zip(
+            arm["resolve_misses"]["relations"],
+            (stage for stage, count in stages.items() for _ in range(count)),
+            strict=True,
+        ):
+            row.update(produced_stage=stage, committed=False)
+    return arm
+
+
+@pytest.mark.parametrize("aggregate", [False, True])
+@pytest.mark.parametrize("reverse", [False, True])
+@pytest.mark.parametrize(
+    "enrich_stages,mapper_stages,winner,stage,count,total",
+    [
+        (
+            {"EntityRuler": 10, "StringMatch": 10},
+            {"stage1_filter": 15},
+            "folio-mapper",
+            "stage1_filter",
+            15,
+            15,
+        ),
+        (
+            {"EntityRuler": 10},
+            {"stage1_filter": 10, "embedding_rerank": 9},
+            "folio-enrich",
+            "EntityRuler",
+            10,
+            10,
+        ),
+        (
+            {"StringMatch": 10, "EntityRuler": 10},
+            {"stage1_filter": 10},
+            "folio-enrich",
+            "EntityRuler",
+            10,
+            20,
+        ),
+    ],
+)
+def test_stages_rank_by_own_count_then_app_and_stage(
+    aggregate, reverse, enrich_stages, mapper_stages, winner, stage, count, total
+):
+    if reverse:
+        enrich_stages = dict(reversed(list(enrich_stages.items())))
+        mapper_stages = dict(reversed(list(mapper_stages.items())))
+    arms = [
+        staged_app(enrich_stages, aggregate),
+        staged_app(mapper_stages, aggregate, "folio-mapper"),
+    ]
+    if reverse:
+        arms.reverse()
+    decision = report.choose_lever(source({"never_produced": 100}), arms, ceiling(), {})
+    assert (decision["app"], decision["stage"]) == (winner, stage)
+    assert decision["recovered"] == count
+    assert decision["recovery_share"] == count / 100
+    rendered = payload()
+    rendered["decision"] = decision
+    markdown = report.render_markdown(rendered)
+    assert f"Stage recovery: {count} ({count / 100:.2%} of baseline misses)." in markdown
+    assert f"Arm produced misses: {total}; committed misses: 0." in markdown
+    assert decision["produced"] == total
+    assert decision["committed"] == 0
+    assert decision["by_producing_stage"] == (
+        enrich_stages if winner == "folio-enrich" else mapper_stages
+    )

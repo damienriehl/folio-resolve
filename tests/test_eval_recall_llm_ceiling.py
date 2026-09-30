@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import subprocess
+from itertools import permutations
 from pathlib import Path
 from typing import Any
 
@@ -51,7 +52,7 @@ def inputs(tmp_path: Path) -> dict[str, Any]:
         [
             IndexedConcept("urn:gold", ("Gold",), ("Alternate-name",)),
             IndexedConcept("urn:other", ("Other", "Shared"), ()),
-            IndexedConcept("urn:third", ("Third",), ("Shared",)),
+            IndexedConcept("urn:third", ("Third", "Shared"), ()),
         ]
     )
     ids = [f"i{i:02}" for i in range(20)]
@@ -278,11 +279,11 @@ def test_failure_reason_cannot_store_runner_prose(inputs: dict[str, Any]) -> Non
     assert report["failure_histogram"] == {"invalid_response": 60}
 
 
-def test_no_lemma_matching_and_alias_deduplication(inputs: dict[str, Any]) -> None:
+def test_lemma_matching_and_alias_deduplication(inputs: dict[str, Any]) -> None:
     report = collect(**inputs, runner=Fake(["Golds", "Gold", "Alternate-name"]))
     assert report is not None
-    assert report["unmatched"] == 20 and report["recovered"] == 20
-    assert report["duplicate_concepts"] == 20 and report["proposals"] == 60
+    assert report["unmatched"] == 0 and report["recovered"] == 20
+    assert report["duplicate_concepts"] == 40 and report["proposals"] == 60
 
 
 def test_empty_selection_never_calls_runner(inputs: dict[str, Any]) -> None:
@@ -308,7 +309,12 @@ def test_cli_pinned_owl_limit_resume_and_numeric_artifact(
         <skos:altLabel>Alternate-name</skos:altLabel></rdf:Description>
     </rdf:RDF>""")
     digest = hashlib.sha256(owl.read_bytes()).hexdigest()
+    grading_dictionary = LabelIndex.from_concepts(
+        [IndexedConcept("urn:gold", ("Gold", "Preferred Gold"), ("Alternate-name",))]
+    )
+    monkeypatch.setattr(module, "load_folio_index", lambda: (grading_dictionary, digest, "test"))
     dictionary = module.load_dictionary(owl, digest)
+    assert dictionary is grading_dictionary
     assert dictionary.norm_preferred["preferred gold"] == ["urn:gold"]
     assert dictionary.norm_alternative["alternate-name"] == ["urn:gold"]
     with pytest.raises(ValueError, match="SHA-256"):
@@ -464,3 +470,62 @@ def test_review_empty_bound_residual_is_valid(inputs):
     fake = Fake()
     result = collect(**inputs, runner=fake)
     assert result["item_count"] == 0 and fake.calls == 0
+
+
+def test_grading_resolver_recovers_alternative_plural(inputs):
+    result = collect(**inputs, runner=Fake(["Alternate-names"]))
+    assert result is not None
+    assert result["recovered"] == 20
+    assert result["mapping_method"] == "grade.resolve_gold_value"
+    write_report(inputs["checkpoint"] / "report.json", result, inputs["manifest"], inputs["salt"])
+
+
+def test_dictionary_rejects_different_grading_ontology(tmp_path, monkeypatch):
+    from folio_eval import recall_llm_ceiling as module
+
+    path = tmp_path / "ontology.owl"
+    path.write_bytes(b"pinned bytes")
+    monkeypatch.setattr(module, "load_folio_index", lambda: (LabelIndex(), "0" * 64, "test"))
+    with pytest.raises(ValueError, match="grading ontology SHA-256"):
+        module.load_dictionary(path, hashlib.sha256(path.read_bytes()).hexdigest())
+
+
+def test_grading_preferred_label_precedence(inputs):
+    from folio_eval.recall_llm_ceiling import _metrics
+
+    dictionary = LabelIndex.from_concepts(
+        [
+            IndexedConcept("urn:gold", ("Shared",), ()),
+            IndexedConcept("urn:other", ("Other",), ("Shared",)),
+        ]
+    )
+    result = _metrics('["Shared"]', dictionary, {"urn:gold"}, {"urn:gold": "codex_only"})
+    assert result["recovered"] == 1
+    assert result["ambiguous"] == 0
+
+
+def test_distinct_raw_spellings_resolve_before_deduplication_in_every_order():
+    from folio_eval.recall_llm_ceiling import _metrics
+    from folio_eval.resolve_labels import label_key
+
+    names = ["Collision-name", "Collision—name", "Gold alias", "Collision-name"]
+    assert label_key(names[0]) == label_key(names[1])
+    dictionary = LabelIndex.from_concepts(
+        [
+            IndexedConcept("urn:gold", (names[0],), (names[2],)),
+            IndexedConcept("urn:other", (names[1],), ()),
+        ]
+    )
+    results = [
+        _metrics(json.dumps(order), dictionary, {"urn:gold"}, {"urn:gold": "codex_only"})
+        for order in permutations(names)
+    ]
+    assert all(result == results[0] for result in results)
+    result = results[0]
+    assert result["proposals"] == 3
+    assert result["duplicate_names"] == 1
+    assert result["duplicate_concepts"] == 1
+    assert result["recovered"] == result["matched_gold"] == 1
+    assert result["recovered_codex_only_majority"] == 1
+    assert result["non_gold_proposals"] == 1
+    assert result["ambiguous"] == result["unmatched"] == 0

@@ -13,6 +13,7 @@ import hashlib
 import json
 import re
 import subprocess
+from collections import Counter
 from collections.abc import Mapping, Sequence, Set
 from dataclasses import asdict, dataclass, replace
 from decimal import Decimal
@@ -20,6 +21,7 @@ from pathlib import Path
 from typing import Any, TypedDict
 
 from .comparison import (
+    CONSUMER_DETERMINISTIC_CONFIGS,
     ComparisonError,
     StackRun,
     _assert_consumer_config,
@@ -125,10 +127,16 @@ APP_STAGE_DISPLAY_LABELS = {
     "final_output": "final_output",
     "never_produced": "never_produced",
 }
+REQUIRED_PUBLISHED_ARMS = frozenset(
+    {
+        ("folio-enrich", None),
+        ("folio-mapper", None),
+        ("folio-mapper", "gemini-3-flash-preview"),
+        ("folio-mapper", "gpt-6-luna"),
+    }
+)
 PAID_ARM_KEYS = frozenset(
-    f"folio-{app}-{model}"
-    for app in ("enrich", "mapper")
-    for model in ("gemini-3-flash-preview", "gpt-6-luna")
+    f"{stack}-{model}" for stack, model in REQUIRED_PUBLISHED_ARMS if model is not None
 )
 
 
@@ -224,6 +232,10 @@ class ConsumerArm:
             r"[0-9a-f]{7,40}", self.commit
         ):
             raise ComparisonError("invalid consumer or pinned commit")
+        if self.spec.name == "folio-enrich" and (self.provider or self.model):
+            raise ComparisonError(
+                "enrich paid arms are disabled by owner decision; use enrich:deterministic"
+            )
         if (self.provider, self.model) not in {
             (None, None),
             ("google", "gemini-3-flash-preview"),
@@ -250,7 +262,8 @@ def consumer_arms(specs: Sequence[ConsumerSpec], *, mapper_commit: str) -> tuple
             ("google", "gemini-3-flash-preview"),
             ("openai", "gpt-6-luna"),
         ):
-            arms.append(ConsumerArm(spec, pin, provider, model))
+            if (spec.name, model) in REQUIRED_PUBLISHED_ARMS:
+                arms.append(ConsumerArm(spec, pin, provider, model))
     return tuple(arms)
 
 
@@ -356,6 +369,116 @@ def _load_run(payload: dict[str, object]) -> StackRun:
     )
 
 
+def _runner_path(arm: ConsumerArm) -> Path:
+    return Path(
+        "backend/eval/synthetic_runner.py"
+        if arm.spec.name == "folio-enrich"
+        else "backend/scripts/synthetic_runner.py"
+    )
+
+
+def _verify_pinned_runner(arm: ConsumerArm) -> None:
+    """Legacy source evidence comes from the recorded pin, never a new runner launch."""
+    result = subprocess.run(
+        ["git", "-C", str(arm.spec.repo_root), "show", f"{arm.commit}:{_runner_path(arm)}"],
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode or result.stdout != (arm.spec.repo_root / _runner_path(arm)).read_bytes():
+        raise ComparisonError("deterministic runner differs from pinned source")
+
+
+def deterministic_identity(arm, items, scoreable_ids, batch_size, input_fingerprints):
+    """Arm-local inputs: intentionally excludes paid arms, prices and canaries."""
+    return {
+        "schema": 1,
+        "app": arm.spec.name,
+        "commit": arm.commit,
+        "checkout": str(arm.spec.repo_root.resolve()),
+        "lane": "deterministic",
+        "config": dict(CONSUMER_DETERMINISTIC_CONFIGS[arm.spec.name]),
+        "items_sha256": sha256_text(json.dumps(items, sort_keys=True)),
+        "scoreable_ids": list(scoreable_ids),
+        "batch_size": batch_size,
+        "inputs": dict(input_fingerprints),
+        "runner_sha256": hashlib.sha256(
+            (arm.spec.repo_root / _runner_path(arm)).read_bytes()
+        ).hexdigest(),
+    }
+
+
+def _validate_deterministic_batch(stored, arm, selected_ids, identity, legacy_hash=None):
+    if stored.get("item_ids") != selected_ids:
+        raise ComparisonError("deterministic batch membership mismatch")
+    if sha256_text(json.dumps(stored["run"], sort_keys=True)) != stored.get("sha256"):
+        raise ComparisonError("batch checkpoint fingerprint mismatch")
+    if "deterministic_identity" in stored:
+        if stored["deterministic_identity"] != identity or stored.get(
+            "campaign_sha256"
+        ) != sha256_text(json.dumps(identity, sort_keys=True)):
+            raise ComparisonError("deterministic batch checkpoint identity mismatch")
+    elif legacy_hash is None or stored.get("campaign_sha256") != sha256_text(legacy_hash):
+        raise ComparisonError("legacy deterministic batches require explicit adoption")
+    run = _load_run(stored["run"])
+    if (
+        run.stack != arm.spec.name
+        or run.lane not in {"deterministic", "incumbent"}
+        or not str(run.repository.get("git_sha", "")).startswith(arm.commit)
+    ):
+        raise ComparisonError("deterministic batch arm identity mismatch")
+    _assert_consumer_config(run)
+    _assert_consumer_rows(run, selected_ids)
+    return run
+
+
+def plan_deterministic_adoption(local_dir, identity, universe, identities):
+    """Read-only, all-or-nothing preflight for the exact pre-FIX7 six-arm format.
+
+    Legacy checkpoints bound item content but not attribution digests separately.
+    Explicit adoption records the caller's validated corpus/attribution binding.
+    """
+    old_identity = json.loads(identity)
+    entries = old_identity["arms"]
+    enrich = next((e for e in entries if e["key"] == "folio-enrich-deterministic"), None)
+    if enrich is None:
+        raise ComparisonError("legacy adoption requires the original deterministic arms")
+    entries += [
+        dict(enrich, key="folio-enrich-" + model)
+        for model in ("gemini-3-flash-preview", "gpt-6-luna")
+    ]
+    old_identity["arms"] = sorted(entries, key=lambda e: e["key"])
+    old_hash = sha256_text(json.dumps(old_identity, sort_keys=True, default=str))
+    if json.loads((local_dir / "campaign.json").read_text()) != {"sha256": old_hash}:
+        raise ComparisonError("legacy campaign identity mismatch")
+    by_key = {a.key: a for a in universe if not a.provider}
+    changes = []
+    for arm in by_key.values():
+        _verify_pinned_runner(arm)
+    for path in sorted(local_dir.glob("*/batch-*.json")):
+        if path.parent.name not in by_key:
+            raise ComparisonError("cannot adopt paid batches")
+        arm = by_key[path.parent.name]
+        number = int(path.stem.removeprefix("batch-"))
+        size = old_identity["batch_size"]
+        selected = old_identity["items"][number * size : (number + 1) * size]
+        if number < 0 or not selected:
+            raise ComparisonError("invalid deterministic batch number")
+        stored = json.loads(path.read_text())
+        arm_identity = identities[arm.key]
+        _validate_deterministic_batch(
+            stored, arm, [i["item_id"] for i in selected], arm_identity, old_hash
+        )
+        updated = dict(
+            stored,
+            deterministic_identity=arm_identity,
+            campaign_sha256=sha256_text(json.dumps(arm_identity, sort_keys=True)),
+        )
+        changes.append((path, updated))
+    if not changes:
+        raise ComparisonError("no deterministic batches to adopt")
+    return old_hash, changes
+
+
 def run_consumer_campaign(
     *,
     arms: Sequence[ConsumerArm],
@@ -370,6 +493,8 @@ def run_consumer_campaign(
     identity_canary: bool = False,
     ledger_path: Path | None = None,
     campaign_arms: Sequence[ConsumerArm] | None = None,
+    adopt_deterministic_batches: bool = False,
+    input_fingerprints: Mapping[str, str] | None = None,
 ) -> dict[str, object]:
     """Canary all paid arms before full batches; return only portable fingerprints.
 
@@ -431,6 +556,8 @@ def run_consumer_campaign(
             identity_canary,
             ledger_path,
             universe,
+            adopt_deterministic_batches,
+            input_fingerprints or {},
         )
 
 
@@ -448,6 +575,8 @@ def _run_locked(
     identity_canary: bool,
     ledger_path: Path | None,
     universe: Sequence[ConsumerArm],
+    adopt_deterministic_batches: bool,
+    input_fingerprints: Mapping[str, str],
 ) -> dict[str, object]:
     identity = json.dumps(
         {
@@ -468,15 +597,95 @@ def _run_locked(
     fingerprint = sha256_text(identity)
     manifest = local_dir / "campaign.json"
     ledger = ledger_path or local_dir / "spend.json"
+    identities = {
+        a.key: deterministic_identity(a, items, scoreable_ids, batch_size, input_fingerprints)
+        for a in universe
+        if not a.provider
+    }
+    expected_manifest = {"sha256": fingerprint, "ledger": str(ledger.resolve())}
+    adoption_path = local_dir / "deterministic-adoption.json"
     if manifest.exists():
-        if json.loads(manifest.read_text()) != {"sha256": fingerprint} or not ledger.exists():
+        previous_manifest = json.loads(manifest.read_text())
+        if not ledger.exists() or previous_manifest.get("ledger", str(ledger.resolve())) != str(
+            ledger.resolve()
+        ):
             raise ComparisonError("campaign checkpoint identity or ledger mismatch")
+        legacy = any(
+            "deterministic_identity" not in json.loads(p.read_text())
+            for key in identities
+            for p in (local_dir / key).glob("batch-*.json")
+        )
+        transition = previous_manifest.get("sha256") != fingerprint
+        if adopt_deterministic_batches and (legacy or (transition and adoption_path.exists())):
+            # No paid state may cross the campaign boundary, including failed spend.
+            if (
+                SpendGuard(ledger).spent != 0
+                or (local_dir / "paid.json").exists()
+                or (local_dir / "projection.json").exists()
+            ):
+                raise ComparisonError("cannot adopt a campaign with paid state")
+            old_hash, changes = plan_deterministic_adoption(
+                local_dir, identity, universe, identities
+            )
+            receipt = {
+                "from_campaign_sha256": old_hash,
+                "to_campaign_sha256": fingerprint,
+                "input_fingerprints": dict(input_fingerprints),
+                "batches": {
+                    str(p.relative_to(local_dir)): {
+                        "before_sha256": sha256_text(p.read_text()),
+                        "payload_sha256": v["sha256"],
+                        "arm_sha256": v["campaign_sha256"],
+                    }
+                    for p, v in changes
+                },
+            }
+            # Receipt first: interrupted adoption can be retried with the same flag.
+            if adoption_path.exists():
+                recorded = json.loads(adoption_path.read_text())
+                comparable = json.loads(json.dumps(recorded))
+                for key, value in receipt["batches"].items():
+                    if key in comparable.get("batches", {}):
+                        comparable["batches"][key]["before_sha256"] = value["before_sha256"]
+                if comparable != receipt:
+                    raise ComparisonError("deterministic adoption receipt mismatch")
+            else:
+                _atomic_write_text(adoption_path, json.dumps(receipt, sort_keys=True))
+            for path, value in changes:
+                _atomic_write_text(path, json.dumps(value, sort_keys=True))
+            _atomic_write_text(manifest, json.dumps(expected_manifest))
+        elif transition:
+            if (
+                legacy
+                or previous_manifest.get("ledger") != str(ledger.resolve())
+                or SpendGuard(ledger).spent != 0
+                or (local_dir / "paid.json").exists()
+                or (local_dir / "projection.json").exists()
+                or any(p.parent.name not in identities for p in local_dir.glob("*/batch-*.json"))
+            ):
+                raise ComparisonError("campaign checkpoint identity or ledger mismatch")
+            # Validate every existing arm before changing a free campaign's declaration.
+            for arm in universe:
+                if arm.provider:
+                    continue
+                for path in (local_dir / arm.key).glob("batch-*.json"):
+                    number = int(path.stem.removeprefix("batch-"))
+                    selected = items[number * batch_size : (number + 1) * batch_size]
+                    if number < 0 or not selected:
+                        raise ComparisonError("invalid deterministic batch number")
+                    _validate_deterministic_batch(
+                        json.loads(path.read_text()),
+                        arm,
+                        [i["item_id"] for i in selected],
+                        identities[arm.key],
+                    )
+            _atomic_write_text(manifest, json.dumps(expected_manifest))
     else:
         if any(local_dir.glob("*/batch-*.json")) or (ledger.exists() and ledger_path is None):
             raise ComparisonError("orphan campaign checkpoint")
         if not ledger.exists():
             SpendGuard(ledger).reserve(Decimal(0))
-        _atomic_write_text(manifest, json.dumps({"sha256": fingerprint}))
+        _atomic_write_text(manifest, json.dumps(expected_manifest))
     paid = [a for a in universe if a.provider]
     paid_selected = any(a.provider for a in arms)
     pricing = {
@@ -499,7 +708,11 @@ def _run_locked(
         _atomic_write_text(paid_manifest, json.dumps(pricing_json(pricing), sort_keys=True))
 
     def batch_identity(arm: ConsumerArm) -> str:
-        return sha256_text(fingerprint + (paid_identity if arm.provider else ""))
+        return (
+            sha256_text(fingerprint + paid_identity)
+            if arm.provider
+            else sha256_text(json.dumps(identities[arm.key], sort_keys=True))
+        )
 
     guard = SpendGuard(ledger)
     fingerprints: dict[str, str] = {}
@@ -511,7 +724,11 @@ def _run_locked(
         selected_ids = [str(item["item_id"]) for item in selected]
         if path.exists():
             stored = json.loads(path.read_text())
-            run = _load_run(stored["run"])
+            run = (
+                _load_run(stored["run"])
+                if arm.provider
+                else _validate_deterministic_batch(stored, arm, selected_ids, identities[arm.key])
+            )
             if (
                 stored["campaign_sha256"] != batch_identity(arm)
                 or stored["item_ids"] != selected_ids
@@ -545,6 +762,8 @@ def _run_locked(
                 "run": payload,
                 "sha256": sha256_text(json.dumps(payload, sort_keys=True)),
             }
+            if not arm.provider:
+                stored["deterministic_identity"] = identities[arm.key]
             _atomic_write_text(path, json.dumps(stored, sort_keys=True))
         if arm.provider:
             _assert_consumer_llm_rows(run, selected_ids)
@@ -675,6 +894,13 @@ def _run_locked(
             ):
                 raise ComparisonError("batch checkpoint fingerprint or identity mismatch")
             number = int(path.stem.removeprefix("batch-"))
+            if not arm.provider:
+                selected = items[number * batch_size : (number + 1) * batch_size]
+                if number < 0 or not selected:
+                    raise ComparisonError("invalid deterministic batch number")
+                _validate_deterministic_batch(
+                    stored, arm, [i["item_id"] for i in selected], identities[arm.key]
+                )
             fingerprints[f"{arm.key}/{number}"] = sha256_text(path.read_text())
     return {
         "campaign_sha256": fingerprint,
@@ -805,7 +1031,10 @@ def attribute_consumer(
             agreement = sum(v.get(iri, 0.0) >= DEFAULT_FLOOR for v in votes)
             if agreement < 2:
                 raise ValueError("gold relation has fewer than two qualifying votes")
-            produced: bool | None = any(iri in values for values in snapshots.values())
+            produced_stage = next(
+                (name for name, values in snapshots.items() if iri in values), None
+            )
+            produced: bool | None = produced_stage is not None
             if opaque:
                 stage = "committed" if iri in predicted else "not_committed"
                 produced = True if iri in predicted else None
@@ -828,6 +1057,7 @@ def attribute_consumer(
                         **relation,
                         resolve_stage=resolve_stage,
                         produced=produced,
+                        produced_stage=produced_stage,
                         committed=iri in predicted,
                     )
                 )
@@ -857,6 +1087,13 @@ def attribute_consumer(
         },
         "resolve_misses": {
             "relations": missed,
+            "by_producing_stage": dict(
+                Counter(
+                    r["produced_stage"]
+                    for r in missed
+                    if r["produced"] is True and r["produced_stage"] is not None
+                )
+            ),
             "by_stage": {
                 stage: {
                     "count": sum(r["resolve_stage"] == stage for r in missed),
@@ -934,10 +1171,11 @@ def consumer_output_preflight(arms: Sequence[ConsumerArm]) -> dict[str, Any]:
             {s: {"count": 0, "by_agreement": {"2": 0, "3": 0}} for s in APP_STAGE_DISPLAY_LABELS}
         ),
         "resolve_misses": {
+            "by_producing_stage": dict.fromkeys(display_app_stages(APP_STAGE_DISPLAY_LABELS), 0),
             "by_stage": {
                 s: {"count": 0, "produced": 0, "committed": 0, "produced_unknown": 0}
                 for s in STAGES
-            }
+            },
         },
     }
     return {
@@ -966,13 +1204,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--arms",
         required=True,
-        help="comma-separated enrich|mapper:deterministic|gemini-3-flash-preview|gpt-6-luna",
+        help="comma-separated enrich:deterministic and mapper:deterministic|gemini-3-flash-preview|gpt-6-luna",
     )
     parser.add_argument(
         "--campaign-dir",
         type=Path,
         required=True,
         help="reuse this machine-local directory for ALL arm selections and restarts",
+    )
+    parser.add_argument(
+        "--adopt-deterministic-batches",
+        action="store_true",
+        help="verify and adopt pre-FIX7 deterministic batches; refuses paid state",
     )
     parser.add_argument("--batch-size", type=int, default=5)
     for consumer in ("enrich", "mapper"):
@@ -997,6 +1240,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         f"{a.spec.name.removeprefix('folio-')}:{a.model or 'deterministic'}": a for a in available
     }
     selected = args.arms.split(",")
+    if any(key.startswith("enrich:") and key != "enrich:deterministic" for key in selected):
+        parser.error("enrich paid arms are disabled by owner decision; use enrich:deterministic")
     if len(set(selected)) != len(selected) or any(key not in selectors for key in selected):
         parser.error("arms must be a nonempty, unique subset of the documented selectors")
     arms = [selectors[key] for key in sorted(selected)]
@@ -1011,7 +1256,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             out = getattr(args, f"{name}_output_token_bound")
             if inp is None or out is None:
                 parser.error(
-                    "paid arms require enrich and mapper input/output bounds for the all-arm projection"
+                    "paid arms require mapper input/output bounds for the all-arm projection"
                 )
             bound = TokenBound(inp, out)
             bound.validate(arm.spec.name)
@@ -1096,6 +1341,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 canary_only=args.canary_only,
                 identity_canary=True,
                 ledger_path=ledger,
+                adopt_deterministic_batches=args.adopt_deterministic_batches,
+                input_fingerprints={
+                    **attribution["fingerprint"],
+                    "attribution_sha256": args.attribution_sha256,
+                },
             )
             print(
                 json.dumps(
@@ -1131,7 +1381,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "metrics": result["metrics"],
                     "overall": display_app_stages(result["overall"]),
                     "gold_relation_count": result["gold_relation_count"],
-                    "resolve_misses": {"by_stage": result["resolve_misses"]["by_stage"]},
+                    "resolve_misses": {
+                        "by_stage": result["resolve_misses"]["by_stage"],
+                        "by_producing_stage": display_app_stages(
+                            result["resolve_misses"]["by_producing_stage"]
+                        ),
+                    },
                 }
             report = {
                 "schema_version": 1,

@@ -48,6 +48,8 @@ Retrieval in folio-resolve's synthetic adapter is lexical only. The gold was gra
 - **Build on folio-enrich and folio-mapper, measured with their LLM stages on.** (session-settled: user-directed — chosen over measuring folio-resolve alone and over consumer arms without LLM stages: build on the consumers' pipelines and improve their F1 rather than re-create them.) Governs R9, R13, R14.
 - **A consumer stage must recover at least 10% of folio-resolve's misses in the consumer's no-LLM arm to outrank other levers.** (session-settled: user-approved — chosen over 5% and 20% bars: without a bar a single recovered concept would win.) Governs R9, R10.
 - **folio-mapper's test runner gains a model override so its Luna arm can run; its production pipeline is untouched.** (session-settled: user-approved — chosen over dropping the mapper Luna arm and over mapper's OpenAI default: keeps the arm Damien chose.) Governs R13.
+- **folio-enrich runs only its no-LLM arm.** (session-settled: user-directed — chosen over capping enrich's calls and raising the budget, running it uncapped, or routing it through a subscription: enrich's code sets no token limit, and its no-LLM arm produced only 3 of folio-resolve's 293 misses.) Governs R13, R15.
+- **An app stage 'recovers' a miss when it produces it as a candidate; the Codex ceiling resolves names with the grading resolver.** (session-settled: user-directed — chosen over committed-only recovery and exact-label matching: the verifier re-ranks whatever retrieval supplies, and exact matching left 92% of Codex names unmatched.) Governs R7, R9.
 - **Gemini 3 Flash as the consumers' baseline model, GPT-6 Luna as a second arm, $25 total cap.** (session-settled: user-directed — chosen over Luna only and Gemini only: Gemini is what the consumers ship, and Luna tests whether a model switch itself raises their F1.) Governs R13, R15.
 - **A lever must win on recall and F1 without costing precision.** (session-settled: user-directed — chosen over recall alone: Damien does not want to sacrifice existing precision.) Governs R11.
 
@@ -67,17 +69,17 @@ Retrieval in folio-resolve's synthetic adapter is lexical only. The gold was gra
 **Recovery ceilings**
 
 - R6. For relations folio-resolve never produced, a local meaning-based search over every concept in the ontology snapshot reports how many it places within its top 10, 25, 50, and 100 suggestions per passage.
-- R7. One offline Codex pass, run only over passages that still hold never-produced relations after R6, names the concepts each passage discusses in free text; names are matched to concepts by exact normalized preferred or alternative label, and names that match nothing or several concepts are counted separately, never guessed.
+- R7. One offline Codex pass, run only over passages that still hold never-produced relations after R6, names the concepts each passage discusses in free text; names are matched to concepts with the same resolver that turned grader names into gold, and names that resolve to nothing or to several concepts are counted separately, never guessed.
 - R8. Each ceiling also reports how many non-gold concepts it proposes per passage, so recall recovered is weighed against the precision it would cost.
 
 **Lever choice**
 
-- R9. The report ends with one recommended lever. A stage of folio-enrich or folio-mapper is preferred as the lever to port or improve when, in that consumer's no-LLM arm, it recovers at least 10% of the gold relations folio-resolve misses. Otherwise the stage holding the largest share of recoverable misses picks ranking, gate tuning, or a new local candidate source, and a new local source qualifies only if R6 recovers at least 25% of never-produced relations within its top 50 suggestions.
+- R9. The report ends with one recommended lever. A stage of folio-enrich or folio-mapper is preferred as the lever to port or improve when, in that consumer's no-LLM arm, it produces as a candidate at least 10% of the gold relations folio-resolve misses. Otherwise the stage holding the largest share of recoverable misses picks ranking, gate tuning, or a new local candidate source, and a new local source qualifies only if R6 recovers at least 25% of never-produced relations within its top 50 suggestions.
 - R10. A ranking, gate, local-source, or consumer-stage recommendation proceeds straight to brainstorming that lever without a new question to Damien. A result where only an LLM recovers the misses (the R7 ceiling or a consumer's LLM arm), or where the misses concentrate in 2-of-3-grader gold, goes back to Damien before any lever work. Misses concentrate in 2-of-3 gold only when their 2-of-3 share exceeds the 2-of-3 share of all gold, with the 95% interval of the difference above zero.
 
 **Consumer arms**
 
-- R13. folio-enrich and folio-mapper each run over the same 225 scoreable items and 30 no-match controls in three arms: deterministic (no LLM), full pipeline with Gemini 3 Flash, and full pipeline with GPT-6 Luna.
+- R13. folio-enrich and folio-mapper each run over the same 225 scoreable items and 30 no-match controls: both in a deterministic (no LLM) arm, and folio-mapper also as its full pipeline with Gemini 3 Flash and with GPT-6 Luna.
 - R14. For every arm, each gold relation is assigned the consumer stage where it is first lost, or committed if it survives to the final output, and the report gives each arm's strict micro precision, recall, and F1 plus its no-match false-positive rate. These arm scores are each consumer's baseline for R11.
 - R15. Paid LLM calls across all consumer arms stay under $25 in total, and no full paid run starts until a canary projects the full cost under that cap.
 
