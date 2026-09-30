@@ -59,6 +59,7 @@ Laya's own documentation reports near-random zero-shot accuracy on specialised d
 **Stage 1: ceiling**
 
 - R4. A strong LLM verifier runs over the existing candidate shortlist on the synthetic benchmark, with retrieval and shortlist inputs held identical to the comparison baseline, so any difference is attributable to the verifier.
+  - *Open review item (carried 2026-09-30 from the retired 2026-09-27 handoff):* stage 1 raised the shortlist depth to top-100, so reword R4 to attribute any gain to the verifier and the deeper shortlist together. Not yet applied; stage 2 has not started.
 - R5. Stage 1 reports whether the ceiling meets the Success Criteria; stage 2 starts only if it does, and a miss closes the experiment with a recorded no-go verdict.
 - R6. Stage 1 also reports how many correct concepts were never in the shortlist, separating the verifier's reachable gain from retrieval misses it cannot fix.
 

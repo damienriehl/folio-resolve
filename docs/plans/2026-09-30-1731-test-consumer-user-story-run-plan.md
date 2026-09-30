@@ -41,7 +41,7 @@ Personas and stories come from `docs/uat/personas.md` and
    fresh virtualenv outside the checkout, then run each workflow as a script:
    - **Quick start**: the README pipeline example, copied verbatim, including
      its documented output (for example, the 99.0 and 88.0 scores).
-   - **Scoring only**: `score`, `generate_search_terms`, blocklist and gates.
+   - **Scoring only**: `compute_relevance_score`, `generate_search_terms`, blocklist and gates.
    - **Resolve**: label-to-IRI resolution, including the "law" → Delaware guard.
    - **Annotate**: confidence, verdicts, reject/restore, notes, insights.
    - **Judge**: a provider-neutral fake judge, malformed model output, and no judge.

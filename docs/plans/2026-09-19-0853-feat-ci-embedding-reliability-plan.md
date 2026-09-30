@@ -1,13 +1,15 @@
 ---
 title: "feat: Strengthen CI and embedding reliability"
 date: 2026-09-19
-status: draft
+status: completed
 artifact_contract: ce-unified-plan/v1
 execution: code
 product_contract_source: ce-plan-bootstrap
 ---
 
 # Strengthen CI and embedding reliability
+
+> **Historical draft (committed 2026-09-30).** U1–U4 were implemented after this draft was written: PR #48 (`6de6179`, CI), PR #50 (`44d340b`, embedding index validation), PR #51 (`74527f7`, offline pinned-model test), and PR #52 (`faa87a4`, public embedding recall baseline). The "implementation has not started" wording below describes the state at drafting time.
 
 ## Summary
 

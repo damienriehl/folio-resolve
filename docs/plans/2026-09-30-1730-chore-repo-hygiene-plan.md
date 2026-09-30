@@ -15,7 +15,8 @@ Bring `folio-resolve` to a clean, declared, released state without touching live
 experiment lanes or private evaluation data. Land the owner-direction documents
 that sit uncommitted in the main checkout, ship the reviewed-but-unpushed recall
 branch, prune branches whose content is already on `main`, retire consumed
-handoffs, commit `.cockpit-repo.json`, and cut the pending library release once
+handoffs, commit `.cockpit-repo.json`, and prepare the pending library release (held on an owner
+prerequisite, see H6) once
 the user-story run (companion plan
 `2026-09-30-1731-test-consumer-user-story-run-plan.md`) passes.
 
@@ -127,9 +128,15 @@ the user-story run (companion plan
 - **Verify:** `python3 tools/cockpit_repo_facts.py --repo <main checkout> --state-file <scratch>`
   in the cockpit repo reports no `missing` facts.
 
-### H6 — Release 0.5.0 (gated)
+### H6 — Release 0.5.0 (held: owner prerequisite unmet)
 
-Gate, per the session's release rule: the user-story run passes, the full test
+**Held.** Damien's standing direction, carried since the U9 lane (recorded in the retired
+2026-09-05 handoff and the 2026-08-20 audit): a winning iteration merges to `main` only, with
+**no release tag and no consumer pin PRs until the adoption verdict**. The U10 comparison that
+feeds that verdict is still running in the U10 v3 lane, so H6 does not execute this session. The
+question of an earlier bug-fix release is filed for Damien on the Decision Sheet.
+
+When the verdict lands, the gate is also, per the session's release rule: the user-story run passes, the full test
 suite is green, the release diff's Codex review has no unresolved P0 or P1
 finding, and a rollback path exists (yank plus a follow-up 0.5.1).
 

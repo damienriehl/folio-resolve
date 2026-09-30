@@ -1,5 +1,7 @@
 # Proposed public embedding fixtures
 
+> **Historical proposal (committed 2026-09-30).** The review checkpoint it describes has passed: U4 shipped as PR #52 (`faa87a4`, public embedding recall baseline). The "U4 remains paused" wording below describes the state at drafting time.
+
 Status: awaiting owner review before U4 implementation or measurement. This proposal implements the fixture-review checkpoint in [the reliability plan](../plans/2026-09-19-0853-feat-ci-embedding-reliability-plan.md). It contains no model results.
 
 Approve or edit the queries and acceptable concept sets below before freezing the fixture JSON. The recommended default is to accept any listed IRI, with equal credit; an alternative label is another name for its existing IRI, not another answer. These are retrieval annotations, not legal advice or jurisdiction-specific statements of law.

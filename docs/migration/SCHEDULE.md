@@ -186,8 +186,9 @@ recording:
   own branch filter/colors. That is the same category folio-mapper's migration classified as
   "ontology-shaped code stays".
 - **The library primary is already correct without it — but the fork carries the recall.**
-  On the 24-row corpus, `LabelResolver` + gates resolve the right primary on **24/24** rows with
-  the fork stubbed out. The *ranked candidate set* (`resolve_multi`, which the UI, the
+  On the 24-row corpus, `LabelResolver` + gates preserve the incumbent primary on **24/24** rows with
+  the fork stubbed out (result coverage and preserved primary IDs, not verified accuracy; see the
+  [comparison's accuracy limitations](../benchmarks/consumer-legacy-comparison.md)). The *ranked candidate set* (`resolve_multi`, which the UI, the
   reconciler and every multi-candidate consumer read) collapses **120 → 15 (−87.5%)**, every
   term shrinking. A "retire by deleting" would have been a silent recall amputation; the new
   `candidate recall` canary fails it (exit non-zero) by design.
