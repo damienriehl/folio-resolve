@@ -168,6 +168,10 @@ class BruteForceIndex:
         return out
 
 
+class EmbeddingNotInstalledError(ModuleNotFoundError):
+    """Raised when local embeddings need the missing ``[embedding]`` extra."""
+
+
 class LocalEmbeddingProvider:
     """Optional ``sentence-transformers`` provider (``all-MiniLM-L6-v2``, 384-dim).
 
@@ -177,7 +181,17 @@ class LocalEmbeddingProvider:
     _DEFAULT_MODEL = "all-MiniLM-L6-v2"
 
     def __init__(self, model_name: str | None = None) -> None:
-        from sentence_transformers import SentenceTransformer
+        try:
+            from sentence_transformers import SentenceTransformer
+        except ModuleNotFoundError as exc:
+            if exc.name != "sentence_transformers":
+                raise
+            raise EmbeddingNotInstalledError(
+                "LocalEmbeddingProvider needs sentence-transformers. "
+                'Install the optional extra: pip install "folio-resolve[embedding]"',
+                name=exc.name,
+                path=exc.path,
+            ) from exc
 
         self._model_name = model_name or self._DEFAULT_MODEL
         self._model = SentenceTransformer(self._model_name)

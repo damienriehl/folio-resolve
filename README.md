@@ -132,18 +132,23 @@ surface *agreement* reach the plural-labelled concept *Agreements* (+200/200 lem
 corpus matches). v0.2.0 promotes that indexing here, engine-agnostic:
 
 ```python
-from folio_resolve import FOLIOEntityRuler, augment_labels
+from folio_resolve import Concept, FOLIOEntityRuler, InMemoryOntology, augment_labels
 
+provider = InMemoryOntology([Concept(iri="R-agreements", label="Agreements")])
 labels = provider.all_labels()                      # any OntologyProvider
 labels = augment_labels(                            # adds lemma_preferred / lemma_alternative keys
     labels,
-    cache_dir="~/.folio-resolve/lemmas",            # cached by ontology hash + LEMMA_VERSION
-    ontology_hash=owl_content_hash,
-    on_missing_spacy="skip",                        # no [spacy] extra -> un-augmented index, no crash
+    lemma_map={"agreements": "agreement"},          # precomputed map; works with the core install
 )
 ruler = FOLIOEntityRuler()
 ruler.load_patterns(labels)                         # pure-Python matching, zero heavy deps
+assert ruler.find_matches("The agreement was signed.")[0].entity_id == "R-agreements"
 ```
+
+This core-only example supplies a small precomputed lemma map. To compute one with spaCy,
+omit `lemma_map`; pass `cache_dir` and an `ontology_hash` derived from your ontology content
+to cache it by that hash plus `LEMMA_VERSION`. Set `on_missing_spacy="skip"` to keep the
+original labels when spaCy or its model is unavailable.
 
 **spaCy is needed only at index-build time** (computing what each label's lemma is; requires the
 `[spacy]` extra plus `python -m spacy download en_core_web_sm`). Steady-state consumers load the
@@ -181,11 +186,22 @@ Three gaps the **alea-intake** migration recorded (SCHEDULE.md row 4) are closed
   merged vocabulary. This retires the parallel local backstops consumers had to carry:
 
   ```python
+  from folio_resolve import Concept, InMemoryOntology, PlaceNameGate
+
+  provider = InMemoryOntology([
+      Concept(iri="R-rize", label="Rize", branch="Location"),
+  ])
   gate = PlaceNameGate(
       min_signals=2,
       extra_tokens={"macedonia", "rize", "europe", "north america"},
       extra_markers=("city of", "republic of", "province of"),
   )
+  concept = provider.get_concept("R-rize")
+  assert concept is not None
+  decision = gate.evaluate(
+      query="law", label=concept.label, branch=concept.branch, score=90.0,
+  )
+  assert decision.demoted
   ```
 
 - **The specificity penalty is weightable.** `compute_relevance_score(..., specificity_penalty=w)`

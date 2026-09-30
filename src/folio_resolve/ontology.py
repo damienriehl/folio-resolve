@@ -23,6 +23,10 @@ _CacheKey = TypeVar("_CacheKey")
 _CacheValue = TypeVar("_CacheValue")
 
 
+class FolioNotInstalledError(ModuleNotFoundError):
+    """Raised when the live ontology adapter needs the missing ``[folio]`` extra."""
+
+
 @dataclass(frozen=True)
 class Concept:
     """A single ontology concept, normalized across providers."""
@@ -211,7 +215,17 @@ class FolioPythonProvider:
 
     def _get(self) -> Any:
         if self._folio is None:
-            from folio import FOLIO
+            try:
+                from folio import FOLIO
+            except ModuleNotFoundError as exc:
+                if exc.name != "folio":
+                    raise
+                raise FolioNotInstalledError(
+                    "FolioPythonProvider needs folio-python. "
+                    'Install the optional extra: pip install "folio-resolve[folio]"',
+                    name=exc.name,
+                    path=exc.path,
+                ) from exc
 
             self._folio = FOLIO()
         return self._folio

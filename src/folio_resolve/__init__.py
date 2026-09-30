@@ -34,6 +34,7 @@ from .blocklist import AliasBlocklist, BlockedAlias, load_seed_blocklist
 from .calibration import CalibrationSample, ScoreCalibration
 from .decompose import decompose
 from .domain_prior import DomainPrior, DomainPriorSuggester, SubjectTag, TagStatus, TaxonomyNode
+from .embedding import EmbeddingNotInstalledError
 from .entity_ruler import FOLIOEntityRuler
 from .gates import GateDecision, PlaceNameGate, ShortLabelGate
 from .judge import (
@@ -55,6 +56,7 @@ from .lemma import (
 )
 from .ontology import (
     Concept,
+    FolioNotInstalledError,
     FolioPythonProvider,
     InMemoryOntology,
     LabelInfo,
@@ -100,7 +102,9 @@ __all__ = [
     "ConceptMatch",
     "DomainPrior",
     "DomainPriorSuggester",
+    "EmbeddingNotInstalledError",
     "FOLIOEntityRuler",
+    "FolioNotInstalledError",
     "FolioPythonProvider",
     "GateDecision",
     "InMemoryOntology",

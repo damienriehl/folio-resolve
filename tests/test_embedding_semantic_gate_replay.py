@@ -4,6 +4,8 @@ import importlib.util
 from dataclasses import replace
 from pathlib import Path
 
+from test_evidence_replay import offline
+
 from folio_resolve import InMemoryOntology, MatchCandidate, MatchPipeline
 
 
@@ -123,7 +125,7 @@ def saved_inputs(replay, variant="local"):
 
 def test_all_actual_frozen_controls_and_guard_denominators():
     replay = runner()
-    result = replay.run_replay()
+    result = offline(replay).run_replay()
     assert result["decision"]["preserves_observed_benefit_and_lexical_protection"]
     for variant, data in result["variants"].items():
         saved = saved_inputs(replay, variant)
@@ -154,10 +156,10 @@ def test_artifact_and_import_drift_rejected(tmp_path, monkeypatch):
     path.write_text("{}")
     monkeypatch.setattr(replay, "ROOT", tmp_path)
     with pytest.raises(ValueError, match="Frozen artifact SHA-256"):
-        replay.run_replay()
+        offline(replay).run_replay()
     monkeypatch.setattr(folio_resolve, "__file__", str(tmp_path / "wrong/__init__.py"))
     with pytest.raises(ValueError, match="imported folio_resolve"):
-        replay.run_replay()
+        offline(replay).run_replay()
 
 
 def test_source_fixture_configuration_and_case_drift_rejected():
@@ -168,7 +170,7 @@ def test_source_fixture_configuration_and_case_drift_rejected():
     replay = runner()
     saved = saved_inputs(replay)
     fixture = replay.baseline.load_fixtures()
-    source = replay.source_identity()
+    source = saved["provenance"]["library_source_sha256"]
     replay.verify_saved(saved, fixture, "local", source)
     with pytest.raises(ValueError, match="library_source_sha256"):
         replay.verify_saved(saved, fixture, "local", "changed")

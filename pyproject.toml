@@ -53,8 +53,8 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/folio_resolve"]
-# Ship the seed data (alias blocklist) inside the wheel so consumers load it via importlib.resources.
-artifacts = ["src/folio_resolve/data/*.json"]
+# Ship the seed data and PEP 561 marker for installed-wheel consumers.
+artifacts = ["src/folio_resolve/data/*.json", "src/folio_resolve/py.typed"]
 
 [tool.mypy]
 python_version = "3.11"
