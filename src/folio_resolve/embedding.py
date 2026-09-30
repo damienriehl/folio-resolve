@@ -168,7 +168,7 @@ class BruteForceIndex:
         return out
 
 
-class EmbeddingNotInstalledError(ImportError):
+class EmbeddingNotInstalledError(ModuleNotFoundError):
     """Raised when local embeddings need the missing ``[embedding]`` extra."""
 
 
@@ -188,7 +188,9 @@ class LocalEmbeddingProvider:
                 raise
             raise EmbeddingNotInstalledError(
                 "LocalEmbeddingProvider needs sentence-transformers. "
-                'Install the optional extra: pip install "folio-resolve[embedding]"'
+                'Install the optional extra: pip install "folio-resolve[embedding]"',
+                name=exc.name,
+                path=exc.path,
             ) from exc
 
         self._model_name = model_name or self._DEFAULT_MODEL

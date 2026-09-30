@@ -47,3 +47,27 @@ def test_broken_import_surfaces_unchanged(monkeypatch, module, extra, error_name
     with pytest.raises(ImportError) as caught:
         load()
     assert caught.value is original
+
+
+@pytest.mark.parametrize("module,extra,error_name,load", ADAPTERS)
+def test_missing_extra_preserves_module_not_found_fallback(
+    monkeypatch, module, extra, error_name, load
+):
+    original = ModuleNotFoundError("missing optional package", name=module, path="optional/path")
+    real_import = builtins.__import__
+
+    def missing(name, *args, **kwargs):
+        if name == module:
+            raise original
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", missing)
+    try:
+        load()
+    except ModuleNotFoundError as exc:
+        assert type(exc).__name__ == error_name
+        assert exc.name == module
+        assert exc.path == original.path
+        assert exc.__cause__ is original
+    else:
+        pytest.fail("Existing ModuleNotFoundError fallback did not run")
