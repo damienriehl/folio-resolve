@@ -170,24 +170,19 @@ def choose_lever(
     for arm in apps:
         if arm["lane"] not in ("deterministic", "incumbent"):
             continue
-        recovered_count = _miss_count(arm, "produced")
-        if misses and 10 * recovered_count >= misses:
-            candidates.append((recovered_count, arm["stack"], arm))
+        for stage, recovered_count in _producing_stages(arm).items():
+            if misses and 10 * recovered_count >= misses:
+                candidates.append((recovered_count, arm["stack"], stage, arm))
     if candidates:
-        n, stack, winner = sorted(candidates, key=lambda x: (-x[0], x[1]))[0]
+        n, stack, stage, winner = min(candidates, key=lambda x: (-x[0], x[1], x[2]))
         producing = _producing_stages(winner)
-        stage = (
-            sorted(producing, key=lambda name: (-producing[name], name))[0]
-            if producing
-            else "unrecorded"
-        )
         return dict(
             base,
             lever="app_stage",
             route="brainstorm",
             app=stack,
             stage=stage,
-            produced=n,
+            produced=_miss_count(winner, "produced"),
             committed=_committed_misses(winner),
             by_producing_stage=producing,
             recovered=n,
@@ -444,7 +439,8 @@ def render_markdown(report: Mapping[str, Any]) -> str:
         f"Lever: {d['lever'] or 'none'}. Route: {d['route']}.",
         d["reason"],
         f"App: {d.get('app', 'none')}; stage: {d.get('stage', 'none')}.",
-        f"Produced misses: {d.get('produced', 0)}; committed misses: {d.get('committed', 0)}. Stage credit uses first candidate production.",
+        f"Stage recovery: {d.get('recovered', 0)} ({d.get('recovery_share', 0):.2%} of baseline misses). Stage credit uses first candidate production.",
+        f"Arm produced misses: {d.get('produced', 0)}; committed misses: {d.get('committed', 0)}.",
         f"2-of-3 share of misses: {a['miss_share']:.4f}; all gold: {a['base_share']:.4f}; difference: {a['difference']:.4f}; 95% interval: [{a['low']:.4f}, {a['high']:.4f}].",
         f"Bootstrap: {a['resamples']} draws over {a['item_count']} passages, seed {a['seed']}.",
         "",

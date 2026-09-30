@@ -256,7 +256,8 @@ def test_numeric_app_adapter() -> None:
             "arms": {
                 "folio-mapper-deterministic": {
                     "resolve_misses": {
-                        "by_stage": {"never_produced": {"committed": 20, "produced": 20}}
+                        "by_stage": {"never_produced": {"committed": 20, "produced": 20}},
+                        "by_producing_stage": {"stage1_filter": 20},
                     }
                 }
             }
@@ -485,6 +486,8 @@ def test_review_publication_gates(damage):
         "Paid-arm projection",
         "Non-gold proposals",
         "Local search ceilings",
+        "Stage recovery",
+        "Arm produced misses",
     ],
 )
 def test_review_all_fixed_prose_preflight(heading):
@@ -580,3 +583,87 @@ def test_preflight_rejects_candidate_production_recommendation_collision():
     assert collision in decision["reason"]
     with pytest.raises(ValueError, match="before compute"):
         report.preflight(manifest([collision]), b"fake-salt")
+
+
+@pytest.mark.parametrize("aggregate", [False, True])
+def test_split_arm_total_does_not_qualify_a_stage(aggregate):
+    arm = staged_app({"EntityRuler": 5, "StringMatch": 5}, aggregate)
+    decision = report.choose_lever(source({"never_produced": 100}), [arm], ceiling(0.2), {})
+    assert decision["lever"] is None
+    assert "stage" not in decision
+
+
+def staged_app(stages, aggregate, stack="folio-enrich"):
+    arm = dict(app(sum(stages.values())), stack=stack)
+    if aggregate:
+        arm["resolve_misses"] = {
+            "by_stage": {"never_produced": {"produced": sum(stages.values()), "committed": 0}},
+            "by_producing_stage": stages,
+        }
+    else:
+        for row, stage in zip(
+            arm["resolve_misses"]["relations"],
+            (stage for stage, count in stages.items() for _ in range(count)),
+            strict=True,
+        ):
+            row.update(produced_stage=stage, committed=False)
+    return arm
+
+
+@pytest.mark.parametrize("aggregate", [False, True])
+@pytest.mark.parametrize("reverse", [False, True])
+@pytest.mark.parametrize(
+    "enrich_stages,mapper_stages,winner,stage,count,total",
+    [
+        (
+            {"EntityRuler": 10, "StringMatch": 10},
+            {"stage1_filter": 15},
+            "folio-mapper",
+            "stage1_filter",
+            15,
+            15,
+        ),
+        (
+            {"EntityRuler": 10},
+            {"stage1_filter": 10, "embedding_rerank": 9},
+            "folio-enrich",
+            "EntityRuler",
+            10,
+            10,
+        ),
+        (
+            {"StringMatch": 10, "EntityRuler": 10},
+            {"stage1_filter": 10},
+            "folio-enrich",
+            "EntityRuler",
+            10,
+            20,
+        ),
+    ],
+)
+def test_stages_rank_by_own_count_then_app_and_stage(
+    aggregate, reverse, enrich_stages, mapper_stages, winner, stage, count, total
+):
+    if reverse:
+        enrich_stages = dict(reversed(list(enrich_stages.items())))
+        mapper_stages = dict(reversed(list(mapper_stages.items())))
+    arms = [
+        staged_app(enrich_stages, aggregate),
+        staged_app(mapper_stages, aggregate, "folio-mapper"),
+    ]
+    if reverse:
+        arms.reverse()
+    decision = report.choose_lever(source({"never_produced": 100}), arms, ceiling(), {})
+    assert (decision["app"], decision["stage"]) == (winner, stage)
+    assert decision["recovered"] == count
+    assert decision["recovery_share"] == count / 100
+    rendered = payload()
+    rendered["decision"] = decision
+    markdown = report.render_markdown(rendered)
+    assert f"Stage recovery: {count} ({count / 100:.2%} of baseline misses)." in markdown
+    assert f"Arm produced misses: {total}; committed misses: 0." in markdown
+    assert decision["produced"] == total
+    assert decision["committed"] == 0
+    assert decision["by_producing_stage"] == (
+        enrich_stages if winner == "folio-enrich" else mapper_stages
+    )
