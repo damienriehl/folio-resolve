@@ -13,6 +13,7 @@ import hashlib
 import json
 import re
 import subprocess
+from collections import Counter
 from collections.abc import Mapping, Sequence, Set
 from dataclasses import asdict, dataclass, replace
 from decimal import Decimal
@@ -1086,11 +1087,13 @@ def attribute_consumer(
         },
         "resolve_misses": {
             "relations": missed,
-            "by_producing_stage": {
-                name: sum(r["produced_stage"] == name for r in missed)
-                for name in stage_names
-                if any(r["produced_stage"] == name for r in missed)
-            },
+            "by_producing_stage": dict(
+                Counter(
+                    r["produced_stage"]
+                    for r in missed
+                    if r["produced"] is True and r["produced_stage"] is not None
+                )
+            ),
             "by_stage": {
                 stage: {
                     "count": sum(r["resolve_stage"] == stage for r in missed),

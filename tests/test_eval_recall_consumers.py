@@ -1278,3 +1278,40 @@ def test_fix8_adoption_retry_preserves_receipt(runner, tmp_path, monkeypatch):
     monkeypatch.setattr(consumers, "_atomic_write_text", original)
     consumers.run_consumer_campaign(**kwargs, adopt_deterministic_batches=True)
     assert (kwargs["local_dir"] / "deterministic-adoption.json").read_bytes() == receipt
+
+
+@pytest.mark.parametrize("model", ["gemini-3-flash-preview", "gpt-6-luna"])
+def test_paid_mapper_producing_stages_match_detailed_and_aggregate(model):
+    from folio_eval import recall_report
+
+    run = attribution_run(
+        "folio-mapper",
+        {"a": {"committed": ["recovered", "baseline"]}},
+        {"a": frozenset({"recovered", "baseline"})},
+        "llm-on",
+    )
+    run.config["model"] = model
+    detailed = attribute_fixture(
+        run,
+        {"a": {"recovered", "baseline", "unknown"}},
+        resolve_stages={"baseline": "top_100"},
+    )
+    cross = detailed["resolve_misses"]
+    published = {
+        "arms": {
+            f"folio-mapper-{model}": {
+                "resolve_misses": {
+                    "by_stage": cross["by_stage"],
+                    "by_producing_stage": consumers.display_app_stages(cross["by_producing_stage"]),
+                },
+            }
+        }
+    }
+    aggregate = recall_report.app_arms(published)[0]
+    expected = consumers.display_app_stages({"final_output": 1})
+    assert recall_report._producing_stages(detailed) == expected
+    assert recall_report._producing_stages(aggregate) == expected
+    for field in ("produced", "committed"):
+        assert recall_report._miss_count(detailed, field) == 1
+        assert recall_report._miss_count(aggregate, field) == 1
+    assert cross["by_stage"]["never_produced"]["produced_unknown"] == 1
