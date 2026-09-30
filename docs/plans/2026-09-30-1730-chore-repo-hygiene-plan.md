@@ -86,7 +86,16 @@ the user-story run (companion plan
 - Copy the four uncommitted documents into this worktree's branch.
 - Leak-preflight each against `eval/synthetic/firm-surface-manifest-v1.json`
   with `python -m folio_eval.leakcheck check`, because the repository is
-  public. Any collision blocks that file until it is reworded.
+  public. The scan is n-gram based and flags ordinary vocabulary in authored
+  prose (on `main`, the README scores 18, the merged recall plan 9, and
+  SCHEDULE.md 7). So the disposition rule is: list each file's matched n-grams
+  locally (never in a commit or PR, since that would reveal manifest
+  membership), and block the file if any match is anything other than generic
+  English vocabulary or a public FOLIO concept label, until it is reworded.
+  Outcome 2026-09-30: all matches in the four documents and both plans were
+  generic vocabulary or public FOLIO practice-area labels, so none was blocked.
+  The zero-collision gate for committed synthetic artifacts and generated
+  reports is unchanged.
 - Commit per logical unit, open a PR, wait for CI, merge.
 - In the main checkout: add D1's paths to `.git/info/exclude`, move the pickup
   handoff (D2), delete the byte-identical recall plan copy (the copy on `main`

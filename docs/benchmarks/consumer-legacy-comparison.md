@@ -122,11 +122,11 @@ All ten demo snapshots predate library adoption: May 25, pipeline `0.10.0+020af7
 | Real estate | 19 | 17 | 357 | 50 |
 | Solo/criminal | 19 | 16 | 339 | 23 |
 
-These are saved Gemini-assisted predictions and UI selection states, not human-adjudicated reference answers. mapper's `scripts/curate_demos.py` selects mappings by score thresholds, sometimes taking the top result per branch. Scoring against those selected rows would measure agreement with the old generator, not correctness. Current demo loading restores saved state without new scoring; a library update cannot change an existing demo snapshot. Sources: consumer `apps/web/src/exemplar/demos/*.demo.json`, `docs/curating-demo-payloads.md`, and `curate_demos.py`.
+These are saved Gemini-assisted predictions and UI selection states, not human-adjudicated reference answers. mapper's `scripts/curate_demos.py` selects mappings by score thresholds, sometimes taking the top result per branch. Scoring against those selected rows would measure agreement with the old generator, not correctness. Current demo loading restores saved state without new scoring; a library update cannot change an existing demo snapshot. Sources: consumer `apps/web/src/exemplar/demos/*.demo.json`, `docs/curating-demo-payloads.md`, and `scripts/curate_demos.py`.
 
 The demo probe calls folio-python directly and bypasses the mapper pipeline. It cannot stand in for a legacy-versus-integrated full-pipeline evaluation. Whole-demo precision and recall are **not identifiable** from these captures.
 
-**Mapper verdict:** near-neutral deterministic behavior on these demo inputs, with one concrete tie-cutoff candidate change that could harm recall; no demonstrated precision/recall gain. Keep its branch retrieval, embedding blend, mandatory fallback, and LLM stages unless a controlled replacement proves at least equal quality. Do not apply enrich's global place exclusion: mapper intentionally maps jurisdictions.
+**Mapper verdict:** near-neutral deterministic behavior on these demo inputs, with one concrete tie-cutoff candidate change that could harm recall; no demonstrated precision/recall gain. Keep its branch retrieval, embedding blend, mandatory fallback, and LLM stages. Replacing them is governed by the [active adoption gate](../migration/SCHEDULE.md#active-adoption-gate--owner-direction-2026-09-21): a significant paired per-consumer F1 improvement, with the incumbent kept as the default behind a selector and a quick switch back. Equal quality is not enough. Do not apply enrich's global place exclusion: mapper intentionally maps jurisdictions.
 
 ## Isolated ruler benchmark on enrich demo material
 

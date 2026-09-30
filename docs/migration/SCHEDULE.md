@@ -185,7 +185,7 @@ recording:
   re-scoring, ancestor surfacing (`sub_class_of` to depth 3, decay `0.85^depth`), and enrich's
   own branch filter/colors. That is the same category folio-mapper's migration classified as
   "ontology-shaped code stays".
-- **The library primary is already correct without it — but the fork carries the recall.**
+- **The library preserves the incumbent primary IDs without it — but the fork carries the recall.**
   On the 24-row corpus, `LabelResolver` + gates preserve the incumbent primary on **24/24** rows with
   the fork stubbed out (result coverage and preserved primary IDs, not verified accuracy; see the
   [comparison's accuracy limitations](../benchmarks/consumer-legacy-comparison.md)). The *ranked candidate set* (`resolve_multi`, which the UI, the
