@@ -572,3 +572,11 @@ def test_aggregate_produced_recovery_with_zero_commits():
         10,
         0,
     )
+
+
+def test_preflight_rejects_candidate_production_recommendation_collision():
+    collision = "candidate-producing stage"
+    decision = report.choose_lever(source({"never_produced": 100}), [app(20)], ceiling(), {})
+    assert collision in decision["reason"]
+    with pytest.raises(ValueError, match="before compute"):
+        report.preflight(manifest([collision]), b"fake-salt")

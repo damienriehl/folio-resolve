@@ -38,6 +38,15 @@ GUARDRAILS = (
     "requires a paired item-bootstrap 95% interval of F1 gain above that app arm's baseline."
 )
 
+DECISION_MESSAGES = {
+    "concentrated": "Misses have an excess 2-of-3 share with a 95% interval above zero.",
+    "app_stage": "Port or improve the no-LLM candidate-producing stage; its produced recovery meets the 10% bar.",
+    "local_lever": "Largest eligible share of misses; local search requires 25% recovery at depth 50.",
+    "llm_only": "Only LLM recovery qualifies; ask Damien.",
+    "never_produced": "Never-produced misses dominate; only LLM recovery meets the 25% bar; ask Damien.",
+    "no_lever": "No local lever qualifies; ask Damien.",
+}
+
 
 def load_bound(path: Path, sha256: str, attribution_sha256: str | None = None) -> dict[str, Any]:
     raw = path.read_bytes()
@@ -156,9 +165,7 @@ def choose_lever(
     concentration = agreement_concentration(rows)
     base: dict[str, Any] = dict(lever=None, route="Damien", agreement=concentration)
     if concentration["concentrated"]:
-        return dict(
-            base, reason="Misses have an excess 2-of-3 share with a 95% interval above zero."
-        )
+        return dict(base, reason=DECISION_MESSAGES["concentrated"])
     candidates = []
     for arm in apps:
         if arm["lane"] not in ("deterministic", "incumbent"):
@@ -185,7 +192,7 @@ def choose_lever(
             by_producing_stage=producing,
             recovered=n,
             recovery_share=n / misses,
-            reason="Port or improve the no-LLM candidate-producing stage; its produced recovery meets the 10% bar.",
+            reason=DECISION_MESSAGES["app_stage"],
         )
     rankings = embedding["rankings"]
     recovered = max(rankings[arm]["50"]["recovered_count"] for arm in rankings)
@@ -216,7 +223,7 @@ def choose_lever(
     ):
         return dict(
             base,
-            reason="Never-produced misses dominate; only LLM recovery meets the 25% bar; ask Damien.",
+            reason=DECISION_MESSAGES["never_produced"],
         )
     choices = [
         ("ranking", counts["rank_101_200"] + counts["rank_below_200"]),
@@ -230,16 +237,14 @@ def choose_lever(
             lever=lever,
             route="brainstorm",
             recoverable_stage_count=count,
-            reason="Largest eligible share of misses; local search requires 25% recovery at depth 50.",
+            reason=DECISION_MESSAGES["local_lever"],
         )
     llm_recovery = llm.get("recovered", 0) or any(
         arm["lane"] == "llm-on" and _committed_misses(arm) > 0 for arm in apps
     )
     return dict(
         base,
-        reason="Only LLM recovery qualifies; ask Damien."
-        if llm_recovery
-        else "No local lever qualifies; ask Damien.",
+        reason=DECISION_MESSAGES["llm_only"] if llm_recovery else DECISION_MESSAGES["no_lever"],
     )
 
 
@@ -465,7 +470,7 @@ def preflight(manifest: Manifest, salt: bytes) -> None:
         "decision": {
             "lever": None,
             "route": "Damien",
-            "reason": "No local lever qualifies; ask Damien.",
+            "reason": DECISION_MESSAGES["no_lever"],
             "agreement": dict(
                 miss_share=0,
                 base_share=0,
@@ -509,11 +514,7 @@ def preflight(manifest: Manifest, salt: bytes) -> None:
     placeholder["input_sha256"] = dict.fromkeys(("attribution", "apps", "embedding", "llm"), "0")
     # Scan every alternate fixed decision sentence as well as every rendered heading.
     reasons = (
-        "Misses have an excess 2-of-3 share with a 95% interval above zero.",
-        "Port or improve the no-LLM path to committed output; its recovery meets the 10% bar.",
-        "Largest eligible share of misses; local search requires 25% recovery at depth 50.",
-        "Only LLM recovery qualifies; ask Damien.",
-        "Never-produced misses dominate; only LLM recovery meets the 25% bar; ask Damien.",
+        *DECISION_MESSAGES.values(),
         "ranking gate_tuning local_source app_stage brainstorm Recall attribution",
     )
     check_outputs(placeholder, manifest, salt)
