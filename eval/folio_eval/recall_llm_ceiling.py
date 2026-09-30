@@ -136,15 +136,12 @@ def _metrics(
     ):
         raise AttemptRejected("invalid_response")
     # Preserve raw spelling for the grading resolver's exact-before-normalized ladder.
-    normalized: dict[str, str] = {}
-    for name in names:
-        normalized.setdefault(label_key(name), name)
+    distinct_names = set(names)
     counts = dict.fromkeys(METRICS, 0)
-    counts["duplicate_names"] = len(names) - len(normalized)
-    counts["proposals"] = len(normalized)
+    counts["duplicate_names"] = len(names) - len(distinct_names)
+    counts["proposals"] = len(distinct_names)
     seen: set[str] = set()
-    for key in sorted(normalized):
-        name = normalized[key]
+    for name in sorted(distinct_names):
         # This is the same resolver imported and used by grade._resolve_vote.
         resolution = resolve_gold_value(name, dictionary)
         if is_iri_like(name):

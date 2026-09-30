@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import subprocess
+from itertools import permutations
 from pathlib import Path
 from typing import Any
 
@@ -501,3 +502,30 @@ def test_grading_preferred_label_precedence(inputs):
     result = _metrics('["Shared"]', dictionary, {"urn:gold"}, {"urn:gold": "codex_only"})
     assert result["recovered"] == 1
     assert result["ambiguous"] == 0
+
+
+def test_distinct_raw_spellings_resolve_before_deduplication_in_every_order():
+    from folio_eval.recall_llm_ceiling import _metrics
+    from folio_eval.resolve_labels import label_key
+
+    names = ["Collision-name", "Collision—name", "Gold alias", "Collision-name"]
+    assert label_key(names[0]) == label_key(names[1])
+    dictionary = LabelIndex.from_concepts(
+        [
+            IndexedConcept("urn:gold", (names[0],), (names[2],)),
+            IndexedConcept("urn:other", (names[1],), ()),
+        ]
+    )
+    results = [
+        _metrics(json.dumps(order), dictionary, {"urn:gold"}, {"urn:gold": "codex_only"})
+        for order in permutations(names)
+    ]
+    assert all(result == results[0] for result in results)
+    result = results[0]
+    assert result["proposals"] == 3
+    assert result["duplicate_names"] == 1
+    assert result["duplicate_concepts"] == 1
+    assert result["recovered"] == result["matched_gold"] == 1
+    assert result["recovered_codex_only_majority"] == 1
+    assert result["non_gold_proposals"] == 1
+    assert result["ambiguous"] == result["unmatched"] == 0
