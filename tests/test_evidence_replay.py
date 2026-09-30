@@ -23,6 +23,14 @@ def offline(module):
     return load("evidence_replay").offline(module)
 
 
+def historical_validators(module):
+    """Test original validator rules with replay bindings, including synthetic inputs.
+
+    This is deliberately not the public frozen-evidence authentication entry point.
+    """
+    return load("evidence_replay")._offline(module)
+
+
 def receipt(name):
     return json.loads((ROOT / "docs/benchmarks" / f"{name}.json").read_text())
 
@@ -56,7 +64,11 @@ def test_unrelated_library_edit_preserves_frozen_evidence(name, monkeypatch):
         view.validate_collection(receipt("embedding-precision-collection"))
     elif name == "embedding_precision_relations":
         data = receipt("embedding-precision-collection")
-        view.run_score(data, view.prepare_judgments(data))
+        view.run_score(
+            data,
+            receipt("embedding-precision-judgments"),
+            load("embedding_lexical_boundaries").OWNER_RECEIPT,
+        )
     else:
         view.validate_collection(receipt("embedding-lexical-boundaries-collection"))
     assert replay.source_identity() == "a" * 64
@@ -124,3 +136,110 @@ def test_semantic_retrieval_drift_names_both_sources(monkeypatch):
         offline(module).validate_collection(data)
     assert recorded in str(error.value)
     assert "f" * 64 in str(error.value)
+
+
+def test_selective_drift_with_replaced_receipt_is_rejected(tmp_path, monkeypatch):
+    import shutil
+
+    module = load("embedding_semantic_gate_replay")
+    shutil.copytree(ROOT / "docs/benchmarks", tmp_path / "docs/benchmarks")
+    shutil.copytree(ROOT / "benchmarks/fixtures", tmp_path / "benchmarks/fixtures")
+    monkeypatch.setattr(module, "ROOT", tmp_path)
+    original_rank = MatchPipeline._rank
+
+    def changed_rank(pipeline, *args, **kwargs):
+        result = original_rank(pipeline, *args, **kwargs)
+        if isinstance(pipeline, module.SelectivePipeline):
+            for candidate in result:
+                candidate.score += 0.125
+        return result
+
+    monkeypatch.setattr(MatchPipeline, "_rank", changed_rank)
+    recorded = receipt("embedding-semantic-gate-replay")["provenance"]["library_source_sha256"]
+    monkeypatch.setattr(module, "source_identity", lambda: recorded)
+    changed = module.run_replay()
+    assert changed != receipt("embedding-semantic-gate-replay")
+    (tmp_path / "docs/benchmarks/embedding-semantic-gate-replay.json").write_text(
+        json.dumps(changed)
+    )
+    with pytest.raises(ValueError, match="Frozen artifact SHA-256"):
+        offline(module).run_replay()
+
+
+@pytest.mark.parametrize("replace_file", [False, True])
+def test_rehashed_pool_metadata_is_rejected(tmp_path, monkeypatch, replace_file):
+    import shutil
+
+    module = load("embedding_precision")
+    shutil.copytree(ROOT / "docs/benchmarks", tmp_path / "docs/benchmarks")
+    shutil.copytree(ROOT / "benchmarks/fixtures", tmp_path / "benchmarks/fixtures")
+    monkeypatch.setattr(module.replay, "ROOT", tmp_path)
+    path = tmp_path / "docs/benchmarks/embedding-precision-collection.json"
+    data = json.loads(path.read_text())
+    data["pool"][0]["definition"] = "TAMPERED DEFINITION"
+    data["pool_sha256"] = module.baseline.stable_digest(data["pool"])
+    if replace_file:
+        path.write_text(json.dumps(data))
+    message = "Frozen artifact SHA-256" if replace_file else "authenticated frozen"
+    with pytest.raises(ValueError, match=message):
+        offline(module).validate_collection(data)
+
+
+def test_pin_table_covers_offline_reads(monkeypatch):
+    adapter = load("evidence_replay")
+    opened = set()
+    original_open = Path.open
+
+    def track(path, *args, **kwargs):
+        if (
+            path.is_relative_to(ROOT)
+            and path.suffix == ".json"
+            and path.relative_to(ROOT).parts[0] in {"benchmarks", "docs"}
+        ):
+            opened.add(path.relative_to(ROOT).as_posix())
+        return original_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", track)
+    assert adapter.offline(load("embedding_semantic_gate_replay")).run_replay() == receipt(
+        "embedding-semantic-gate-replay"
+    )
+    adapter.offline(load("embedding_precision")).validate_collection(
+        receipt("embedding-precision-collection")
+    )
+    module = load("embedding_precision_relations")
+    adapter.offline(module).run_score(
+        receipt("embedding-precision-collection"),
+        receipt("embedding-precision-judgments"),
+        load("embedding_lexical_boundaries").OWNER_RECEIPT,
+    )
+    adapter.offline(load("embedding_lexical_boundaries")).run_score(
+        receipt("embedding-lexical-boundaries-collection")
+    )
+    assert not (opened - adapter.FROZEN_SHA256.keys()), opened - adapter.FROZEN_SHA256.keys()
+
+
+@pytest.mark.parametrize("relative", sorted(load("evidence_replay").FROZEN_SHA256))
+def test_every_frozen_input_is_authenticated_before_replay(relative, tmp_path, monkeypatch):
+    import shutil
+
+    module = load("embedding_semantic_gate_replay")
+    shutil.copytree(ROOT / "docs/benchmarks", tmp_path / "docs/benchmarks")
+    shutil.copytree(ROOT / "benchmarks/fixtures", tmp_path / "benchmarks/fixtures")
+    (tmp_path / relative).write_text("not even JSON")
+    monkeypatch.setattr(module, "ROOT", tmp_path)
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Replay ran before all frozen inputs were authenticated")
+
+    monkeypatch.setattr(module, "replay_controls", forbidden)
+    with pytest.raises(ValueError, match="Frozen artifact SHA-256"):
+        offline(module).run_replay()
+
+
+def test_nested_offline_view_authenticates_dictionary_inputs():
+    module = load("embedding_lexical_boundaries")
+    data = receipt("embedding-precision-collection")
+    data["pool"][0]["definition"] = "TAMPERED DEFINITION"
+    data["pool_sha256"] = module.baseline.stable_digest(data["pool"])
+    with pytest.raises(ValueError, match="authenticated frozen"):
+        offline(module).precision.validate_collection(collection=data)

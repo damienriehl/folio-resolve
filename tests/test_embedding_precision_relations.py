@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 
 import pytest
-from test_evidence_replay import offline
+from test_evidence_replay import historical_validators as offline
 
 ROOT = Path(__file__).parents[1]
 

@@ -4,7 +4,7 @@ import importlib.util
 from pathlib import Path
 
 import pytest
-from test_evidence_replay import offline
+from test_evidence_replay import historical_validators as offline
 
 from folio_resolve.ontology import Concept, InMemoryOntology
 from folio_resolve.scoring import compute_relevance_score, content_words

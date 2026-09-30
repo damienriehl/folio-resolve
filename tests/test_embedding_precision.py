@@ -4,7 +4,7 @@ import importlib.util
 from dataclasses import asdict
 from pathlib import Path
 
-from test_evidence_replay import offline
+from test_evidence_replay import historical_validators as offline
 
 from folio_resolve import InMemoryOntology, MatchCandidate, MatchPipeline
 

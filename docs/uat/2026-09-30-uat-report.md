@@ -84,7 +84,7 @@ extras: pass 24 fail 0 skip 0, core: pass 24 fail 0 skip 0, harness failures: 0
 
 Found during the fix loop:
 
-- **Frozen evidence blocked every library edit (P1 for contributors).** The offline validators compared each frozen benchmark receipt's library-source hash to the *current* tree, so any `src/` change failed core CI. Fixed in `benchmarks/evidence_replay.py`: offline validation now proves each receipt by exact deterministic replay, then checks it against its recorded source identity. All receipts and every hashed benchmark file are byte-identical; collection paths still bind the current source.
+- **Frozen evidence blocked every library edit (P1 for contributors).** The offline validators compared each frozen benchmark receipt's library-source hash to the *current* tree, so any `src/` change failed core CI. Fixed in `benchmarks/evidence_replay.py`: offline validation now authenticates the frozen receipts against pinned digests and then proves them by exact deterministic replay using their recorded source identity. All receipts and every hashed benchmark file are byte-identical; collection paths still bind the current source.
 - **Local mypy on Python 3.13 fails in NumPy stubs (P3, open).** `uv run mypy` with a 3.13 venv reports a PEP 695 `type` statement in NumPy's stubs against the 3.11 target. CI (3.11) is unaffected. Deferred as dev-environment friction.
 
 Full suite on this branch: 2,089 passed, 5 skipped. Ruff clean.
