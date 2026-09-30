@@ -1,5 +1,37 @@
 # folio-resolve — Consumer Migration Schedule
 
+## Active adoption gate — owner direction, 2026-09-21
+
+Preserve folio-enrich and folio-mapper's current application-owned pipelines until a proposed
+folio-resolve pipeline demonstrates **significant F1 improvement over each consumer's incumbent**.
+Parity, non-inferiority, isolated component speed, or a small query hit-rate gain is insufficient.
+This direction supersedes the earlier “at least as well” adoption criterion for these consumers;
+it does not change the historical benchmark records or the blocked U10 v2 publication decision.
+
+Current source verification: enrich's API calls its `app.pipeline.orchestrator.PipelineOrchestrator`;
+mapper's API calls its `app.services.pipeline.orchestrator.run_pipeline`. Neither backend imports
+or calls the library's complete `MatchPipeline`. Both are existing hybrid integrations, not pristine
+pre-library code: enrich uses library primary resolution, scoring/gates, and reconciliation while
+retaining local gathering and application stages; mapper uses shared scoring and judge helpers
+inside its own branch/embedding/LLM pipeline. Preserve these integrations and retained stages.
+No full-pipeline rollback or new production switch is required at this point.
+
+A future proposal must define the F1 interpretation and practically meaningful improvement before
+evaluation, use the same independently judged cohort for candidate and incumbent, and report paired
+uncertainty for that F1 delta. A confidence interval that includes zero is not demonstrated
+improvement. Evaluate precision, recall, no-match behavior, and consumer-critical regressions alongside
+F1. The comparison is per consumer; a win for one does not authorize a cutover for the other.
+
+When a candidate is ready for integration, preserve the incumbent implementation and add an explicit
+pipeline selector with the incumbent as the default, an opt-in candidate path for paired evaluation,
+and a quick switch back. Do not remove the incumbent as part of introducing the candidate.
+The current library-only benchmark improvements do not authorize changing either default.
+
+Evidence and limitations: [consumer comparison](../benchmarks/consumer-legacy-comparison.md).
+Source inspection is not a verification of a deployed server's running image.
+
+---
+
 Damien approved **opportunistic** migration (each repo migrates as it next touches FOLIO matching)
 **plus** this written schedule, and asked to be **reminded which repo is next as each migration
 completes**. Status legend: ✅ done · 🟡 partial · ▶️ next · ⏳ queued · ➖ excluded.
