@@ -11,6 +11,7 @@ from folio_eval.answer_rule import AnswerRuleConfig
 from folio_eval.audit import assemble_sittings
 from folio_eval.grade import (
     GradeError,
+    GradeOutcome,
     GraderVote,
     audit_report,
     audit_sample,
@@ -65,6 +66,71 @@ def test_two_to_one_split_folds_agreed_core_and_queues_singleton(dictionary: Lab
     assert len(outcome.close_calls) == 1
     assert outcome.close_calls[0].disagreement_class == "singleton_concept"
     assert outcome.close_calls[0].proposed_iri == "R-b"
+    assert outcome.exact_set_matches == 0
+    assert outcome.exact_set_graded == 1
+    assert outcome.exact_set_match_rate == 0.0
+
+
+def test_exact_set_match_uses_resolved_iris(dictionary: LabelIndex) -> None:
+    outcome = fold_votes(
+        [item()],
+        [
+            vote(1, {"Alpha": 0.9, "Beta": 0.8}),
+            vote(2, {"Alternate Alpha": 0.6, "Beta": 0.7}),
+            vote(3, {"Alpha": 0.8, "Beta": 0.9}),
+        ],
+        floor=0.6,
+        dictionary=dictionary,
+    )
+    assert outcome.items[0].gold_iris == frozenset({"R-a", "R-b"})
+    assert not outcome.close_calls
+    assert outcome.exact_set_matches == outcome.exact_set_graded == 1
+    assert outcome.exact_set_match_rate == 1.0
+
+
+def test_exact_set_match_filters_confidence_by_floor(dictionary: LabelIndex) -> None:
+    outcome = fold_votes(
+        [item()],
+        [vote(1, {"Alpha": 0.9}), vote(2, {"Alpha": 0.6}), vote(3, {"Alpha": 0.59})],
+        floor=0.6,
+        dictionary=dictionary,
+    )
+    assert outcome.items[0].gold_iris == frozenset({"R-a"})
+    assert outcome.items[0].verification == "deterministic"
+    assert not outcome.close_calls
+    assert outcome.exact_set_matches == 0
+    assert outcome.exact_set_graded == 1
+    assert outcome.exact_set_match_rate == 0.0
+
+
+def test_grade_outcome_metric_defaults_preserve_positional_construction() -> None:
+    outcome = GradeOutcome((item(),), (), ())
+    assert outcome.exact_set_matches == outcome.exact_set_graded == 0
+    assert outcome.exact_set_match_rate is None
+
+
+@pytest.mark.parametrize("quarantine", ["missing", "extra", "unresolved"])
+def test_exact_set_metric_excludes_quarantined_items(
+    dictionary: LabelIndex, quarantine: str
+) -> None:
+    votes = [vote(grader, {"Alpha": 0.9}, "quarantined") for grader in (1, 2, 3)]
+    if quarantine == "missing":
+        votes.pop()
+    elif quarantine == "extra":
+        votes.append(vote(4, {"Alpha": 0.9}, "quarantined"))
+    else:
+        votes[0] = vote(1, {"Delta": 0.9}, "quarantined")
+    outcome = fold_votes(
+        [item(), item("quarantined")],
+        [vote(1, {"Alpha": 0.9}), vote(2, {"Alpha": 0.8}), vote(3, {"Beta": 0.9}), *votes],
+        floor=0.6,
+        dictionary=dictionary,
+    )
+    assert outcome.items[1].verification == "needs_review"
+    assert outcome.items[1].gold_iris == frozenset()
+    assert outcome.exact_set_matches == 0
+    assert outcome.exact_set_graded == 1
+    assert outcome.exact_set_match_rate == 0.0
 
 
 def test_partial_sets_fold_each_concept_with_two_above_floor_votes(
@@ -129,6 +195,8 @@ def test_ratified_row_is_never_regraded(dictionary: LabelIndex) -> None:
     assert outcome.items[0] is ratified
     assert outcome.skipped_ratified == ("i1",)
     assert not outcome.close_calls
+    assert outcome.exact_set_matches == outcome.exact_set_graded == 0
+    assert outcome.exact_set_match_rate is None
 
 
 def _vote_file(tmp_path: Path, *, concepts: dict[str, object], grader="grader-1", family="family-1"):
@@ -190,6 +258,8 @@ def test_sub_floor_agreement_routes_queue(dictionary: LabelIndex) -> None:
         dictionary=dictionary,
     )
     assert outcome.close_calls[0].disagreement_class == "sub_floor_confidence"
+    assert outcome.exact_set_matches == outcome.exact_set_graded == 1
+    assert outcome.exact_set_match_rate == 1.0
 
 
 def test_missing_votes_routes_before_other_disagreements(dictionary: LabelIndex) -> None:
@@ -230,6 +300,8 @@ def test_three_empty_votes_route_empty_proposal(dictionary: LabelIndex) -> None:
     )
     assert outcome.items[0].verification == "needs_review"
     assert outcome.close_calls[0].disagreement_class == "empty_proposal"
+    assert outcome.exact_set_matches == outcome.exact_set_graded == 1
+    assert outcome.exact_set_match_rate == 1.0
 
 
 def test_three_empty_votes_confirm_no_match(dictionary: LabelIndex) -> None:
@@ -276,6 +348,8 @@ def test_ambiguous_resolution_quarantines_item_despite_other_agreement() -> None
     assert outcome.items[0].verification == "needs_review"
     assert outcome.items[0].gold_iris == frozenset()
     assert outcome.close_calls[0].disagreement_class == "ambiguous_label"
+    assert outcome.exact_set_matches == outcome.exact_set_graded == 0
+    assert outcome.exact_set_match_rate is None
 
 
 def test_provisional_gold_provenance_carries_all_votes(dictionary: LabelIndex) -> None:

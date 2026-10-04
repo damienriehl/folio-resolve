@@ -6,6 +6,8 @@ disagreement vocabulary is: ``set_mismatch`` (no concept has two valid above-flo
 ``sub_floor_confidence`` (an otherwise agreeing proposal has fewer than two above-floor voters),
 ``ambiguous_label`` / ``unresolved_label`` (U5 resolver quarantine), and ``empty_proposal``
 (all graders supplied no concepts for a non-no-match item).
+Per-concept agreement is primary; the exact-set match rate is a secondary comparison
+metric that never changes gold or routing.
 
 Gate 1b policy is deliberately a dispatch concern: synthetic sittings may be dispatched only
 while the firm sheet is empty.  :func:`folio_eval.packet_render.write_sitting_v2` exposes the
@@ -133,6 +135,12 @@ class GradeOutcome:
     items: tuple[SyntheticItem, ...]
     close_calls: tuple[CloseCall, ...]
     skipped_ratified: tuple[str, ...]
+    exact_set_matches: int = 0
+    exact_set_graded: int = 0
+
+    @property
+    def exact_set_match_rate(self) -> float | None:
+        return self.exact_set_matches / self.exact_set_graded if self.exact_set_graded else None
 
     @property
     def machine_agreed_ids(self) -> tuple[str, ...]:
@@ -275,6 +283,8 @@ def fold_votes(
     folded: list[SyntheticItem] = []
     queue: list[CloseCall] = []
     skipped: list[str] = []
+    exact_set_matches = 0
+    exact_set_graded = 0
     for item in items:
         if item.verification == "human":
             folded.append(item)
@@ -292,6 +302,13 @@ def fold_votes(
             folded.append(quarantined)
             queue.append(CloseCall(quarantined, _reason(resolved, floor), item_votes))
             continue
+
+        above_floor_sets = tuple(
+            frozenset(iri for iri, confidence in entry.confidences.items() if confidence >= floor)
+            for entry in resolved
+        )
+        exact_set_graded += 1
+        exact_set_matches += int(above_floor_sets[0] == above_floor_sets[1] == above_floor_sets[2])
 
         above_floor_counts = Counter(
             iri
@@ -336,7 +353,11 @@ def fold_votes(
         quarantined = replace(item, gold_iris=frozenset(), verification="needs_review")
         folded.append(quarantined)
         queue.append(CloseCall(quarantined, _reason(resolved, floor), item_votes))
-    return GradeOutcome(tuple(folded), tuple(queue), tuple(skipped))
+    return GradeOutcome(
+        tuple(folded), tuple(queue), tuple(skipped),
+        exact_set_matches=exact_set_matches,
+        exact_set_graded=exact_set_graded,
+    )
 
 
 def calibrate_floor(adjudicated_sample: Iterable[Mapping[str, object]]) -> float:
