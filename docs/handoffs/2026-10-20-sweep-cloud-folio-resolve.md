@@ -7,6 +7,7 @@ keywords: ["sweep-2026-10-20", "u10", "finalize", "u8", "canary", "spend"]
 repository: "damienriehl/folio-resolve"
 branch: "feat/attribution-bounded-canary"
 base: "9dc8f9e"
+merged_as: "faf9bba"
 ---
 
 # Sweep 2026-10-20 cloud lane — folio-resolve
@@ -58,17 +59,14 @@ and updates step 2 of `docs/plans/2026-09-30-retrieval-loss-live-completion-plan
 
 - Evidence: two new canary tests fail on the prior code and pass after; full suite **2118 passed,
   6 skipped**; ruff and mypy clean; `git diff --check` clean.
-- **Not merged.** `CLAUDE.md` makes a recorded Codex review pass the only valid review receipt and
-  forbids Claude reviewer subagents. The cloud lane cannot reach Codex workers.
+- **Merged 2026-10-20 as `faf9bba` (PR #69).** CI Core 3.11/3.12 green on `3282d77`.
+  ce-code-review receipt: Codex review PR #69 comment 6298516387 (GitHub integration, trigger
+  "PR opened"), verdict merge, no findings. The receipt comment on the PR records this.
 
-**Home-box steps for this PR:**
-
-1. Leak-preflight the three changed docs and this handoff with
-   `eval/run_leakcheck.py check --manifest eval/synthetic/firm-surface-manifest-v1.json --salt-file eval/data/leakcheck-salt <files>`;
-   apply the H1 disposition rule (generic vocabulary only).
-2. Run a Codex review of the PR diff; retain prompt and verdict off-tree; add the receipt line
-   `ce-code-review receipt: Codex review <artifact name>, verdict <...>` to the PR.
-3. On `merge`, merge the PR. On `fix-first`, hand findings to a worker.
+**Remaining home-box step for this PR:** leak-preflight the three changed docs and this handoff with
+`eval/run_leakcheck.py check --manifest eval/synthetic/firm-surface-manifest-v1.json --salt-file eval/data/leakcheck-salt <files>`
+under the H1 disposition rule. The cloud lane has no salt. The prose was written without access to
+restricted surfaces, so any match should be generic vocabulary; if not, reword and follow up.
 
 ## 4. Open questions for Damien
 
