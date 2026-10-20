@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 import subprocess
+import sys
 import tempfile
 from collections import Counter
 from collections.abc import Callable, Mapping, Sequence, Set
@@ -356,10 +357,18 @@ def collect_checkpoint(
     shard_index: int,
     adapter_factory: Callable[[], AttributionAdapter],
     finalize_only: bool = False,
+    canary_items: int | None = None,
+    on_adapted: Callable[[int], None] | None = None,
 ) -> dict[tuple[SyntheticItemKind, str], AttributionAdapterResult] | None:
-    """Resume assigned items; explicit finalization loads all shards without adapting."""
+    """Resume assigned items; explicit finalization loads all shards without adapting.
+
+    A canary adapts at most ``canary_items`` missing items of the assigned shard
+    into the same store, so the full run resumes over them, and never finalizes.
+    """
     if not 0 <= shard_index < store.shard_count:
         raise ValueError("shard-index must be within shard-count")
+    if canary_items is not None and (finalize_only or canary_items < 1):
+        raise ValueError("canary requires a positive item count and collection")
     groups: tuple[tuple[SyntheticItemKind, Sequence[SyntheticItem]], ...] = (
         ("scoreable", corpus.scoreable_items),
         ("nomatch", corpus.nomatch_items),
@@ -370,7 +379,10 @@ def collect_checkpoint(
         raise CheckpointError("attribution corpus item count or identity mismatch")
     if not finalize_only:
         adapter = None
+        adapted = 0
         for kind, item in items:
+            if canary_items is not None and adapted >= canary_items:
+                break
             if (
                 shard_for_item(checkpoint_item_key(kind, item.item_id), store.shard_count)
                 != shard_index
@@ -398,7 +410,10 @@ def collect_checkpoint(
                     for t in result.traces
                 ),
             )
-        if store.shard_count > 1:
+            adapted += 1
+        if on_adapted is not None:
+            on_adapted(adapted)
+        if store.shard_count > 1 or canary_items is not None:
             return None
     assembled = {(kind, item.item_id): store.load_item(kind, item.item_id) for kind, item in items}
     if {path.stem for path in store.item_paths()} != keys:
@@ -429,10 +444,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--shard-count", type=int, default=1)
     parser.add_argument("--shard-index", type=int, default=0)
     parser.add_argument("--finalize-only", action="store_true")
+    parser.add_argument(
+        "--canary-items",
+        type=int,
+        help="adapt at most N missing items of the assigned shard, then stop without finalizing",
+    )
     parser.add_argument("--output", type=Path, help="default: checkpoint-dir/attribution.json")
     args = parser.parse_args(argv)
     if args.shard_count < 1 or not 0 <= args.shard_index < args.shard_count:
         parser.error("shard-index must be within the positive shard-count")
+    if args.canary_items is not None and (args.canary_items < 1 or args.finalize_only):
+        parser.error("--canary-items must be positive and cannot be combined with --finalize-only")
     from .recall_report import preflight
 
     manifest = load_manifest(args.leak_manifest)
@@ -463,6 +485,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         shard_index=args.shard_index,
         adapter_factory=lambda: make_adapter(corpus),
         finalize_only=args.finalize_only,
+        canary_items=args.canary_items,
+        on_adapted=lambda count: print(
+            f"adapted {count} item(s) in shard {args.shard_index + 1}/{args.shard_count}",
+            file=sys.stderr,
+        ),
     )
     if assembled is None:
         return 0

@@ -178,6 +178,36 @@ def test_resume_only_missing_and_finalize_without_adapt(runner):
     assert len(runner.calls) == 2
 
 
+def test_canary_adapts_bounded_items_and_full_run_resumes(runner, capsys):
+    assert runner.module.main([*runner.args, "--canary-items", "1"]) == 0
+    assert len(runner.calls) == 1
+    assert not (runner.root / "checkpoint/attribution.json").exists()
+    assert "adapted 1 item(s) in shard 1/1" in capsys.readouterr().err
+    assert runner.module.main(runner.args) == 0
+    assert len(runner.calls) == 2
+    assert (runner.root / "checkpoint/attribution.json").exists()
+
+
+def test_canary_counts_only_new_items_in_assigned_shard(runner, capsys):
+    args = [*runner.args, "--shard-count", "2", "--shard-index", "0"]
+    runner.module.main(args)
+    count = len(runner.calls)
+    capsys.readouterr()
+    runner.module.main([*args, "--canary-items", "5"])
+    assert len(runner.calls) == count
+    assert "adapted 0 item(s) in shard 1/2" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    "extra", [["--canary-items", "0"], ["--canary-items", "1", "--finalize-only"]]
+)
+def test_canary_rejects_invalid_requests_before_collection(runner, extra):
+    with pytest.raises(SystemExit):
+        runner.module.main([*runner.args, *extra])
+    assert runner.calls == []
+    assert not (runner.root / "checkpoint").exists()
+
+
 def test_stage_one_checkpoint_rejected_untouched(runner):
     store = SyntheticCheckpointStore.create(
         runner.root / "checkpoint",
