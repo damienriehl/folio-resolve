@@ -2,9 +2,18 @@
 
 from __future__ import annotations
 
+import builtins
+import fcntl
+import io
 import json
+import os
+import socket
+import subprocess
+import sys
 from copy import deepcopy
+from pathlib import Path
 
+import folio_eval.campaign_readiness as readiness
 import pytest
 from folio_eval.campaign_readiness import SnapshotError, parse_snapshot, summarize_snapshot
 
@@ -123,6 +132,14 @@ def test_all_conflicts_survive_in_fixed_order():
     ]
 
 
+@pytest.mark.parametrize("role", ["reviewer", "evaluation_operator"])
+def test_campaign_controller_assignment_requires_controller_role(role):
+    snapshot = favorable()
+    snapshot["checks"][5]["role"] = role
+    with pytest.raises(SnapshotError):
+        summarize_snapshot(snapshot)
+
+
 @pytest.mark.parametrize("patch", [
     {"presence": "absent", "outcome": "passed"},
     {"presence": "absent", "outcome": "failed"},
@@ -181,3 +198,154 @@ def test_normalization_does_not_mutate_supplied_snapshot():
     before = deepcopy(snapshot)
     assert parse_snapshot(json.dumps(snapshot)) == summarize_snapshot(snapshot)
     assert snapshot == before
+
+
+@pytest.mark.parametrize("campaign", ["u10", "retrieval"])
+def test_formats_are_deterministic_and_describe_same_summary(campaign):
+    snapshot = favorable(campaign)
+    snapshot["checks"][0]["binding"] = "mismatched"
+    first = summarize_snapshot(snapshot)
+    snapshot["checks"].reverse()
+    snapshot = dict(reversed(list(snapshot.items())))
+    second = parse_snapshot(json.dumps(snapshot))
+    for render in (readiness.render_json, readiness.render_markdown):
+        assert render(first) == render(second) == render(first)
+        assert render(first).endswith("\n")
+    assert json.loads(readiness.render_json(first)) == first
+    markdown = readiness.render_markdown(first)
+    for field in ("campaign", "evidence_basis", "underlying_verification", "attestation_coverage",
+                  "execution_authorization", "adoption_authorization"):
+        assert f"{field}: {first[field]}" in markdown
+    for row in first["checks"]:
+        assert row["check"] in markdown
+        for reason in row["unresolved_reasons"]:
+            assert reason in markdown
+        for follow_up in row["follow_up"]:
+            assert follow_up in markdown
+    assert "evaluation_operator: reconcile binding attestations outside this command." in markdown
+
+
+@pytest.mark.parametrize("fmt", ["json", "markdown"])
+def test_cli_success_with_missing_attestations_does_not_write_files(tmp_path, capsys, fmt):
+    snapshot = tmp_path / "snapshot.json"
+    contents = '{"schema_version":1,"campaign":"retrieval"}\n'
+    snapshot.write_text(contents, encoding="utf-8")
+    assert readiness.main(["--snapshot", str(snapshot), "--format", fmt]) == 0
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    assert "not_performed" in captured.out
+    assert "attestation_missing" in captured.out
+    assert snapshot.read_text(encoding="utf-8") == contents
+    assert list(tmp_path.iterdir()) == [snapshot]
+
+
+@pytest.mark.parametrize("raw", [
+    '{"schema_version":1,"campaign":"u10","notes":"private-sentinel"}',
+    '{"schema_version":1,"campaign":"private-sentinel"}',
+    '{"schema_version":1,"campaign":"u10","checks":[{"check":"final_completion","outcome":"private-sentinel"}]}',
+    '{"private-sentinel', '\ud800', '[',
+])
+def test_cli_invalid_input_never_echoes_content_or_path(tmp_path, capsys, raw):
+    snapshot = tmp_path / "private-sentinel.json"
+    snapshot.write_bytes(raw.encode("utf-8", errors="surrogatepass"))
+    assert readiness.main(["--snapshot", str(snapshot)]) == 2
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err in {"invalid_snapshot\n", "snapshot_unreadable\n"}
+    assert "private-sentinel" not in captured.err
+
+
+@pytest.mark.parametrize("args", [
+    [], ["--private-sentinel"], ["--snapshot"], ["--format", "private-sentinel"],
+    ["private-sentinel"], ["--snap", "private-sentinel"],
+])
+def test_cli_usage_errors_are_fixed(args, capsys):
+    assert readiness.main(args) == 2
+    assert capsys.readouterr() == ("", "invalid_arguments\n")
+
+
+@pytest.mark.parametrize("suffix", ["missing-private-sentinel", "\x00private-sentinel"])
+def test_cli_unreadable_path_is_fixed(tmp_path, capsys, suffix):
+    assert readiness.main(["--snapshot", str(tmp_path / suffix)]) == 2
+    assert capsys.readouterr() == ("", "snapshot_unreadable\n")
+
+
+def test_cli_help_contains_only_static_text(capsys):
+    assert readiness.main(["--help"]) == 0
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    assert "--snapshot" in captured.out
+    assert "attestations" in captured.out
+
+
+@pytest.mark.parametrize("operation", ["write", "flush"])
+def test_output_failure_returns_one_with_fixed_diagnostic(tmp_path, monkeypatch, capsys, operation):
+    snapshot = tmp_path / "snapshot.json"
+    snapshot.write_text('{"schema_version":1,"campaign":"u10"}', encoding="utf-8")
+
+    class BrokenOutput(io.StringIO):
+        def write(self, value):
+            if operation == "write":
+                raise OSError("private-sentinel")
+            return super().write(value)
+
+        def flush(self):
+            if operation == "flush":
+                raise OSError("private-sentinel")
+            return super().flush()
+
+    with monkeypatch.context() as patch:
+        patch.setattr(sys, "stdout", BrokenOutput())
+        assert readiness.main(["--snapshot", str(snapshot)]) == 1
+    assert capsys.readouterr().err == "output_failed\n"
+
+
+def test_cli_reads_only_explicit_snapshot_and_never_discovers_or_launches(tmp_path, monkeypatch, capsys):
+    snapshot = tmp_path / "snapshot.json"
+    snapshot.write_text('{"schema_version":1,"campaign":"u10"}', encoding="utf-8")
+    original_open = io.open
+    original_import = builtins.__import__
+    reads = []
+
+    def guarded_open(path, mode="r", *args, **kwargs):
+        assert Path(path) == snapshot
+        assert mode == "r"
+        reads.append(Path(path))
+        return original_open(path, mode, *args, **kwargs)
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("readiness attempted external I/O")
+
+    def guarded_import(name, *args, **kwargs):
+        assert not name.startswith("folio_eval.") or name == "folio_eval.campaign_readiness"
+        return original_import(name, *args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(io, "open", guarded_open)
+        patch.setattr(builtins, "open", guarded_open)
+        patch.setattr(builtins, "__import__", guarded_import)
+        patch.setattr(os, "scandir", forbidden)
+        patch.setattr(os, "listdir", forbidden)
+        patch.setattr(subprocess, "Popen", forbidden)
+        patch.setattr(os, "system", forbidden)
+        patch.setattr(socket, "socket", forbidden)
+        patch.setattr(socket, "create_connection", forbidden)
+        patch.setattr(fcntl, "flock", forbidden)
+        patch.setattr(fcntl, "lockf", forbidden)
+        assert readiness.main(["--snapshot", str(snapshot)]) == 0
+    assert reads == [snapshot]
+    assert capsys.readouterr().err == ""
+
+
+def test_launcher_runs_with_isolated_stdlib_and_disables_bytecode(tmp_path):
+    # Only the new local CLI is executed; no consumers or provider tools are invoked.
+    launcher = Path(__file__).resolve().parents[1] / "eval" / "check_campaign_readiness.py"
+    snapshot = tmp_path / "snapshot.json"
+    snapshot.write_text('{"schema_version":1,"campaign":"u10"}', encoding="utf-8")
+    completed = subprocess.run(
+        [sys.executable, "-I", str(launcher), "--snapshot", str(snapshot)],
+        cwd=tmp_path, check=False, capture_output=True, text=True,
+    )
+    assert completed.returncode == 0
+    assert completed.stderr == ""
+    assert json.loads(completed.stdout)["counts"]["required_checks"] == 11
