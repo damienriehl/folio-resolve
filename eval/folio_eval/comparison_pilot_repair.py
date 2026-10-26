@@ -88,7 +88,6 @@ def main(argv: Sequence[str] | None = None) -> int:
                 repair_root=repair_root,
             )
         except Exception:
-            # Replay diagnostics must never disclose source paths, IDs, or digests.
             raise PilotCheckpointError("replay verification refused or unequal") from None
     return pilot_main(
         pilot_argv,

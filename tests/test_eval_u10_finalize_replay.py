@@ -6,6 +6,7 @@ import json
 import os
 import sys
 import tempfile
+import venv
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -190,6 +191,11 @@ def generated_checkpoint(tmp_path, monkeypatch):
         }
 
     monkeypatch.setattr(pilot, "_fingerprint_for_args", fingerprint)
+    runtime_roots = []
+    monkeypatch.setattr(
+        pilot, "_replay_runtime_roots",
+        lambda _args: (pilot._mapper_cpu_cache_root().parent, *runtime_roots),
+    )
 
     def forbidden(*args, **kwargs):
         pytest.fail("finalization must not prepare or execute providers/shards")
@@ -254,6 +260,7 @@ def generated_checkpoint(tmp_path, monkeypatch):
         leak=leak,
         salt=salt,
         config=config,
+        runtime_roots=runtime_roots,
     )
 
 
@@ -290,6 +297,70 @@ def test_replay_regenerates(generated_checkpoint):
         == 0
     )
     assert (destination / "report.json").read_bytes() == fixture.args.out.read_bytes()
+
+
+@pytest.mark.parametrize("kind", ["model-cache", "derived-cache", "ontology-cache", "consumer-runtime"])
+def test_external_runtime_destination_refuses_before_writes(generated_checkpoint, monkeypatch, kind):
+    fixture = generated_checkpoint
+    _invoke(fixture)
+    home = fixture.root / "generated-home"
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    root = {
+        "model-cache": home / "custom-model-cache",
+        "derived-cache": home / ".folio/cache/embeddings",
+        "ontology-cache": home / ".folio/cache/github",
+        "consumer-runtime": home / "external-consumer-runtime",
+    }[kind]
+    root.mkdir(parents=True)
+    preserved = root / "preserved.bin"
+    preserved.write_bytes(b"generated runtime evidence")
+    if kind in {"model-cache", "consumer-runtime"}:
+        fixture.runtime_roots.append(root)
+    before = _snapshot(fixture)
+    destination = root / "replay"
+    with pytest.raises(pilot.PilotCheckpointError, match="replay verification refused"):
+        _invoke(fixture, destination)
+    assert not destination.exists()
+    assert list(root.iterdir()) == [preserved]
+    assert preserved.read_bytes() == b"generated runtime evidence"
+    assert _snapshot(fixture) == before
+
+
+def test_runtime_root_discovery_uses_each_generated_consumer_interpreter(tmp_path, monkeypatch):
+    cache_roots = []
+    environments = []
+    for name in ("candidate-runtime", "mapper-runtime", "enrich-runtime"):
+        root = tmp_path / name
+        venv.EnvBuilder(with_pip=False).create(root)
+        version = f"python{sys.version_info.major}.{sys.version_info.minor}"
+        package = root / "lib" / version / "site-packages" / "huggingface_hub"
+        package.mkdir()
+        (package / "__init__.py").write_text("")
+        cache = tmp_path / f"{name}-model-cache"
+        cache.mkdir()
+        (package / "constants.py").write_text(f"HF_HUB_CACHE = {str(cache)!r}\n")
+        cache_roots.append(cache)
+        environments.append(root)
+    mapper_alias = tmp_path / "mapper-alias"
+    mapper_alias.symlink_to(environments[1], target_is_directory=True)
+    monkeypatch.setattr(sys, "executable", str(environments[0] / "bin/python"))
+    monkeypatch.setattr(pilot, "mapper_spec", lambda _: SimpleNamespace(venv_python=mapper_alias / "bin/python"))
+    monkeypatch.setattr(pilot, "enrich_spec", lambda _: SimpleNamespace(venv_python=environments[2] / "bin/python"))
+    home = tmp_path / "generated-home"
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    args = SimpleNamespace(mapper_root=tmp_path / "mapper", enrich_root=tmp_path / "enrich")
+    roots = pilot._replay_runtime_roots(args)
+    assert all(root in roots for root in (*environments, *cache_roots))
+    assert home / ".folio/cache" in roots
+    assert all(not list(root.rglob("__pycache__")) for root in environments)
+    assert all(not list(root.iterdir()) for root in cache_roots)
+
+
+@pytest.mark.parametrize("output", ["not-json", "[]", '["relative"]'])
+def test_runtime_root_discovery_rejects_malformed_probe(monkeypatch, tmp_path, output):
+    monkeypatch.setattr(pilot.subprocess, "run", lambda *a, **k: SimpleNamespace(returncode=0, stdout=output))
+    with pytest.raises(pilot.PilotCheckpointError, match="replay runtime"):
+        pilot._replay_runtime_roots(SimpleNamespace(mapper_root=tmp_path, enrich_root=tmp_path))
 
 
 def _invoke(fixture, destination=None):

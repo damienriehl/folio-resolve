@@ -2094,7 +2094,6 @@ def _authenticate_replay(
     manifest: Mapping[str, object],
     repair_identity: Mapping[str, object],
 ) -> dict[Path, bytes]:
-    """Authenticate every input consumed by finalization and its complete output inventory."""
     fingerprint = manifest["fingerprint"]
     if not isinstance(fingerprint, Mapping):
         raise PilotCheckpointError("replay fingerprint is malformed")
@@ -2154,10 +2153,55 @@ def _authenticate_replay(
     return {path: path.read_bytes() for path in paths}
 
 
+def _replay_runtime_roots(args: argparse.Namespace) -> tuple[Path, ...]:
+    probe = """
+import json
+import sys
+from pathlib import Path
+
+roots = [sys.prefix, sys.base_prefix, *filter(None, sys.path)]
+try:
+    from huggingface_hub.constants import HF_HUB_CACHE
+except ModuleNotFoundError as error:
+    if error.name != "huggingface_hub":
+        raise
+else:
+    roots.append(str(HF_HUB_CACHE))
+print(json.dumps([str(Path(root).resolve()) for root in roots]))
+"""
+    roots = [_mapper_cpu_cache_root().parent]
+    interpreters = (
+        Path(sys.executable),
+        mapper_spec(args.mapper_root).venv_python,
+        enrich_spec(args.enrich_root).venv_python,
+    )
+    for interpreter in interpreters:
+        try:
+            completed = subprocess.run(
+                [str(interpreter), "-B", "-P", "-c", probe],
+                capture_output=True,
+                text=True,
+                env=_offline_runtime_environment(),
+                timeout=30,
+                check=False,
+            )
+            if completed.returncode:
+                raise PilotCheckpointError("replay runtime discovery failed")
+            observed = json.loads(completed.stdout)
+        except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError) as exc:
+            raise PilotCheckpointError("replay runtime discovery failed") from exc
+        if not isinstance(observed, list) or not observed or any(
+            not isinstance(value, str) or not Path(value).is_absolute()
+            for value in observed
+        ):
+            raise PilotCheckpointError("replay runtime roots are malformed")
+        roots.extend(Path(value) for value in observed)
+    return tuple(roots)
+
+
 def _reserve_replay_directory(
     destination: Path, args: argparse.Namespace, corpus: LoadedCorpus, repair_root: Path,
 ) -> Path:
-    """Reject aliases and overlap, then reserve the destination with one exclusive mkdir."""
     lexical = destination.absolute()
     if any(path.is_symlink() for path in (lexical, *lexical.parents)):
         raise PilotCheckpointError("replay destination must not contain symlinks")
@@ -2167,12 +2211,13 @@ def _reserve_replay_directory(
         Path(sys.prefix), Path(sys.base_prefix), args.checkpoint_dir, args.out,
         args.corpus_manifest, corpus.manifest.corpus_path, corpus.manifest.nomatch_path,
         args.config, args.leak_manifest, args.salt_file, args.public_metadata,
+        *_replay_runtime_roots(args),
     ]
     for root in protected:
         root = root.resolve()
         if destination == root or root in destination.parents or destination in root.parents:
             raise PilotCheckpointError("replay destination overlaps bound evidence or runtime")
-    destination.mkdir()  # No exist_ok: concurrent reservation loses safely.
+    destination.mkdir()
     fsync_directory(destination.parent)
     return destination
 
@@ -2198,7 +2243,6 @@ def _verify_replay(
     replay_report = destination / "report.json"
     _finalize(args, corpus, item_ids, manifest, repair_identity=repair_identity,
               artifact_root=destination, report_path=replay_report, publish_completion=False)
-    # This is a reconstructed artifact, not a success marker. It remains diagnostic on failure.
     reconstructed_receipt = destination / "reconstructed-receipt.json"
     _atomic_create(reconstructed_receipt, _final_completion_receipt(
         replay_report, fingerprint, repair_identity=repair_identity,
@@ -2214,13 +2258,11 @@ def _verify_replay(
         raise PilotCheckpointError("replay repair source drifted")
     if _authenticate_replay(args, item_ids, manifest, repair_identity) != original:
         raise PilotCheckpointError("replay source or baseline drifted")
-    # No completion record exists before all comparisons and preservation checks succeed.
     completion = _final_completion_path(destination)
     try:
         reconstructed_receipt.rename(completion)
         fsync_directory(destination)
     except BaseException:
-        # Even an interrupted durability check must not leave a success record.
         if completion.exists():
             completion.rename(reconstructed_receipt)
         raise
