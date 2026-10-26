@@ -7,6 +7,7 @@ import fcntl
 import io
 import json
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -349,3 +350,26 @@ def test_launcher_runs_with_isolated_stdlib_and_disables_bytecode(tmp_path):
     assert completed.returncode == 0
     assert completed.stderr == ""
     assert json.loads(completed.stdout)["counts"]["required_checks"] == 11
+
+
+def test_readme_inventories_and_examples_match_the_public_contract(capsys):
+    readme = (Path(__file__).resolve().parents[1] / "eval" / "README.md").read_text(encoding="utf-8")
+    for campaign in ("u10", "retrieval"):
+        documented = []
+        for line in readme.splitlines():
+            if line.startswith(f"| `{campaign}` |"):
+                documented.extend(re.findall(r"`([^`]+)`", line.split("|")[3]))
+        assert documented == [row["check"] for row in favorable(campaign)["checks"]]
+    partial = readme.split("<!-- readiness-partial-example -->", 1)[1].split("```json\n", 1)[1].split("```", 1)[0]
+    summary = parse_snapshot(partial)
+    assert summary["counts"]["required_checks"] == 11
+    assert summary["counts"]["unresolved_checks"] == 11
+    assert summary["attestation_coverage"] == "partial"
+    code = readme.split("<!-- readiness-favorable-example -->", 1)[1].split("```python\n", 1)[1].split("```", 1)[0]
+    for campaign in ("u10", "retrieval"):
+        exec(code.replace('campaign = "u10"', f'campaign = "{campaign}"'), {})
+        generated = json.loads(capsys.readouterr().out)
+        assert generated == favorable(campaign)
+        result = summarize_snapshot(generated)
+        assert result["attestation_coverage"] == "complete"
+        assert result["underlying_verification"] == "not_performed"
