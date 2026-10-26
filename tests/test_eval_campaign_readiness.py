@@ -373,3 +373,62 @@ def test_readme_inventories_and_examples_match_the_public_contract(capsys):
         result = summarize_snapshot(generated)
         assert result["attestation_coverage"] == "complete"
         assert result["underlying_verification"] == "not_performed"
+
+
+@pytest.mark.parametrize("stream", ["stdout", "stderr"])
+def test_closed_output_stream_returns_one(tmp_path, monkeypatch, capsys, stream):
+    snapshot = tmp_path / "snapshot.json"
+    snapshot.write_text('{"schema_version":1,"campaign":"u10"}', encoding="utf-8")
+    closed = io.StringIO()
+    closed.close()
+    with monkeypatch.context() as patch:
+        patch.setattr(sys, stream, closed)
+        args = ["--snapshot", str(snapshot)] if stream == "stdout" else ["--invalid"]
+        assert readiness.main(args) == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == ("output_failed\n" if stream == "stdout" else "")
+
+
+@pytest.mark.parametrize("stream", ["stdout", "stderr"])
+def test_launcher_broken_pipe_preserves_exit_one(tmp_path, stream):
+    launcher = Path(__file__).resolve().parents[1] / "eval" / "check_campaign_readiness.py"
+    snapshot = tmp_path / "snapshot.json"
+    snapshot.write_text('{"schema_version":1,"campaign":"u10"}', encoding="utf-8")
+    args = ["--snapshot", str(snapshot)] if stream == "stdout" else ["--invalid"]
+    reader, writer = os.pipe()
+    os.close(reader)
+    try:
+        result = subprocess.run(
+            [sys.executable, "-I", str(launcher), *args],
+            stdout=writer if stream == "stdout" else subprocess.PIPE,
+            stderr=writer if stream == "stderr" else subprocess.PIPE,
+            check=False,
+        )
+    finally:
+        os.close(writer)
+    assert result.returncode == 1
+    if stream == "stdout":
+        assert result.stderr == b"output_failed\n"
+    else:
+        assert result.stdout == b""
+
+
+def test_launcher_leaves_no_bytecode_or_other_artifacts(tmp_path):
+    source = Path(__file__).resolve().parents[1] / "eval"
+    package = tmp_path / "folio_eval"
+    package.mkdir()
+    for relative in (
+        "check_campaign_readiness.py", "folio_eval/__init__.py", "folio_eval/campaign_readiness.py",
+    ):
+        (tmp_path / relative).write_bytes((source / relative).read_bytes())
+    snapshot = tmp_path / "snapshot.json"
+    snapshot.write_text('{"schema_version":1,"campaign":"u10"}', encoding="utf-8")
+    before = {p.relative_to(tmp_path): p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
+    result = subprocess.run(
+        [sys.executable, "-I", str(tmp_path / "check_campaign_readiness.py"), "--snapshot", str(snapshot)],
+        check=False, capture_output=True,
+    )
+    assert result.returncode == 0
+    after = {p.relative_to(tmp_path): p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
+    assert after == before
