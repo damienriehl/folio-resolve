@@ -258,3 +258,34 @@ def test_fixture_mode_rejects_modified_fixture_bytes(
     assert scorecard.main(["--fixture-demo", "--out-dir", str(out)]) == 2
     assert not out.exists()
     assert capsys.readouterr().err == "scorecard_error: invalid_evidence\n"
+
+
+@pytest.mark.parametrize("surface", ["verifier_identity", "Shared retrieval prerequisites"])
+def test_rendered_output_collisions_beyond_preflight(tmp_path: Path, surface: str) -> None:
+    from folio_eval.leakcheck import scan_json_value, scan_text
+
+    args = explicit_args(tmp_path)
+    safe = tmp_path / "safe"
+    assert run_cli([*args, "--out-dir", str(safe)], tmp_path).returncode == 0
+    original = (safe / "scorecards.json").read_bytes()
+    report = json.loads(original)
+    salt = b"generated-scorecard-test-salt"
+    manifest = build_manifest(
+        [surface], salt, gold_version="generated", gold_content_sha256="0" * 64
+    )
+    assert scan_text("\n".join(scorecard.LIMITS), manifest, salt) == 0
+    if surface == "verifier_identity":
+        assert scan_json_value(report, manifest, salt) > 0
+        assert scan_text(scorecard.render_markdown(report), manifest, salt) == 0
+    else:
+        assert scan_json_value(report, manifest, salt) == 0
+        assert scan_text(original.decode(), manifest, salt) == 0
+        assert scan_text(scorecard.render_markdown(report), manifest, salt) > 0
+    Path(args[5]).write_text(json.dumps(manifest.to_json()))
+    out = tmp_path / "collision"
+    result = run_cli([*args, "--out-dir", str(out)], tmp_path)
+    assert result.returncode == 2
+    assert result.stderr == "scorecard_error: leak_check_failed\n"
+    assert result.stdout == ""
+    assert not out.exists()
+    assert (safe / "scorecards.json").read_bytes() == original
