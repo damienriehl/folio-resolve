@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import argparse
 import json
-from typing import NotRequired, TypedDict
+import sys
+from collections.abc import Mapping, Sequence
+from pathlib import Path
+from typing import NoReturn, NotRequired, TypedDict
 
 
 class SnapshotError(ValueError):
@@ -61,6 +65,15 @@ VOCABULARY = {
 KIND_FIELDS = {"binding": ("binding",), "receipt": ("presence", "outcome"), "ownership": ()}
 COMMON_FIELDS = ("assignment", "role", "currentness")
 
+FOLLOW_UP = {
+    "attestation": "controller: supply missing attestations outside this command.",
+    "binding": "evaluation_operator: reconcile binding attestations outside this command.",
+    "receipt": "reviewer: reconcile receipt presence and outcome attestations outside this command.",
+    "ownership": "controller: reconcile responsible-role assignment outside this command.",
+    "role": "controller: supply the responsible role outside this command.",
+    "currentness": "controller: reconcile currentness against the intended snapshot outside this command.",
+}
+
 
 class CheckSummary(TypedDict):
     check: str
@@ -73,6 +86,7 @@ class CheckSummary(TypedDict):
     presence: NotRequired[str]
     outcome: NotRequired[str]
     unresolved_reasons: list[str]
+    follow_up: list[str]
 
 
 class Summary(TypedDict):
@@ -107,6 +121,8 @@ def _normalize(check: str, kind: str, raw: dict[str, object] | None) -> CheckSum
     if record.keys() - {"check", *fields}:
         raise SnapshotError()
     values = {field: _enum(record, field) for field in fields}
+    if kind == "ownership" and values["role"] not in {"controller", "unassigned"}:
+        raise SnapshotError()
     if kind == "receipt" and values["presence"] == "absent" and values["outcome"] in {"passed", "failed"}:
         raise SnapshotError()
     # Missing fields remain partial; reject contradictions only when both were supplied.
@@ -120,7 +136,7 @@ def _normalize(check: str, kind: str, raw: dict[str, object] | None) -> CheckSum
     row: CheckSummary = {
         "check": check, "kind": kind, "attestation": attestation,
         "assignment": values["assignment"], "role": values["role"],
-        "currentness": values["currentness"], "unresolved_reasons": reasons,
+        "currentness": values["currentness"], "unresolved_reasons": reasons, "follow_up": [],
     }
     if kind == "binding":
         row["binding"] = values["binding"]
@@ -138,6 +154,7 @@ def _normalize(check: str, kind: str, raw: dict[str, object] | None) -> CheckSum
         reasons.append("role_unassigned")
     if row["currentness"] != "current":
         reasons.append(f"currentness_{row['currentness']}")
+    row["follow_up"] = list(dict.fromkeys(FOLLOW_UP[reason.split("_", 1)[0]] for reason in reasons))
     return row
 
 
@@ -199,3 +216,97 @@ def parse_snapshot(text: str) -> Summary:
         return summarize_snapshot(data)
     except (ValueError, RecursionError):
         raise SnapshotError() from None
+
+
+def render_json(summary: Summary) -> str:
+    """Render a normalized summary with stable ordering and a final newline."""
+    return json.dumps(summary, indent=2, ensure_ascii=True) + "\n"
+
+
+def render_markdown(summary: Summary) -> str:
+    """Render the same fields and follow-ups without interpolating snapshot content."""
+    lines = ["# Campaign attestation summary", ""]
+    metadata: Mapping[str, object] = summary
+    for field in (
+        "schema_version", "campaign", "evidence_basis", "underlying_verification",
+        "execution_authorization", "adoption_authorization", "attestation_coverage",
+    ):
+        lines.append(f"{field}: {metadata[field]}")
+    lines.extend(["", "Coverage describes supplied attestations only; underlying checks were not performed.", ""])
+    lines.extend(f"{key}: {value}" for key, value in summary["counts"].items())
+    lines.extend([
+        "", "| Check | Kind | Attestation | Binding | Presence | Outcome | Assignment | Role | Currentness | Unresolved reasons |",
+        "|---|---|---|---|---|---|---|---|---|---|",
+    ])
+    for row in summary["checks"]:
+        cells = [str(row.get(key, "not_applicable")) for key in (
+            "check", "kind", "attestation", "binding", "presence", "outcome", "assignment", "role", "currentness",
+        )]
+        cells.append(", ".join(row["unresolved_reasons"]) or "none")
+        lines.append("| " + " | ".join(cells) + " |")
+    lines.extend(["", "## Follow-up", ""])
+    for row in summary["checks"]:
+        for action in row["follow_up"]:
+            lines.append(f"- {row['check']} — {action}")
+    if not any(row["follow_up"] for row in summary["checks"]):
+        lines.append("none")
+    return "\n".join(lines) + "\n"
+
+
+class _UsageError(ValueError):
+    pass
+
+
+class _Parser(argparse.ArgumentParser):
+    def error(self, message: str) -> NoReturn:
+        # argparse's default errors echo paths, values and arguments.
+        raise _UsageError()
+
+
+def _diagnostic(code: str, status: int) -> int:
+    try:
+        sys.stderr.write(code + "\n")
+        sys.stderr.flush()
+    except (OSError, UnicodeError):
+        return 1
+    return status
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    """Read one supplied snapshot; write only stdout and fixed stderr diagnostics."""
+    parser = _Parser(
+        prog="check_campaign_readiness.py", allow_abbrev=False, add_help=False,
+        description="Summarize operator attestations offline; no verification or authorization.",
+    )
+    parser.add_argument("--snapshot", metavar="SNAPSHOT")
+    parser.add_argument("--format", choices=("json", "markdown"), default="json")
+    parser.add_argument("--help", action="store_true", help="show this help")
+    try:
+        args = parser.parse_args(argv)
+        if not args.help and args.snapshot is None:
+            raise _UsageError()
+    except _UsageError:
+        return _diagnostic("invalid_arguments", 2)
+    if args.help:
+        output = parser.format_help()
+    else:
+        try:
+            text = Path(args.snapshot).read_text(encoding="utf-8")
+        except (OSError, UnicodeError, ValueError):
+            return _diagnostic("snapshot_unreadable", 2)
+        try:
+            summary = parse_snapshot(text)
+        except SnapshotError:
+            return _diagnostic("invalid_snapshot", 2)
+        output = render_json(summary) if args.format == "json" else render_markdown(summary)
+    try:
+        sys.stdout.write(output)
+        sys.stdout.flush()
+    except (OSError, UnicodeError):
+        # A buffered broken pipe must not fail again at interpreter shutdown.
+        try:
+            sys.stdout.close()
+        except (OSError, UnicodeError):
+            pass
+        return _diagnostic("output_failed", 1)
+    return 0
