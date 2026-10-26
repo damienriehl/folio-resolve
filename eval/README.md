@@ -94,7 +94,9 @@ models in `eval/folio_eval/adoption_scorecard.py` are the executable field contr
 fields, duplicate JSON properties, nonfinite values, invalid counts, duplicate/unequal cohorts,
 and mismatched identities reject the whole input. Counts are nonnegative integers, never
 booleans. A scoreable row must satisfy `tp + fn = gold_count > 0` and
-`tp + fp = predicted_count`. Required keys remain present even when their value is `null`.
+`tp + fp = predicted_count`. When recall and verifier sections are both present, each verifier
+true-positive total must not exceed the corresponding shortlist gold hits. Required keys remain
+present even when their value is `null`.
 
 | Section | Contract |
 | --- | --- |

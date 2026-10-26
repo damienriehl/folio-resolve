@@ -234,7 +234,7 @@ def test_verifier_precision_floor_is_inclusive(predicted: int, expected: str) ->
     data = fixture()
     for entry in data["cohort"]["scoreable"]:
         entry["gold_count"] = 100
-    data["recall"]["gold_count"] = 200
+    data["recall"].update(gold_count=200, baseline_hits=66, candidate_hits=132)
     for section in [data["verifier"], *data["arms"]]:
         for side in ("baseline", "candidate"):
             for row in section[side]["scoreable"]:
@@ -253,7 +253,7 @@ def test_micro_f1_not_mean_item_f1_and_zero_crossing_interval() -> None:
     data = fixture()
     for entry, gold in zip(data["cohort"]["scoreable"], (100, 1), strict=True):
         entry["gold_count"] = gold
-    data["recall"].update(gold_count=101, baseline_hits=50, candidate_hits=100)
+    data["recall"].update(gold_count=101, baseline_hits=51, candidate_hits=100)
     for section in [data["verifier"], *data["arms"]]:
         for side in ("baseline", "candidate"):
             for row, gold in zip(section[side]["scoreable"], (100, 1), strict=True):
@@ -349,3 +349,42 @@ def test_sorted_rows_are_deterministic_and_interval_metadata_is_explicit() -> No
         20260727,
         0.05,
     )
+
+
+def test_duplicate_property_in_otherwise_valid_bundle_rejects(tmp_path: Path) -> None:
+    raw = b'{"schema_version": 1,' + FIXTURE.read_bytes().lstrip()[1:]
+    path = tmp_path / "duplicate.json"
+    path.write_bytes(raw)
+    with pytest.raises(scorecard.EvidenceError, match=r"^invalid_evidence$"):
+        scorecard.load_bundle(path, hashlib.sha256(raw).hexdigest())
+
+
+@pytest.mark.parametrize("side", ["baseline", "candidate"])
+def test_verifier_true_positives_cannot_exceed_shortlist_hits(side: str) -> None:
+    data = fixture()
+    accepted = scorecard.validate_bundle(data)
+    assert accepted.recall is not None and accepted.verifier is not None
+    for run_side in ("baseline", "candidate"):
+        assert sum(row.tp for row in getattr(accepted.verifier, run_side).scoreable) == getattr(
+            accepted.recall, f"{run_side}_hits"
+        )
+    data["recall"][f"{side}_hits"] -= 1
+    with pytest.raises(scorecard.EvidenceError, match=r"^invalid_evidence$"):
+        scorecard.validate_bundle(data)
+
+
+@pytest.mark.parametrize("candidate_tp", [0, 1])
+def test_shared_verifier_failure_is_independent_of_consumer_gain(candidate_tp: int) -> None:
+    data = fixture()
+    for row in data["verifier"]["candidate"]["scoreable"]:
+        row.update(tp=candidate_tp, fp=0, fn=2 - candidate_tp, predicted_count=candidate_tp)
+    report = assess(data)
+    assert report["scorecards"][0]["gates"]["consumer_gain"]["status"] == "pass"
+    assert report["shared"]["verifier_f1_interval"]["high"] <= 0
+    for card in report["scorecards"]:
+        assert card["gates"]["verifier_gain"] == {
+            "status": "fail",
+            "reasons": ["verifier_interval_not_positive"],
+        }
+        assert card["status"] == "fail"
+        assert card["complete"] is True
