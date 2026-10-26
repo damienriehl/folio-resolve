@@ -11,7 +11,7 @@ import platform
 import re
 import subprocess
 import sys
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
@@ -39,7 +39,7 @@ from .intake import sha256_bytes
 from .leakcheck import load_manifest
 from .selftest import assert_ontology_pin
 from .synthesize import LoadedCorpus, load_corpus
-from .synthetic_checkpoint import _atomic_create, fsync_directory
+from .synthetic_checkpoint import _atomic_create, _canonical_json, fsync_directory
 
 PILOT_CHECKPOINT_KIND = "synthetic-comparison-pilot-checkpoint"
 PILOT_CHECKPOINT_VERSION = 1
@@ -1984,6 +1984,9 @@ def _finalize(
     manifest: Mapping[str, object],
     *,
     repair_identity: Mapping[str, object] | None = None,
+    artifact_root: Path | None = None,
+    report_path: Path | None = None,
+    publish_completion: bool = True,
 ) -> None:
     fingerprint = manifest.get("fingerprint")
     if not isinstance(fingerprint, Mapping):
@@ -1999,7 +2002,10 @@ def _finalize(
     runs = _merge_stack_runs(shard_payloads)
     leak_manifest = load_manifest(args.leak_manifest)
     salt = args.salt_file.read_bytes()
-    combined_items = args.checkpoint_dir / "final-items.jsonl"
+    physical_root = artifact_root if artifact_root is not None else args.checkpoint_dir
+    physical_report = report_path if report_path is not None else args.out
+    logical_items = args.checkpoint_dir / "final-items.jsonl"
+    combined_items = physical_root / "final-items.jsonl"
     emit_items_file(
         corpus,
         combined_items,
@@ -2008,7 +2014,7 @@ def _finalize(
         leak_manifest=leak_manifest,
         salt=salt,
     )
-    final_stages = args.checkpoint_dir / "final-stages"
+    final_stages = physical_root / "final-stages"
     for run in runs:
         _durably_create_directory(final_stages / run.stack / run.lane)
     snapshot_files = write_stage_snapshots(
@@ -2017,7 +2023,9 @@ def _finalize(
         leak_manifest=leak_manifest,
         salt=salt,
     )
-    comparison_invocation = _finalization_invocation(args, combined_items)
+    comparison_invocation = _finalization_invocation(args, logical_items)
+    items_fingerprint = _file_fingerprint(combined_items, root=FOLIO_RESOLVE_ROOT)
+    items_fingerprint["path"] = _command_path(logical_items)
     payload = build_comparison(
         corpus,
         runs,
@@ -2026,7 +2034,7 @@ def _finalize(
         include_nomatch=True,
         comparison_invocation=comparison_invocation,
         stage_snapshot_files=snapshot_files,
-        items_file=_file_fingerprint(combined_items, root=FOLIO_RESOLVE_ROOT),
+        items_file=items_fingerprint,
     )
     provenance = payload.get("provenance")
     if not isinstance(provenance, dict):
@@ -2049,22 +2057,173 @@ def _finalize(
     _require_current_fingerprint(
         args, corpus, fingerprint, boundary="before final report publication"
     )
-    _durably_create_directory(args.out.parent)
+    _durably_create_directory(physical_report.parent)
     write_comparison(
-        args.out,
+        physical_report,
         payload,
         leak_manifest,
         salt,
         public_metadata=public_metadata,
-        temporary_dir=args.out.parent,
-        temporary_prefix=f".{args.out.name}.",
+        temporary_dir=physical_report.parent,
+        temporary_prefix=f".{physical_report.name}.",
     )
-    _publish_final_completion(
-        args.checkpoint_dir,
-        args.out,
-        fingerprint,
-        repair_identity=repair_identity,
-    )
+    if publish_completion:
+        _publish_final_completion(
+            physical_root,
+            physical_report,
+            fingerprint,
+            repair_identity=repair_identity,
+        )
+
+
+def _replay_artifacts(args: argparse.Namespace) -> dict[str, Path]:
+    return {
+        "items": args.checkpoint_dir / "final-items.jsonl",
+        **{
+            f"stage:{stack}:{lane}": args.checkpoint_dir / "final-stages" / stack / lane / "stages.json"
+            for stack, lane in PILOT_STACK_LANES
+        },
+        "report": args.out,
+        "receipt": _final_completion_path(args.checkpoint_dir),
+    }
+
+
+def _authenticate_replay(
+    args: argparse.Namespace,
+    item_ids: Sequence[str],
+    manifest: Mapping[str, object],
+    repair_identity: Mapping[str, object],
+) -> dict[Path, bytes]:
+    """Authenticate every input consumed by finalization and its complete output inventory."""
+    fingerprint = manifest["fingerprint"]
+    if not isinstance(fingerprint, Mapping):
+        raise PilotCheckpointError("replay fingerprint is malformed")
+    manifest_path = args.checkpoint_dir / "manifest.json"
+    if json.loads(manifest_path.read_bytes()) != manifest:
+        raise PilotCheckpointError("replay checkpoint authentication failed")
+    paths = [manifest_path]
+    for item_id in item_ids:
+        _load_completed_shard(args.checkpoint_dir, item_id, fingerprint)
+        if _shard_completion_path(args.checkpoint_dir, item_id).read_bytes() != _canonical_json(
+            _shard_completion_receipt(_shard_paths(args.checkpoint_dir, item_id)[0], item_id, fingerprint)
+        ):
+            raise PilotCheckpointError("replay shard receipt bytes differ")
+        paths.extend((_shard_paths(args.checkpoint_dir, item_id)[0],
+                      _shard_completion_path(args.checkpoint_dir, item_id)))
+    identity = _validate_repair_identity(repair_identity)
+    if _repair_identity_from_report(args.out) != identity:
+        raise PilotCheckpointError("replay repair identity differs")
+    _load_final_completion(args.checkpoint_dir, args.out, fingerprint, repair_identity=identity)
+    if _final_completion_path(args.checkpoint_dir).read_bytes() != _canonical_json(
+        _final_completion_receipt(args.out, fingerprint, repair_identity=identity)
+    ):
+        raise PilotCheckpointError("replay final receipt bytes differ")
+    payload = json.loads(args.out.read_bytes())
+    expected_checkpoint = {
+        "completed_shards": len(item_ids),
+        "manifest_sha256": _sha256_file(manifest_path),
+        "shard_report_sha256": {
+            _item_key(item_id): _sha256_file(_shard_paths(args.checkpoint_dir, item_id)[0])
+            for item_id in item_ids
+        },
+    }
+    if payload["provenance"]["checkpoint"] != expected_checkpoint:
+        raise PilotCheckpointError("replay checkpoint provenance differs")
+    artifacts = _replay_artifacts(args)
+    if payload["provenance"]["items_file"] != _file_fingerprint(
+        artifacts["items"], root=FOLIO_RESOLVE_ROOT
+    ):
+        raise PilotCheckpointError("replay items authentication failed")
+    expected_stacks = {f"{stack}:{lane}" for stack, lane in PILOT_STACK_LANES}
+    if set(payload["stacks"]) != expected_stacks:
+        raise PilotCheckpointError("replay stage inventory differs")
+    stage_root = args.checkpoint_dir / "final-stages"
+    expected_stage_paths = {path for key, path in artifacts.items() if key.startswith("stage:")}
+    observed_stage_paths = {path for path in stage_root.rglob("*") if not path.is_dir()}
+    if observed_stage_paths != expected_stage_paths:
+        raise PilotCheckpointError("replay stage inventory differs")
+    for stack, lane in PILOT_STACK_LANES:
+        key = f"{stack}:{lane}"
+        if payload["stacks"][key]["stage_snapshot"]["file"] != _file_fingerprint(
+            artifacts[f"stage:{key}"], root=stage_root
+        ):
+            raise PilotCheckpointError("replay stage authentication failed")
+    paths.extend(artifacts.values())
+    if any(path.is_symlink() for path in paths):
+        raise PilotCheckpointError("replay evidence must not be symlinked")
+    return {path: path.read_bytes() for path in paths}
+
+
+def _reserve_replay_directory(
+    destination: Path, args: argparse.Namespace, corpus: LoadedCorpus, repair_root: Path,
+) -> Path:
+    """Reject aliases and overlap, then reserve the destination with one exclusive mkdir."""
+    lexical = destination.absolute()
+    if any(path.is_symlink() for path in (lexical, *lexical.parents)):
+        raise PilotCheckpointError("replay destination must not contain symlinks")
+    destination = lexical.resolve()
+    protected = [
+        FOLIO_RESOLVE_ROOT, repair_root, args.mapper_root, args.enrich_root,
+        Path(sys.prefix), Path(sys.base_prefix), args.checkpoint_dir, args.out,
+        args.corpus_manifest, corpus.manifest.corpus_path, corpus.manifest.nomatch_path,
+        args.config, args.leak_manifest, args.salt_file, args.public_metadata,
+    ]
+    for root in protected:
+        root = root.resolve()
+        if destination == root or root in destination.parents or destination in root.parents:
+            raise PilotCheckpointError("replay destination overlaps bound evidence or runtime")
+    destination.mkdir()  # No exist_ok: concurrent reservation loses safely.
+    fsync_directory(destination.parent)
+    return destination
+
+
+def _verify_replay(
+    args: argparse.Namespace,
+    corpus: LoadedCorpus,
+    item_ids: Sequence[str],
+    manifest: Mapping[str, object],
+    destination: Path,
+    repair_identity: Mapping[str, object],
+    repair_identity_check: Callable[[], Mapping[str, object]],
+    repair_root: Path,
+) -> None:
+    fingerprint = manifest["fingerprint"]
+    if not isinstance(fingerprint, Mapping):
+        raise PilotCheckpointError("replay fingerprint is malformed")
+    corpus = _require_current_fingerprint(args, corpus, fingerprint, boundary="before replay")
+    if repair_identity_check() != repair_identity:
+        raise PilotCheckpointError("replay repair source drifted")
+    original = _authenticate_replay(args, item_ids, manifest, repair_identity)
+    destination = _reserve_replay_directory(destination, args, corpus, repair_root)
+    replay_report = destination / "report.json"
+    _finalize(args, corpus, item_ids, manifest, repair_identity=repair_identity,
+              artifact_root=destination, report_path=replay_report, publish_completion=False)
+    # This is a reconstructed artifact, not a success marker. It remains diagnostic on failure.
+    reconstructed_receipt = destination / "reconstructed-receipt.json"
+    _atomic_create(reconstructed_receipt, _final_completion_receipt(
+        replay_report, fingerprint, repair_identity=repair_identity,
+    ))
+    generated = _replay_artifacts(argparse.Namespace(checkpoint_dir=destination, out=replay_report))
+    generated["receipt"] = reconstructed_receipt
+    baseline = _replay_artifacts(args)
+    for category, path in generated.items():
+        if path.read_bytes() != original[baseline[category]]:
+            raise PilotCheckpointError("replay artifact bytes differ")
+    _require_current_fingerprint(args, corpus, fingerprint, boundary="after replay")
+    if repair_identity_check() != repair_identity:
+        raise PilotCheckpointError("replay repair source drifted")
+    if _authenticate_replay(args, item_ids, manifest, repair_identity) != original:
+        raise PilotCheckpointError("replay source or baseline drifted")
+    # No completion record exists before all comparisons and preservation checks succeed.
+    completion = _final_completion_path(destination)
+    try:
+        reconstructed_receipt.rename(completion)
+        fsync_directory(destination)
+    except BaseException:
+        # Even an interrupted durability check must not leave a success record.
+        if completion.exists():
+            completion.rename(reconstructed_receipt)
+        raise
 
 
 def _load_bound_public_metadata(
@@ -2153,17 +2312,33 @@ def main(
     *,
     candidate_root: Path | None = None,
     repair_identity: Mapping[str, object] | None = None,
+    verify_replay_dir: Path | None = None,
+    repair_identity_check: Callable[[], Mapping[str, object]] | None = None,
+    repair_root: Path | None = None,
 ) -> int:
     with _candidate_root(candidate_root):
-        return _main(argv, repair_identity=repair_identity)
+        if verify_replay_dir is None:
+            return _main(argv, repair_identity=repair_identity)
+        return _main(
+            argv, repair_identity=repair_identity, verify_replay_dir=verify_replay_dir,
+            repair_identity_check=repair_identity_check, repair_root=repair_root,
+        )
 
 
 def _main(
     argv: Sequence[str] | None = None,
     *,
     repair_identity: Mapping[str, object] | None = None,
+    verify_replay_dir: Path | None = None,
+    repair_identity_check: Callable[[], Mapping[str, object]] | None = None,
+    repair_root: Path | None = None,
 ) -> int:
     args = _parser().parse_args(argv)
+    if verify_replay_dir is not None and (
+        not args.finalize_only or repair_identity is None
+        or repair_identity_check is None or repair_root is None
+    ):
+        raise PilotCheckpointError("replay requires isolated finalize-only repair")
     if repair_identity is not None and not args.finalize_only:
         raise PilotCheckpointError("finalization repair requires --finalize-only")
     if os.environ.get("PYTHONHASHSEED") != "0":
@@ -2182,6 +2357,11 @@ def _main(
         _prepare_incumbents_for_new_checkpoint(args)
     fingerprint = _fingerprint_for_args(args, corpus)
     manifest = _checkpoint_manifest(fingerprint=fingerprint, item_ids=item_ids)
+    if verify_replay_dir is not None:
+        _verify_replay(args, corpus, item_ids, manifest, verify_replay_dir,
+                       repair_identity, repair_identity_check, repair_root)
+        print("pilot replay: exact artifact bytes verified")
+        return 0
     _durably_create_directory(args.checkpoint_dir)
     _create_or_validate_manifest(checkpoint_manifest_path, manifest)
     final_completion = _final_completion_path(args.checkpoint_dir)
