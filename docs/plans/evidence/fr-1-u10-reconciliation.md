@@ -35,4 +35,19 @@ The permitted regression run used a process-level access guard installed before 
 
 Environment note: offline dependency synchronization failed because the supplied cache lacked the locked development wheels. A separate development environment was populated from the existing lockfile using the package index; subsequent verification used offline, no-sync commands. No candidate environment, dependency declaration or lockfile was changed; no provider call, model download or paid measurement ran.
 
-Review and final acceptance are recorded below when complete. Publication remains controller-owned; there is no configured remote and no push or PR from this clone.
+## Final verification and review
+
+Reviewed implementation: `6cb4251`. Simplification removed seven redundant comments/docstrings without changing executable behavior or tests.
+
+The independent review identified an incomplete runtime-root exclusion. Four generated destination cases reproduced the gap before the fix: replay incorrectly succeeded inside model, derived, ontology and consumer-runtime fixture roots. The fix discovers runtime prefixes, import paths and model-cache roots through each bound interpreter before creating replay output; it also protects the shared FOLIO cache. Stored fingerprint fields are unchanged.
+
+- Final generated suite: **84 passed**, including real generated interpreter discovery, a consumer-runtime symlink and malformed-probe refusal. The independent Codex recheck reran all 84 successfully.
+- Existing pilot suite after the compatibility correction: **89 passed, 2 deselected** under the access guard. The two protected-metadata cases remain unchanged in CI.
+- Repository-wide Ruff passed; the library typecheck passed all 26 source files. Diff checks passed.
+- No existing test was removed or weakened. There are no frontend changes or affected browser routes, so screenshot verification is not applicable.
+
+ce-code-review receipt: Codex review `.git/fr1-review/recheck.json` (prompt `.git/fr1-review/recheck-prompt.md`; amends `.git/fr1-review/review.json`), verdict `merge`
+
+The initial prompt and fix-first verdict remain at `.git/fr1-review/prompt.md` and `.git/fr1-review/review.json`. Raw review artifacts stay in local Git metadata, outside the tracked publication. The controller should retain them with the publication evidence. No actionable review finding remains unapplied.
+
+All fr-1 changes are committed locally. Publication remains controller-owned: there is no configured remote and no push or PR from this clone. Full CI, original-input replay, original-data scanning and unavailable-ref reconciliation remain the acceptance prerequisites described above; this receipt does not clear them.

@@ -33,6 +33,11 @@ Resolve the original values from the preserved run configuration, privately. Req
   and runtime root, the checkpoint, outputs and bound inputs. Neither it nor its ancestors may
   be symlinks. The destination must not already exist; each retry uses a new directory.
 
+Before reserving that directory, read-only probes discover each candidate and consumer
+interpreter's prefixes, import paths and model-cache root. Replay excludes those roots and
+the shared FOLIO cache. This discovery does not change the stored fingerprint format or
+load a model for scoring.
+
 The lane does not acquire these inputs, inspect their contents, prepare consumers, run
 providers, download models, or overwrite the preserved environment.
 
