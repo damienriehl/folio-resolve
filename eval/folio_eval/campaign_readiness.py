@@ -6,6 +6,7 @@ import argparse
 import json
 import sys
 from collections.abc import Mapping, Sequence
+from contextlib import suppress
 from pathlib import Path
 from typing import NoReturn, NotRequired, TypedDict
 
@@ -17,7 +18,6 @@ class SnapshotError(ValueError):
         super().__init__("invalid_snapshot")
 
 
-# Ordered schema-v1 inventory. Keep independent from producer imports and their I/O.
 INVENTORIES: dict[str, tuple[tuple[str, str], ...]] = {
     "u10": (
         ("candidate_source_runtime", "binding"),
@@ -53,7 +53,6 @@ INVENTORIES: dict[str, tuple[tuple[str, str], ...]] = {
     ),
 }
 
-# Each field has an explicit omission default; none is favorable.
 VOCABULARY = {
     "binding": ("not_checked", "matched", "mismatched", "conflict"),
     "presence": ("unknown", "present", "absent"),
@@ -125,7 +124,6 @@ def _normalize(check: str, kind: str, raw: dict[str, object] | None) -> CheckSum
         raise SnapshotError()
     if kind == "receipt" and values["presence"] == "absent" and values["outcome"] in {"passed", "failed"}:
         raise SnapshotError()
-    # Missing fields remain partial; reject contradictions only when both were supplied.
     if "assignment" in record and "role" in record:
         if values["assignment"] == "assigned" and values["role"] == "unassigned":
             raise SnapshotError()
@@ -267,7 +265,9 @@ def _diagnostic(code: str, status: int) -> int:
     try:
         sys.stderr.write(code + "\n")
         sys.stderr.flush()
-    except (OSError, UnicodeError):
+    except (OSError, ValueError):
+        with suppress(OSError, ValueError):
+            sys.stderr.close()
         return 1
     return status
 
@@ -292,7 +292,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     else:
         try:
             text = Path(args.snapshot).read_text(encoding="utf-8")
-        except (OSError, UnicodeError, ValueError):
+        except (OSError, ValueError):
             return _diagnostic("snapshot_unreadable", 2)
         try:
             summary = parse_snapshot(text)
@@ -302,11 +302,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         sys.stdout.write(output)
         sys.stdout.flush()
-    except (OSError, UnicodeError):
+    except (OSError, ValueError):
         # A buffered broken pipe must not fail again at interpreter shutdown.
-        try:
+        with suppress(OSError, ValueError):
             sys.stdout.close()
-        except (OSError, UnicodeError):
-            pass
         return _diagnostic("output_failed", 1)
     return 0
