@@ -13,9 +13,9 @@ execution: code
 
 - **Objective:** An evaluation operator can see which adoption prerequisites each consumer satisfies, fails, or still lacks, and reproduce that assessment offline on generated fixtures.
 - **Means:** A separate evidence reader and scorecard CLI that reuse the existing paired item-bootstrap statistics and evaluate strict disabled-flag observations.
-- **Scope:** Drawdown item `fr-3`, an expansion on `drawdown/fr-3`. This delivery contains the plan only; implementation belongs to the subsequent build stage.
+- **Scope:** Drawdown item `fr-3`, an expansion on `drawdown/fr-3`. The build-stage dispatch authorizes implementation of U1-U3 on this branch.
 - **Authority:** The supplied campaign dispatch and chief-repo `docs/plans/2026-10-26-0705-feat-codex-drawdown-campaign-plan.md`, specifically its Goal Capsule and campaign R11, R15, R16, R17, R19, R20; then this repository's `CLAUDE.md` and the source plans below. Campaign R-numbers and retrieval-plan R-numbers are separate namespaces.
-- **Source limitation:** The chief repository is absent from this sandbox, so its Goal Capsule and cited R-IDs could not be independently read. The supplied dispatch provides the campaign constraints used here. The controller must reconcile those excerpts against the chief source before the build; no credential search or new remote is required.
+- **Source limitation:** The chief repository is absent from this sandbox, so its Goal Capsule and cited R-IDs could not be independently read. The supplied dispatch provides the campaign constraints used here. The latest build dispatch authorizes offline implementation using its supplied constraints; the controller must reconcile those excerpts against the chief source before publication; no credential search or new remote is required.
 - **Stop conditions:** Do not run providers, spend, inspect protected evaluation inputs, change adoption decisions, or expand into another mandate item. Missing real evidence is a reportable condition, not a reason to fabricate measurements or wait for Damien.
 
 ---
@@ -78,7 +78,7 @@ Other drawdown items remain separate: U10 replay and branch reconciliation (`fr-
 
 ### Reverified Starting State
 
-Read-only inspection on 2026-10-26 found a clean `drawdown/fr-3` at `faf9bba5a1969daba0cb021f7de01b14e4bfe3e8`. Local `main` is the older ancestor `0a09f2c15b97458ab46429c1290e249578cbde73`; this plan preserves the supplied branch history. Remote freshness was not checked. No tests or evaluation commands were run during planning, so these observations are not a passing baseline receipt.
+Read-only inspection on 2026-10-26 found a clean `drawdown/fr-3` at `faf9bba5a1969daba0cb021f7de01b14e4bfe3e8`. Local `main` is the older ancestor `0a09f2c15b97458ab46429c1290e249578cbde73`; this plan preserves the supplied branch history. Build-stage read-only revalidation found the branch clean at `524922e`, containing this plan and no scorecard implementation. The five document-review lenses returned no findings; cross-model review is disabled by checkout configuration. Remote freshness was not checked. No tests or evaluation commands were run during planning, so these observations are not a passing baseline receipt.
 
 | Evidence | Consequence for fr-3 |
 | --- | --- |
@@ -145,7 +145,7 @@ flowchart TB
 
 - JSON plus Markdown, a finite four-arm report, and a built-in fixture demonstration are implementation defaults inferred from the repository's report conventions. They are not new product-policy decisions.
 - Existing per-item measurements and live parity captures are not prerequisites for building or testing fr-3. No exporter from real checkpoints is included; future recorded use needs a producer that supplies the evidence contract accurately.
-- The controller supplies the unavailable chief-plan excerpt before the build. No other planning question requires Damien's time.
+- The controller reconciles the unavailable chief-plan excerpt before publication under the latest build dispatch. No other planning question requires Damien's time.
 - Replay determinism applies to identical input bytes and the supported Python environment. Cross-version random-number or numerical equivalence is verified rather than assumed.
 
 ---
@@ -158,7 +158,7 @@ flowchart TB
 
 **Requirements:** R1, R2, R6-R8; KTD1, KTD2; AE2.
 
-**Dependencies:** Controller reconciliation of the campaign source limitation; no dependency on fr-1, fr-2, live measurements, or consumer checkouts.
+**Dependencies:** The supplied build dispatch authorizes offline implementation; controller reconciliation of the campaign source limitation remains a publication prerequisite. No dependency on fr-1, fr-2, live measurements, or consumer checkouts.
 
 **Files:** `eval/folio_eval/adoption_scorecard.py` (new); `eval/fixtures/adoption-scorecard-v1.json` (new, wholly generated); `tests/test_eval_adoption_scorecard.py` (new).
 
