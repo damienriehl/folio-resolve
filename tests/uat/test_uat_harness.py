@@ -4,6 +4,7 @@ import json
 import platform
 import sys
 import sysconfig
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -300,3 +301,89 @@ def test_build_report_labels_interpreter_metadata_fallback(
     markdown = report.read_text(encoding="utf-8")
     assert f"- Python: `{platform.python_version()}`" in markdown
     assert "- Metadata source: report-interpreter fallback (JUnit properties absent)." in markdown
+
+
+def test_build_report_core_only_exposes_coverage_without_inventing_extras(
+    tmp_path: Path,
+) -> None:
+    stories = tmp_path / "stories.md"
+    _write_story_catalog(stories)
+    core_junit = tmp_path / "core.xml"
+    core_junit.write_text(
+        """<?xml version="1.0" encoding="utf-8"?>
+<testsuite name="pytest" tests="4" failures="1" skipped="1">
+  <properties>
+    <property name="python_version" value="3.11.14" />
+    <property name="extras_folio" value="false" />
+    <property name="extras_spacy" value="false" />
+    <property name="extras_embedding" value="false" />
+    <property name="real_ontology_enabled" value="false" />
+    <property name="commit" value="tested123" />
+  </properties>
+  <testcase classname="tests.uat.test_sample" name="test_us_pi_01_passes" />
+  <testcase classname="tests.uat.test_sample" name="test_us_pi_01_optional">
+    <skipped message="optional package unavailable" />
+  </testcase>
+  <testcase classname="tests.uat.test_sample" name="test_us_si_01_fails">
+    <failure message="assertion failed" />
+  </testcase>
+  <testcase classname="tests.uat.test_sample" name="test_harness_error">
+    <error message="collection failed" />
+  </testcase>
+</testsuite>
+""",
+        encoding="utf-8",
+    )
+    report = tmp_path / "report.md"
+
+    assert main([
+        "--core-only", "--stories", str(stories), "--out", str(report),
+        "--core-junit", str(core_junit),
+    ]) == 0
+
+    markdown = report.read_text(encoding="utf-8")
+    assert "- Commit: `tested123`" in markdown
+    assert "- Python: `3.11.14`" in markdown
+    assert "Extras coverage: not run" in markdown
+    assert "| US-PI-01 | PI | pass | optional package unavailable |" in markdown
+    assert "| US-RM-01 | RM | untested |  |" in markdown
+    assert "`tests.uat.test_sample::test_us_pi_01_optional` — optional package unavailable" in markdown
+    assert "`tests.uat.test_sample::test_harness_error` (fail) — collection failed" in markdown
+    assert "testcases: pass 1 fail 2 fail (classified) 0 skip 1, untested stories: 1" in markdown
+    assert "--offline --frozen" in markdown
+    assert "FOLIO_RESOLVE_UAT_REAL_ONTOLOGY=1" not in markdown
+
+
+@pytest.mark.parametrize("bad_xml", [None, "not xml"])
+def test_build_report_core_only_invalid_input_does_not_overwrite_output(
+    tmp_path: Path,
+    bad_xml: str | None,
+) -> None:
+    stories = tmp_path / "stories.md"
+    _write_story_catalog(stories)
+    core_junit = tmp_path / "core.xml"
+    if bad_xml is not None:
+        core_junit.write_text(bad_xml, encoding="utf-8")
+    report = tmp_path / "report.md"
+    report.write_text("preserve me", encoding="utf-8")
+
+    with pytest.raises((FileNotFoundError, ET.ParseError)):
+        main([
+            "--core-only", "--stories", str(stories), "--out", str(report),
+            "--core-junit", str(core_junit),
+        ])
+
+    assert report.read_text(encoding="utf-8") == "preserve me"
+
+
+def test_build_report_rejects_core_only_with_extras_without_overwrite(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "report.md"
+    target.write_text("preserve me", encoding="utf-8")
+    with pytest.raises(SystemExit):
+        main([
+            "--core-only", "--junit", "extras.xml", "--stories", "stories.md",
+            "--out", str(target), "--core-junit", "core.xml",
+        ])
+    assert target.read_text(encoding="utf-8") == "preserve me"
