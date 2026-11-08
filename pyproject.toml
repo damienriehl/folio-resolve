@@ -40,11 +40,14 @@ embedding = [
 ]
 # spaCy EntityRuler adapter (optional; the pure-Python Aho-Corasick ruler is the default)
 spacy = ["spacy>=3.7,<4.0"]
+# pyarrow reads the pinned OpenGloss parquet files; needed only to build the span-tagging lexicon
+opengloss = ["pyarrow>=21,<27"]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
     "mypy>=1.10",
     "ruff>=0.6",
+    "pyarrow>=21,<27",
 ]
 
 [build-system]
