@@ -1,3 +1,4 @@
+import csv
 from pathlib import Path
 
 import pytest
@@ -70,6 +71,52 @@ def test_non_mapping_predicate_names_row_number(tmp_path):
         i for i, line in enumerate(contents.splitlines(), 1) if line.startswith("FOLIO:")
     )
     with pytest.raises(ValueError, match=rf"row {row_number}\b"):
+        load_crosswalk(path)
+
+
+def test_literal_quotes_preserve_labels_and_column_values(tmp_path, monkeypatch):
+    expected = load_crosswalk(FIXTURE)
+    lines = FIXTURE.read_text().splitlines()
+    table_start = next(i for i, line in enumerate(lines) if not line.startswith("#"))
+    columns = lines[table_start].split("\t")
+    rows = [dict(zip(columns, line.split("\t"), strict=True)) for line in lines[table_start + 1 :]]
+    rows[0]["subject_label"] = '"Would" Language'
+    rows[1]["object_label"] = 'Forward-looking MAE Standard - "Would" Language'
+    path = tmp_path / "literal-quotes.tsv"
+    path.write_text(
+        "\n".join(
+            lines[: table_start + 1] + ["\t".join(row[column] for column in columns) for row in rows]
+        )
+        + "\n"
+    )
+    parsed_rows = []
+
+    class RecordingDictReader(csv.DictReader):
+        def __next__(self):
+            row = super().__next__()
+            parsed_rows.append(row)
+            return row
+
+    monkeypatch.setattr(csv, "DictReader", RecordingDictReader)
+    assert load_crosswalk(path) == expected
+    assert parsed_rows == rows
+
+
+def test_non_ogs_object_names_row_number_and_namespace(tmp_path):
+    lines = FIXTURE.read_text().splitlines()
+    lines.insert(3, "#   OGL: https://example.org/opengloss/lemma/")
+    table_start = next(i for i, line in enumerate(lines) if not line.startswith("#"))
+    columns = lines[table_start].split("\t")
+    row_index = table_start + 2
+    cells = lines[row_index].split("\t")
+    cells[columns.index("object_id")] = "OGL:breach"
+    lines[row_index] = "\t".join(cells)
+    path = tmp_path / "non-ogs-object.tsv"
+    path.write_text("\n".join(lines) + "\n")
+    with pytest.raises(
+        ValueError,
+        match=rf"SSSOM row {row_index + 1}: object_id is outside the OGS namespace",
+    ):
         load_crosswalk(path)
 
 

@@ -92,7 +92,7 @@ def load_crosswalk(path: str | Path) -> Crosswalk:
         elif line.strip():
             table.append(line)
             line_numbers.append(line_number)
-    reader = csv.DictReader(table, delimiter="\t")
+    reader = csv.DictReader(table, delimiter="\t", quoting=csv.QUOTE_NONE)
     for column in _REQUIRED:
         if column not in (reader.fieldnames or ()):
             raise ValueError(f"Missing required SSSOM column: {column}")
