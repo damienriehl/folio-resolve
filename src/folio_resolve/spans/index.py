@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from bisect import bisect_right
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import Generic, Literal, TypeVar
@@ -54,7 +55,14 @@ class NGramIndex(Generic[Payload]):
         content_word: Callable[[str], bool] | None = None,
     ) -> list[IndexMatch[Payload]]:
         tokens = tokenize(text)
-        allowed = None if regions is None else tuple(regions)
+        region_starts: list[int] = []
+        region_max_ends: list[int] = []
+        if regions is not None:
+            for start, end in sorted(regions):
+                region_starts.append(start)
+                region_max_ends.append(
+                    max(region_max_ends[-1], end) if region_max_ends else end
+                )
         matches: list[IndexMatch[Payload]] = []
         for i, first in enumerate(tokens):
             # Source offsets are monotone. A shared source character with the
@@ -76,10 +84,12 @@ class NGramIndex(Generic[Payload]):
                         else content_word(last.key)
                     )
                 )
-                if allowed is not None and not any(
-                    start <= first.start and last.end <= end for start, end in allowed
-                ):
-                    continue
+                if regions is not None:
+                    # Among regions starting by this span, one original region
+                    # must reach its end; adjacent regions cannot be combined.
+                    region_index = bisect_right(region_starts, first.start) - 1
+                    if region_index < 0 or region_max_ends[region_index] < last.end:
+                        continue
                 if not has_content:
                     continue
                 if i + length < len(tokens) and tokens[i + length].start < last.end:

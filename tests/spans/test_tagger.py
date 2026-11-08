@@ -476,6 +476,20 @@ def test_long_document_with_disjoint_spans_finishes_within_budget():
     assert elapsed < 10, f"20,000 disjoint matches took {elapsed:.3f}s"
 
 
+def test_long_document_with_sentence_regions_finishes_within_budget():
+    tagger = SpanTagger(
+        InMemoryOntology([Concept(iri="tenant", label="tenant")]), folio_release="x"
+    )
+    sentence = "The tenant owes rent. "
+    text = sentence * 8000
+    regions = [(start, start + len(sentence)) for start in range(0, len(text), len(sentence))]
+    started = time.perf_counter()
+    spans = tagger.tag(text, regions=regions).spans
+    elapsed = time.perf_counter() - started
+    assert len(spans) == 8000
+    assert elapsed < 3, f"8,000 sentence regions took {elapsed:.3f}s"
+
+
 def test_curie_mapping_set_id_is_canonical_in_provenance_and_links(tmp_path, ontology, lexicon):
     path = tmp_path / "curie.tsv"
     contents = (FIXTURES / "folio-opengloss-mini.sssom.tsv").read_text()

@@ -57,6 +57,43 @@ def test_apostrophes_case_and_regions():
     assert idx.lookup(text, regions=[(17, len(text))]) == []
 
 
+@pytest.mark.parametrize(
+    "regions",
+    [
+        None,
+        [],
+        [(0, 19), (6, 30)],  # Overlapping, without a single region covering the union.
+        [(0, 36), (6, 11), (12, 19)],  # Nested ends are not monotone.
+        [(20, 36), (6, 19), (0, 11)],  # Unsorted.
+        [(6, 19), (0, 11), (6, 19), (0, 11)],  # Duplicated.
+        [(0, 11), (11, 30), (30, 36)],  # Adjacent regions cannot jointly contain a span.
+    ],
+)
+def test_region_filter_matches_brute_force_containment(regions):
+    text = "alpha bravo charlie delta echo foxtrot"
+    words = text.split()
+    idx = index(
+        *(
+            " ".join(words[start:end])
+            for start in range(len(words))
+            for end in range(start + 1, len(words) + 1)
+        )
+    )
+    unrestricted = idx.lookup(text)
+    expected = [
+        hit
+        for hit in unrestricted
+        if regions is None
+        or any(start <= hit.start and hit.end <= end for start, end in regions)
+    ]
+    # Also exercise one-shot iterables: preprocessing must consume them only once.
+    hits = idx.lookup(text, regions=None if regions is None else iter(regions))
+    assert hits == expected
+    if regions == [(0, 11), (11, 30), (30, 36)]:
+        assert any((hit.start, hit.end) == (0, 11) for hit in hits)
+        assert not any((hit.start, hit.end) == (6, 19) for hit in hits)
+
+
 def test_function_words_empty_and_nonmatches():
     idx = index("of", "the", "of the", "good faith")
     assert idx.lookup("of the") == []
