@@ -51,11 +51,11 @@ Same-layer hits that land on one span merge their anchors instead of replacing e
 
 ## Why This Works
 
-Character-level normalization breaks the one-to-one mapping between key positions and source positions. Invariant 1 makes the key distinguish every gap a human reader distinguishes. Invariant 2 makes the key a function of the normalized text alone, so NFKC-equivalent inputs cannot diverge. Invariant 3 restores the source-level unit: a reported span is always a set of whole source characters, so its reported surface normalizes to exactly the key it matched.
+Character-level normalization breaks the one-to-one mapping between key positions and source positions. Invariant 1 makes the key distinguish every gap a human reader distinguishes. Invariant 2 makes the key a function of the normalized text alone, so NFKC-equivalent inputs cannot diverge. Invariant 3 restores the source-level unit: a reported span is always a set of whole source characters, for both match methods. For an `exact` match, the reported surface normalizes to exactly the key it matched. A `plural` match is the one deliberate exception: the OpenGloss layer's noun-only, final-token plural fallback lets "tenants" anchor the headword "tenant", and it records `match_method: plural` so consumers can tell the two apart.
 
 ## Prevention
 
 - Treat these regressions in `tests/spans/` as one contract and run them all after any tokenizer or index change: `test_internal_punctuation_matches_its_own_surface`, `test_sentence_boundary_does_not_join_a_phrase`, `test_nfkc_fraction_label_does_not_match_space_separated_numbers`, `test_partial_source_expansions_are_not_matches`, `test_complete_expansions_ignore_peripheral_punctuation`, and `test_competing_fraction_labels_anchor_only_the_complete_expansion`.
 - When fixing one direction of a matching error (false match), add a test for the opposite direction (false rejection) in the same change. Rounds 2 to 4 here alternated between the two, as the review-gate learning predicts.
 - Bump `Provenance.normalization` (`models.py:81`) whenever key construction changes, because stored annotations from an older key scheme are not comparable.
-- Rerun `benchmarks/span_tagging_real_data.py`; its headword self-match count is the real-data check that every headword reaches its own surface (0 unexpected failures at v0.5.0).
+- Rerun `benchmarks/span_tagging_real_data.py`; its headword self-match count is the real-data check that every eligible headword reaches its own surface. Headwords the stopword and function-word policy excludes on purpose are counted separately, and v0.5.0 recorded 0 unexpected failures.
