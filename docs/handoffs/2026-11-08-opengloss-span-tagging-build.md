@@ -28,5 +28,5 @@ Damien asked (2026-11-08) for folio-resolve's part of the cross-repo OpenGloss a
 ## Hazards
 
 - **Empty-branch worktrees disappear:** a worktree on a branch with no commits beyond `main` was removed twice within minutes. Commit early.
-- **Heavy host load:** the full test suite did not finish in ten minutes under heavy load; run targeted tests and the full suite in CI.
+- **Heavy host load:** under memory pressure the host's pacing guard freezes new jobs, which killed the first worker attempt and the baseline test runs; the worker was relaunched once pressure cleared. Run targeted tests locally and the full suite in CI.
 - **Parquet reads:** read projected light columns only; converting whole tables to Python objects is very slow.
