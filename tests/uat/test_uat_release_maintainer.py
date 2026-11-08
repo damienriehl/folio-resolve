@@ -40,7 +40,7 @@ def test_us_rm_02_version_and_extras_are_independent(
     distribution = importlib.metadata.metadata("folio-resolve")
     declared_extras = set(distribution.get_all("Provides-Extra") or ())
 
-    assert importlib.metadata.version("folio-resolve") == __version__ == "0.4.0"
+    assert importlib.metadata.version("folio-resolve") == __version__ == "0.5.0"
     assert {"folio", "spacy", "embedding"} <= declared_extras
     assert set(extras_present) == {"folio", "spacy", "embedding"}
     assert all(isinstance(available, bool) for available in extras_present.values())

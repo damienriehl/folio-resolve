@@ -1,0 +1,350 @@
+{
+  "budget": {
+    "construction_under_60_seconds": true,
+    "failed_lines": [],
+    "peak_rss_under_3_gib": true,
+    "verdict": "pass"
+  },
+  "construction_seconds": 4.287477937992662,
+  "corpus": {
+    "characters": 3015408,
+    "characters_per_second": 186155.96844293835,
+    "concept_count": 18327,
+    "selection": "all nonempty concept definitions, sorted by IRI",
+    "sha256": "689c5237ff7cce115704453c38cbe5e83129b16ec1efb389b530718d40b4377e",
+    "span_count": 326853,
+    "spans_per_text": 21.220086996039733,
+    "tagging_seconds": 16.198288055020384,
+    "text_count": 15403
+  },
+  "crosswalk": "not provided",
+  "determinism": {
+    "identical": true,
+    "serialized_sha256": "74e6825b3bb13687afc8c30fd2b5c666b96ca7e42775ecf4a6469e976153aab5"
+  },
+  "folio_release": "c0f8ca58dad4227e89856d97a0344f45bec37289832837bd11c473dfdc7b44be",
+  "folio_resolve_version": "0.5.0",
+  "good_faith": {
+    "passed": true,
+    "spans": [
+      {
+        "contained_by": [],
+        "contains": [
+          "s20-24",
+          "s25-30"
+        ],
+        "end": 30,
+        "folio": [],
+        "id": "s20-30",
+        "opengloss": [
+          {
+            "confidence": 1.0,
+            "domain": "people_society.character_traits",
+            "gloss": "Carried out with sincere intention, without deception, and with an honest belief in the legitimacy or correctness of one\u2019s actions.",
+            "headword": "good faith",
+            "id": "good_faith:adjective:0",
+            "match_method": "exact",
+            "outranked_by": null,
+            "pos": "adjective",
+            "rank": "primary",
+            "sense_index": 0,
+            "source": "opengloss-v1.3",
+            "tier": "tier4"
+          },
+          {
+            "confidence": 1.0,
+            "domain": "people_society.character_traits",
+            "gloss": "Sincere and honest intention, especially in fulfilling duties, making agreements, or engaging in relationships, without intent to deceive or take unfair advantage.",
+            "headword": "good faith",
+            "id": "good_faith:noun:0",
+            "match_method": "exact",
+            "outranked_by": null,
+            "pos": "noun",
+            "rank": "primary",
+            "sense_index": 0,
+            "source": "opengloss-v1.3",
+            "tier": "tier4"
+          }
+        ],
+        "start": 20,
+        "text": "good faith"
+      },
+      {
+        "contained_by": [
+          "s20-30"
+        ],
+        "contains": [],
+        "end": 24,
+        "folio": [],
+        "id": "s20-24",
+        "opengloss": [
+          {
+            "confidence": 1.0,
+            "domain": "business.value_quality",
+            "gloss": "Of high quality and standard; well made and effective.",
+            "headword": "good",
+            "id": "good:adjective:0",
+            "match_method": "exact",
+            "outranked_by": "s20-30",
+            "pos": "adjective",
+            "rank": "fallback",
+            "sense_index": 0,
+            "source": "opengloss-v1.3",
+            "tier": "core"
+          },
+          {
+            "confidence": 1.0,
+            "domain": "humanities.ethics",
+            "gloss": "Morally right and virtuous; fair and benevolent.",
+            "headword": "good",
+            "id": "good:adjective:1",
+            "match_method": "exact",
+            "outranked_by": "s20-30",
+            "pos": "adjective",
+            "rank": "fallback",
+            "sense_index": 1,
+            "source": "opengloss-v1.3",
+            "tier": "core"
+          },
+          {
+            "confidence": 1.0,
+            "domain": "everyday_life.general",
+            "gloss": "Satisfactory or adequate for a purpose; acceptable.",
+            "headword": "good",
+            "id": "good:adjective:2",
+            "match_method": "exact",
+            "outranked_by": "s20-30",
+            "pos": "adjective",
+            "rank": "fallback",
+            "sense_index": 2,
+            "source": "opengloss-v1.3",
+            "tier": "core"
+          },
+          {
+            "confidence": 1.0,
+            "domain": "language.grammar",
+            "gloss": "In informal speech, modifies a verb to mean satisfactorily or competently, though nonstandard in formal writing.",
+            "headword": "good",
+            "id": "good:adverb:0",
+            "match_method": "exact",
+            "outranked_by": "s20-30",
+            "pos": "adverb",
+            "rank": "fallback",
+            "sense_index": 0,
+            "source": "opengloss-v1.3",
+            "tier": "core"
+          },
+          {
+            "confidence": 1.0,
+            "domain": "language.communication",
+            "gloss": "An exclamation used to express approval, satisfaction, or to indicate that something is acceptable or correct in an academic setting.",
+            "headword": "good",
+            "id": "good:interjection:0",
+            "match_method": "exact",
+            "outranked_by": "s20-30",
+            "pos": "interjection",
+            "rank": "fallback",
+            "sense_index": 0,
+            "source": "opengloss-v1.3",
+            "tier": "core"
+          },
+          {
+            "confidence": 1.0,
+            "domain": "education.school_life",
+            "gloss": "An interjection used to acknowledge understanding or completion of a task, often after instruction or a check in classroom contexts.",
+            "headword": "good",
+            "id": "good:interjection:1",
+            "match_method": "exact",
+            "outranked_by": "s20-30",
+            "pos": "interjection",
+            "rank": "fallback",
+            "sense_index": 1,
+            "source": "opengloss-v1.3",
+            "tier": "core"
+          },
+          {
+            "confidence": 1.0,
+            "domain": "business.trade_commerce",
+            "gloss": "A tangible item produced or sold as merchandise or a marketable commodity.",
+            "headword": "good",
+            "id": "good:noun:0",
+            "match_method": "exact",
+            "outranked_by": "s20-30",
+            "pos": "noun",
+            "rank": "fallback",
+            "sense_index": 0,
+            "source": "opengloss-v1.3",
+            "tier": "core"
+          },
+          {
+            "confidence": 1.0,
+            "domain": "humanities.ethics",
+            "gloss": "A morally desirable quality or virtue.",
+            "headword": "good",
+            "id": "good:noun:1",
+            "match_method": "exact",
+            "outranked_by": "s20-30",
+            "pos": "noun",
+            "rank": "fallback",
+            "sense_index": 1,
+            "source": "opengloss-v1.3",
+            "tier": "core"
+          },
+          {
+            "confidence": 1.0,
+            "domain": "business.value_quality",
+            "gloss": "A benefit or advantageous result; something that provides a positive outcome or gain.",
+            "headword": "good",
+            "id": "good:noun:2",
+            "match_method": "exact",
+            "outranked_by": "s20-30",
+            "pos": "noun",
+            "rank": "fallback",
+            "sense_index": 2,
+            "source": "opengloss-v1.3",
+            "tier": "core"
+          },
+          {
+            "confidence": 1.0,
+            "domain": "law_government.public_policy",
+            "gloss": "The welfare of the public or community as a whole, regarded as a policy or ethical objective.",
+            "headword": "good",
+            "id": "good:noun:3",
+            "match_method": "exact",
+            "outranked_by": "s20-30",
+            "pos": "noun",
+            "rank": "fallback",
+            "sense_index": 3,
+            "source": "opengloss-v1.3",
+            "tier": "core"
+          }
+        ],
+        "start": 20,
+        "text": "good"
+      },
+      {
+        "contained_by": [
+          "s20-30"
+        ],
+        "contains": [],
+        "end": 30,
+        "folio": [
+          {
+            "confidence": 0.55,
+            "id": "https://folio.openlegalstandard.org/RDHXrFcweLJskc0Y6tsnqHE",
+            "label": "Trust (Emotion)",
+            "label_type": "alternative",
+            "match_method": "exact",
+            "matched_label": "Faith",
+            "outranked_by": null,
+            "rank": "primary",
+            "source": "FOLIO"
+          }
+        ],
+        "id": "s25-30",
+        "opengloss": [
+          {
+            "confidence": 1.0,
+            "domain": "people_society.emotion_attitude",
+            "gloss": "A mental attitude of confidence or trust in the reliability, truth, or ability of a person or thing, often without complete proof.",
+            "headword": "faith",
+            "id": "faith:noun:0",
+            "match_method": "exact",
+            "outranked_by": "s20-30",
+            "pos": "noun",
+            "rank": "fallback",
+            "sense_index": 0,
+            "source": "opengloss-v1.3",
+            "tier": "core"
+          },
+          {
+            "confidence": 1.0,
+            "domain": "humanities.religion",
+            "gloss": "Belief in and worship of a deity or deities; adherence to a religious tradition.",
+            "headword": "faith",
+            "id": "faith:noun:1",
+            "match_method": "exact",
+            "outranked_by": "s20-30",
+            "pos": "noun",
+            "rank": "fallback",
+            "sense_index": 1,
+            "source": "opengloss-v1.3",
+            "tier": "core"
+          },
+          {
+            "confidence": 1.0,
+            "domain": "people_society.family_relationships",
+            "gloss": "Loyalty or fidelity to a person, group, or cause.",
+            "headword": "faith",
+            "id": "faith:noun:2",
+            "match_method": "exact",
+            "outranked_by": "s20-30",
+            "pos": "noun",
+            "rank": "fallback",
+            "sense_index": 2,
+            "source": "opengloss-v1.3",
+            "tier": "core"
+          }
+        ],
+        "start": 25,
+        "text": "faith"
+      }
+    ],
+    "text": "The tenant acted in good faith."
+  },
+  "lexicon": {
+    "artifact_bytes": 16321447,
+    "build_seconds": 5.915895486017689,
+    "content_sha256": "bd5dffc696d2157dd8a305caabf8da6941a7b9a2f564e080bdfff7f8aeecef02",
+    "dataset_id": "mjbommar/opengloss-v2.4-senses",
+    "headwords": null,
+    "load_seconds": 3.4910596510162577,
+    "revision": "c64e480015b8c84f9d08469d4dfd64a7a8fb89bd",
+    "row_count": 300787,
+    "source_sha256": {
+      "data/train-00000.parquet": "32f6c69d143082cc23f8a98e7c875a20600cf9ec4de4ca6fd25cb4807c27f719",
+      "data/train-00001.parquet": "bad7ae8f582bec44e97710f94df1dc81869613f6649e376b9f5feefbac2501e1",
+      "data/train-00002.parquet": "ddfd0bd844634b605e52189ae8972c2972266772fd9fd1a306e1115f21ab5dec"
+    }
+  },
+  "peak_rss_bytes": 755965952,
+  "property": {
+    "present": true,
+    "senses": [
+      {
+        "domain": "science.materials_science",
+        "id": "property:noun:0"
+      },
+      {
+        "domain": "science.chemistry",
+        "id": "property:noun:1"
+      },
+      {
+        "domain": "science.chemistry",
+        "id": "property:noun:2"
+      }
+    ]
+  },
+  "provenance": {
+    "folio": {
+      "label_index_digest": "9c39d1f2587a5eabe7fca27c156aabb0f10a5aadbb37538f110b6b46d5c834b9",
+      "label_source": "all_concepts",
+      "release": "c0f8ca58dad4227e89856d97a0344f45bec37289832837bd11c473dfdc7b44be"
+    },
+    "folio_resolve_version": "0.5.0",
+    "normalization": "nfkc-casefold-apostrophe-hyphen-v1",
+    "opengloss": {
+      "dataset_id": "mjbommar/opengloss-v2.4-senses",
+      "lexicon_digest": "bd5dffc696d2157dd8a305caabf8da6941a7b9a2f564e080bdfff7f8aeecef02",
+      "revision": "c64e480015b8c84f9d08469d4dfd64a7a8fb89bd"
+    },
+    "tagger_version": "1.0.0"
+  },
+  "python_version": "3.13.11",
+  "recorded_at": "2026-11-08T19:21:38.016073+00:00",
+  "rss": {
+    "builder_peak_bytes": 722087936,
+    "parent_before_build_bytes": 33878016,
+    "runtime_peak_bytes": 473681920
+  }
+}

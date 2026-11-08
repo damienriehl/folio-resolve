@@ -255,6 +255,67 @@ prior = DomainPrior.from_manifest_subjects("treatise", [("R-lit", "Litigation")]
 pipe.match("Defenses", domain_prior=prior)
 ```
 
+## Span tagging (OpenGloss + FOLIO)
+
+The opt-in `folio_resolve.spans` API tags every matching phrase and word in two
+separate layers. Phrases rank `primary`; contained word anchors remain as
+`fallback` and name the span that outranks them. It returns all matching senses,
+without choosing a meaning. Existing matching APIs and outputs remain unchanged.
+Loading and tagging need only the core install; install the build extra only
+when compiling parquet:
+
+```bash
+pip install "folio-resolve[opengloss]"
+python -m folio_resolve.spans.lexicon build \
+  "$OPENGLOSS_PARQUET_DIR"/train-00000.parquet \
+  "$OPENGLOSS_PARQUET_DIR"/train-00001.parquet \
+  "$OPENGLOSS_PARQUET_DIR"/train-00002.parquet \
+  --artifact lexicon.jsonl.gz --manifest lexicon.manifest.json
+python -m folio_resolve.spans.lexicon verify lexicon.jsonl.gz lexicon.manifest.json
+```
+
+Set `OPENGLOSS_PARQUET_DIR` to the acquired parquet directory from
+[`mjbommar/opengloss-v2.4-senses`](https://huggingface.co/datasets/mjbommar/opengloss-v2.4-senses),
+revision `c64e480015b8c84f9d08469d4dfd64a7a8fb89bd`. The builder verifies all
+three source hashes before reading rows. Keep the artifact and manifest together;
+the manifest records source hashes, row count, and uncompressed content SHA-256
+for reproducible rebuild comparisons.
+
+```python
+from folio_resolve import Concept, InMemoryOntology
+from folio_resolve.spans import SpanTagger, load_lexicon
+
+lexicon = load_lexicon("lexicon.jsonl.gz", "lexicon.manifest.json")
+ontology = InMemoryOntology([
+    Concept(iri="https://example.org/concepts/tenant", label="Tenant"),
+])  # Supply concepts from your pinned FOLIO release in production.
+tagger = SpanTagger(ontology, lexicon, folio_release="your-FOLIO-release-or-OWL-sha256")
+result = tagger.tag("The tenant acted in good faith.")
+print(result.to_json())
+```
+
+Either layer can run alone. For typed links between the layers, pass
+`crosswalk=load_crosswalk("folio-opengloss.sssom.tsv")` using
+`load_crosswalk` from `folio_resolve.spans`. Links retain the predicate,
+confidence, justification, and mapping set identity; anchors are match evidence,
+not factual resolutions. Character offsets refer to the original input. The
+optional `regions=[(start, end)]` restricts tagging to selected text ranges.
+
+Result provenance names the OpenGloss dataset and revision, lexicon content
+digest, caller-supplied FOLIO release and actual label-index digest, label source
+(`all_concepts` or the provider's `all_labels` fallback), crosswalk set id/version
+when supplied, normalization scheme, and library/tagger versions. Each anchor
+records its match method (`exact` or OpenGloss noun `plural`) and confidence;
+OpenGloss anchors also retain `source` and `tier`. `to_json()` sorts keys and
+adds no clock time; `tagged_on` appears only when supplied by the caller.
+
+OpenGloss v2.4 senses by Michael J. Bommarito II are used under
+[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Compilation projects,
+sorts, and compresses the dataset; matching normalizes headwords. Some senses
+derive from Princeton WordNet 3.0 and retain `source: wordnet-3.0`; WordNet's
+separate license and attribution also apply. See [THIRD-PARTY.md](THIRD-PARTY.md)
+and the [real-data receipt](docs/benchmarks/span-tagging-real-data.md).
+
 ## Development
 
 ```bash
