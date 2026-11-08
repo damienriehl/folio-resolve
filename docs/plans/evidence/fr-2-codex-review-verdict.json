@@ -1,0 +1,12 @@
+{
+  "reviewer": "Codex (Astra)",
+  "verdict": "merge",
+  "reviewed_commit": "9f14cd60740e54e34f889703989a5253de5de624",
+  "findings": 0,
+  "verification_limitations": [
+    "Narrow fix follow-up independently verified broken-pipe and closed-stream exits on CPython 3.14.4.",
+    "91 selected tests passing on Python 3.11 and 3.12 are builder-reported; the artifact regression was inspected during follow-up.",
+    "Ruff and mypy were unavailable locally; broader core CI and protected-input publication scans remain controller prerequisites.",
+    "Cross-model review was disabled by checkout configuration; review used native Codex agents."
+  ]
+}
