@@ -16,8 +16,6 @@ class Token:
     start: int
     end: int
     gap_before: str = ""  # From the normalized stream: expansions can share source offsets.
-    expansion_start: bool = True
-    expansion_end: bool = True
 
 
 def tokenize(text: str) -> list[Token]:
@@ -66,8 +64,6 @@ def tokenize(text: str) -> list[Token]:
                 offsets[first][0],
                 offsets[cursor - 1][1],
                 normalize_gap(folded[previous_end:first]) if tokens else "",
-                expansion_start=first == 0 or offsets[first - 1] != offsets[first],
-                expansion_end=cursor == len(folded) or offsets[cursor - 1] != offsets[cursor],
             )
         )
         previous_end = cursor

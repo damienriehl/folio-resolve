@@ -213,7 +213,8 @@ OpenGloss anchor carrying that same headword. This includes punctuation-bearing
 headwords. The check took {self_match["check_seconds"]:.3f} s, separately from corpus throughput.
 Of {self_match["unmatched_count"]:,} unmatched headwords,
 {self_match["unmatched_by_reason"]["function_word_only"]:,} are intentionally excluded because every
-token is a ruler stopword or has only function-word parts of speech in the lexicon;
+token is a ruler stopword or a function word under the lexicon's POS evidence,
+with the static function-word fallback used for absent single-token entries;
 {self_match["unmatched_by_reason"]["no_word_tokens"]:,} have no word tokens.
 Unexpected failures: **{self_match["unexpected_unmatched_count"]:,}**.
 The JSON receipt records counts and up to twenty examples for each reason.

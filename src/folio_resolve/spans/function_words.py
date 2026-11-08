@@ -1,4 +1,4 @@
-"""Closed-class English fallback used only when no POS lexicon is supplied.
+"""Closed-class English fallback when no single-token POS evidence is available.
 
 This fixed set covers determiners, pronouns, prepositions, conjunctions,
 auxiliary/modal verbs (including contractions), and common particles. It is

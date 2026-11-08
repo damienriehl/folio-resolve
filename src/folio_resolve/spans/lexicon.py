@@ -19,6 +19,7 @@ from types import MappingProxyType
 
 from pydantic import BaseModel, ConfigDict
 
+from .function_words import FUNCTION_WORDS
 from .tokenize import normalize
 
 DATASET_ID = "mjbommar/opengloss-v2.4-senses"
@@ -74,7 +75,9 @@ class OpenGlossLexicon:
 
     def is_content_word(self, word: str) -> bool:
         senses = self.by_headword.get((word,), ())
-        return not senses or any(sense.pos.casefold() not in FUNCTION_POS for sense in senses)
+        if not senses:
+            return word not in FUNCTION_WORDS
+        return any(sense.pos.casefold() not in FUNCTION_POS for sense in senses)
 
 
 def _read_verified(artifact: str | Path, manifest: str | Path) -> tuple[bytes, LexiconManifest]:

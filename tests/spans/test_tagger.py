@@ -134,7 +134,7 @@ def test_deterministic_serialization_provenance_and_caller_date(ontology, lexico
         in tagger.tag("breach", tagged_on="caller supplies this verbatim").to_json()
     )
     provenance = result.provenance
-    assert provenance.normalization == "nfkc-casefold-apostrophe-gap-v4"
+    assert provenance.normalization == "nfkc-casefold-apostrophe-gap-v5"
     assert provenance.opengloss.revision == "c64e480015b8c84f9d08469d4dfd64a7a8fb89bd"
     assert provenance.opengloss.lexicon_digest == lexicon.manifest.content_sha256
     assert provenance.folio.release == "folio-commit"
@@ -285,6 +285,72 @@ def test_lexicon_content_senses_override_static_function_words(lexicon, with_fol
     assert [a.id for a in span.folio] == (["will"] if with_folio else [])
 
 
+@pytest.mark.parametrize("label", ["themselves", "whose", "whose themselves"])
+@pytest.mark.parametrize("with_lexicon", [False, True])
+def test_absent_function_words_do_not_gain_folio_anchors(lexicon, label, with_lexicon):
+    assert all(not lexicon.senses_for(word) for word in label.split())
+    tagger = SpanTagger(
+        InMemoryOntology([Concept(iri="x", label=label)]),
+        lexicon if with_lexicon else None,
+        folio_release="x",
+    )
+    assert tagger.tag(label).spans == []
+
+
+@pytest.mark.parametrize("with_lexicon", [False, True])
+def test_absent_content_word_keeps_folio_anchor(lexicon, with_lexicon):
+    assert not lexicon.senses_for("arbitration")
+    tagger = SpanTagger(
+        InMemoryOntology([Concept(iri="arbitration", label="arbitration")]),
+        lexicon if with_lexicon else None,
+        folio_release="x",
+    )
+    result = tagger.tag("arbitration")
+    assert len(result.spans) == 1
+    assert [anchor.id for anchor in result.spans[0].folio] == ["arbitration"]
+
+
+@pytest.mark.parametrize(
+    ("label", "surface", "span_text"),
+    [
+        ("a.m.", "㏂", "㏂"),
+        ("a.m.", "a.m.", "a.m"),
+        ("(株) Company", "㈱ Company", "㈱ Company"),
+        ("(株) Company", "(株) Company", "株) Company"),
+    ],
+)
+@pytest.mark.parametrize("with_lexicon", [False, True])
+def test_complete_expansions_ignore_peripheral_punctuation(
+    lexicon, label, surface, span_text, with_lexicon
+):
+    tagger = SpanTagger(
+        InMemoryOntology([Concept(iri="x", label=label)]),
+        lexicon if with_lexicon else None,
+        folio_release="x",
+    )
+    text = f"before {surface} after"
+    spans = [span for span in tagger.tag(text).spans if span.folio]
+    assert len(spans) == 1
+    span = spans[0]
+    assert span.text == text[span.start : span.end] == span_text
+    assert span.start == text.index(span_text)
+    assert span.end == span.start + len(span_text)
+    assert [anchor.id for anchor in span.folio] == ["x"]
+    assert span.folio[0].match_method == "exact"
+
+
+@pytest.mark.parametrize(("surface", "labels"), [("½", ("1", "2")), ("㏂", ("a", "m"))])
+@pytest.mark.parametrize("with_lexicon", [False, True])
+def test_partial_expansions_do_not_gain_folio_anchors(lexicon, surface, labels, with_lexicon):
+    # Peripheral punctuation lets these one-character keys pass the ruler's label-length filter.
+    tagger = SpanTagger(
+        InMemoryOntology([Concept(iri=label, label=label + "..") for label in labels]),
+        lexicon if with_lexicon else None,
+        folio_release="x",
+    )
+    assert not any(span.folio for span in tagger.tag(surface).spans)
+
+
 @pytest.mark.parametrize(
     ("label", "surface"),
     [
@@ -310,11 +376,13 @@ def test_nfkc_fraction_label_does_not_match_space_separated_numbers():
     assert tagger.tag("1 2 interest").spans == []
 
 
-def test_competing_fraction_labels_anchor_only_the_complete_expansion():
+@pytest.mark.parametrize("with_lexicon", [False, True])
+def test_competing_fraction_labels_anchor_only_the_complete_expansion(lexicon, with_lexicon):
     tagger = SpanTagger(
         InMemoryOntology(
             [Concept(iri="fraction", label="½ interest"), Concept(iri="suffix", label="2 interest")]
         ),
+        lexicon if with_lexicon else None,
         folio_release="x",
     )
     result = tagger.tag("½ interest")

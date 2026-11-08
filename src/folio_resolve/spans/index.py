@@ -57,7 +57,10 @@ class NGramIndex(Generic[Payload]):
         allowed = None if regions is None else tuple(regions)
         matches: list[IndexMatch[Payload]] = []
         for i, first in enumerate(tokens):
-            if not first.expansion_start:
+            # Source offsets are monotone. A shared source character with the
+            # preceding/following word means the match cuts through its expansion.
+            # Peripheral punctuation and gaps produce no word tokens to cover.
+            if i and tokens[i - 1].end > first.start:
                 continue
             key: tuple[str, ...] = (first.key,)
             has_content = False
@@ -79,7 +82,7 @@ class NGramIndex(Generic[Payload]):
                     continue
                 if not has_content:
                     continue
-                if not last.expansion_end:
+                if i + length < len(tokens) and tokens[i + length].start < last.end:
                     continue
                 payloads = tuple(self.entries.get(key, ()))
                 method: MatchMethod = "exact"

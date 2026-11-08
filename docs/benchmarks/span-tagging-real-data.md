@@ -2,7 +2,7 @@
 
 ## Protocol
 
-Recorded 2026-11-08T20:06:11.702703+00:00. Built the complete pinned parquet dataset with
+Recorded 2026-11-08T20:18:34.144978+00:00. Built the complete pinned parquet dataset with
 the package's build CLI in a separate process, into a temporary directory outside
 the repository; loaded it with `load_lexicon`. Read the local FOLIO.owl offline
 with stdlib ElementTree into `InMemoryOntology` (folio-python is not installed;
@@ -22,19 +22,19 @@ without emptying OS caches, and are not service-level guarantees.
 
 | Measurement | Result |
 |---|---:|
-| Lexicon build | 6.141 s |
+| Lexicon build | 10.915 s |
 | Compressed artifact | 16,321,447 bytes |
 | Lexicon rows | 300,787 |
-| Verified lexicon load | 4.593 s |
-| SpanTagger construction | 5.815 s |
-| Peak RSS | 734.7 MiB |
+| Verified lexicon load | 5.984 s |
+| SpanTagger construction | 6.961 s |
+| Peak RSS | 723.8 MiB |
 | Corpus characters | 3,015,408 |
-| Tagging time | 18.422 s |
-| Throughput | 163,682.7 characters/s |
-| Mean spans per text | 21.260 |
+| Tagging time | 23.232 s |
+| Throughput | 129,795.1 characters/s |
+| Mean spans per text | 21.250 |
 | Distinct OpenGloss headwords checked against own surface | 160,724 |
-| Headwords matching their own exact anchor | 160,198 |
-| Headwords without their own anchor | 526 |
+| Headwords matching their own exact anchor | 160,192 |
+| Headwords without their own anchor | 532 |
 | Unexpected self-match failures | 0 |
 
 Budget verdict: **pass**. Construction must be strictly below
@@ -45,10 +45,11 @@ Budget verdict: **pass**. Construction must be strictly below
 
 Tagged every distinct OpenGloss headword's own text and checked for an exact
 OpenGloss anchor carrying that same headword. This includes punctuation-bearing
-headwords. The check took 9.074 s, separately from corpus throughput.
-Of 526 unmatched headwords,
-526 are intentionally excluded because every
-token is a ruler stopword or has only function-word parts of speech in the lexicon;
+headwords. The check took 14.684 s, separately from corpus throughput.
+Of 532 unmatched headwords,
+532 are intentionally excluded because every
+token is a ruler stopword or a function word under the lexicon's POS evidence,
+with the static function-word fallback used for absent single-token entries;
 0 have no word tokens.
 Unexpected failures: **0**.
 The JSON receipt records counts and up to twenty examples for each reason.

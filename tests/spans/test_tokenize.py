@@ -44,18 +44,18 @@ def test_nfkc_expansions_preserve_normalized_gaps():
     assert normalize("㏂ hearing") == normalize("a.m. hearing") == ("a", ".", "m", ".", "hearing")
 
 
-def test_tokens_record_source_expansion_boundaries():
-    assert [(t.key, t.expansion_start, t.expansion_end) for t in tokenize("½ interest")] == [
-        ("1", True, False),
-        ("2", False, True),
-        ("interest", True, True),
+def test_word_tokens_share_source_ranges_through_expansions():
+    assert [(t.key, t.start, t.end) for t in tokenize("½ interest")] == [
+        ("1", 0, 1),
+        ("2", 0, 1),
+        ("interest", 2, 10),
     ]
-    assert [(t.key, t.expansion_start, t.expansion_end) for t in tokenize("㏂ hearing")] == [
-        ("a", True, False),
-        ("m", False, False),
-        ("hearing", True, True),
+    assert [(t.key, t.start, t.end) for t in tokenize("㏂ hearing")] == [
+        ("a", 0, 1),
+        ("m", 0, 1),
+        ("hearing", 2, 9),
     ]
-    assert all(t.expansion_start and t.expansion_end for t in tokenize("Straße cafe\u0301"))
+    assert [(t.start, t.end) for t in tokenize("Straße cafe\u0301")] == [(0, 6), (7, 12)]
 
 
 def test_nfkc_composes_across_characters_with_original_offsets():
