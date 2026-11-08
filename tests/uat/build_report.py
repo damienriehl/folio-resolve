@@ -289,6 +289,70 @@ def _rerun_commands(
     return [shlex.join(core_command), shlex.join(extras_command), shlex.join(report_command)]
 
 
+def _core_rerun_commands(stories: Path, output: Path, core_junit: Path) -> list[str]:
+    test_command = [
+        "uv", "run", "--offline", "--frozen", "--extra", "dev", "pytest",
+        "tests/uat", "-m", "uat", f"--junitxml={core_junit}",
+    ]
+    report_command = [
+        "uv", "run", "--offline", "--frozen", "--extra", "dev", "python",
+        "tests/uat/build_report.py", "--core-only", "--stories", str(stories),
+        "--out", str(output), "--core-junit", str(core_junit),
+    ]
+    return [shlex.join(test_command), shlex.join(report_command)]
+
+
+def build_core_markdown(*, stories_path: Path, output: Path, core_junit: Path) -> str:
+    stories = _story_catalog(stories_path)
+    results = _results(core_junit)
+    metadata = _metadata(core_junit)
+    counts = {
+        verdict: sum(result.verdict == verdict for result in results)
+        for verdict in ("pass", "fail", "fail (classified)", "skip")
+    }
+    story_results = [(story_id, persona, *_story_result(story_id, results)) for story_id, persona in stories]
+    untested = sum(verdict == "untested" for _, _, verdict, _ in story_results)
+    lines = [
+        "# User acceptance test report — core-only",
+        "",
+        f"- Commit: `{metadata.commit}`",
+        f"- Python: `{metadata.python_version}`",
+        "- Extras coverage: not run (core-only report; no extras results inferred).",
+        f"- Real ontology enabled: `{metadata.real_ontology_enabled}`",
+        f"- Metadata source: {metadata.source}.",
+        "",
+        "## Rerun commands",
+        "",
+    ]
+    lines.extend(f"- `{command}`" for command in _core_rerun_commands(stories_path, output, core_junit))
+    lines.extend(["", "## Story verdicts", "", "| Story ID | Persona | Core verdict | Reason |", "|---|---|---|---|"])
+    for story_id, persona, verdict, reason in story_results:
+        lines.append(f"| {story_id} | {persona} | {verdict} | {reason} |")
+    skipped = [result for result in results if result.verdict == "skip"]
+    unmapped_failures = [
+        result for result in results if result.story_id is None and result.verdict.startswith("fail")
+    ]
+    lines.extend(["", "## Skipped testcases", ""])
+    lines.extend(
+        (f"- `{result.nodeid}` — {result.reason or 'No reason recorded.'}" for result in skipped),
+    )
+    if not skipped:
+        lines.append("- None.")
+    lines.extend(["", "## Unmapped harness failures", ""])
+    lines.extend(
+        (f"- `{result.nodeid}` ({result.verdict}) — {result.reason}" for result in unmapped_failures),
+    )
+    if not unmapped_failures:
+        lines.append("- None.")
+    lines.extend([
+        "", "## Summary", "",
+        "testcases: " + " ".join(f"{verdict} {counts[verdict]}" for verdict in counts)
+        + f", untested stories: {untested}, harness failures: {len(unmapped_failures)}",
+        "",
+    ])
+    return "\n".join(lines)
+
+
 def build_markdown(
     *,
     junit: Path,
@@ -384,7 +448,8 @@ def build_markdown(
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Build the persona UAT markdown report")
-    parser.add_argument("--junit", required=True, type=Path)
+    parser.add_argument("--junit", type=Path)
+    parser.add_argument("--core-only", action="store_true")
     parser.add_argument("--stories", required=True, type=Path)
     parser.add_argument("--out", required=True, type=Path)
     parser.add_argument("--core-junit", required=True, type=Path)
@@ -393,12 +458,19 @@ def _parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
-    markdown = build_markdown(
-        junit=args.junit,
-        stories_path=args.stories,
-        output=args.out,
-        core_junit=args.core_junit,
-    )
+    if args.core_only and args.junit is not None:
+        _parser().error("--core-only cannot be combined with --junit")
+    if not args.core_only and args.junit is None:
+        _parser().error("--junit is required unless --core-only is used")
+    if args.core_only:
+        markdown = build_core_markdown(
+            stories_path=args.stories, output=args.out, core_junit=args.core_junit,
+        )
+    else:
+        markdown = build_markdown(
+            junit=args.junit, stories_path=args.stories, output=args.out,
+            core_junit=args.core_junit,
+        )
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(markdown, encoding="utf-8")
     print(markdown, end="")
