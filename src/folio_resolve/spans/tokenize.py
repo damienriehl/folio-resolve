@@ -15,6 +15,7 @@ class Token:
     key: str
     start: int
     end: int
+    gap_before: str = ""  # From the normalized stream: expansions can share source offsets.
 
 
 def tokenize(text: str) -> list[Token]:
@@ -40,6 +41,7 @@ def tokenize(text: str) -> list[Token]:
     folded = "".join(normalized)
     tokens: list[Token] = []
     cursor = 0
+    previous_end = 0
     while cursor < len(folded):
         if not _word_start(folded[cursor]):
             cursor += 1
@@ -56,7 +58,15 @@ def tokenize(text: str) -> list[Token]:
                 cursor += 1
             else:
                 break
-        tokens.append(Token(folded[first:cursor], offsets[first][0], offsets[cursor - 1][1]))
+        tokens.append(
+            Token(
+                folded[first:cursor],
+                offsets[first][0],
+                offsets[cursor - 1][1],
+                normalize_gap(folded[previous_end:first]) if tokens else "",
+            )
+        )
+        previous_end = cursor
     return tokens
 
 
@@ -70,7 +80,7 @@ def normalize(text: str) -> tuple[str, ...]:
     key: list[str] = []
     for i, token in enumerate(tokens):
         if i:
-            key.append(normalize_gap(text[tokens[i - 1].end : token.start]))
+            key.append(token.gap_before)
         key.append(token.key)
     return tuple(key)
 

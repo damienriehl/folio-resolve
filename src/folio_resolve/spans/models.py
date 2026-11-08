@@ -78,7 +78,7 @@ class CrosswalkProvenance(BaseModel):
 class Provenance(BaseModel):
     folio_resolve_version: str
     tagger_version: str
-    normalization: str = "nfkc-casefold-apostrophe-gap-v2"
+    normalization: str = "nfkc-casefold-apostrophe-gap-v3"
     opengloss: OpenGlossProvenance | None = None
     folio: FolioProvenance | None = None
     crosswalk: CrosswalkProvenance | None = None

@@ -1,4 +1,4 @@
-"""Closed-class English words excluded even when no POS lexicon is supplied.
+"""Closed-class English fallback used only when no POS lexicon is supplied.
 
 This fixed set covers determiners, pronouns, prepositions, conjunctions,
 auxiliary/modal verbs (including contractions), and common particles. It is

@@ -34,6 +34,16 @@ def test_empty_tokenization():
     assert normalize("...") == ()
 
 
+def test_nfkc_expansions_preserve_normalized_gaps():
+    assert (
+        normalize("½ interest")
+        == normalize("1\u20442 interest")
+        == ("1", "\u2044", "2", " ", "interest")
+    )
+    assert normalize("½ interest") != normalize("1 2 interest")
+    assert normalize("㏂ hearing") == normalize("a.m. hearing") == ("a", ".", "m", ".", "hearing")
+
+
 def test_nfkc_composes_across_characters_with_original_offsets():
     # Hangul Jamo and Bengali vowel signs compose even though their combining class is zero.
     text = "\u1100\u1161 \u0995\u09c7\u09be"

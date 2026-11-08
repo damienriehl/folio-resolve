@@ -65,6 +65,11 @@ def test_function_words_empty_and_nonmatches():
     assert idx.lookup("good. faith") == []
 
 
+def test_ruler_stopwords_remain_excluded_with_content_evidence():
+    idx = index("the", "the the")
+    assert idx.lookup("the the", content_word=lambda word: True) == []
+
+
 @pytest.mark.parametrize(
     "label", ["AT&T", "attorney/client privilege", "U.S. citizen", "Wills, Trusts and Estates"]
 )

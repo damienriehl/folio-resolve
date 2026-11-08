@@ -132,7 +132,7 @@ def test_deterministic_serialization_provenance_and_caller_date(ontology, lexico
         in tagger.tag("breach", tagged_on="caller supplies this verbatim").to_json()
     )
     provenance = result.provenance
-    assert provenance.normalization == "nfkc-casefold-apostrophe-gap-v2"
+    assert provenance.normalization == "nfkc-casefold-apostrophe-gap-v3"
     assert provenance.opengloss.revision == "c64e480015b8c84f9d08469d4dfd64a7a8fb89bd"
     assert provenance.opengloss.lexicon_digest == lexicon.manifest.content_sha256
     assert provenance.folio.release == "folio-commit"
@@ -269,6 +269,43 @@ print(SpanTagger(ontology, lex, crosswalk, folio_release='x').tag('breach of con
 def test_folio_only_function_word_labels_are_filtered(label):
     tagger = SpanTagger(InMemoryOntology([Concept(iri="x", label=label)]), folio_release="x")
     assert tagger.tag(label).spans == []
+
+
+@pytest.mark.parametrize("with_folio", [False, True])
+def test_lexicon_content_senses_override_static_function_words(lexicon, with_folio):
+    ontology = InMemoryOntology([Concept(iri="will", label="Will")]) if with_folio else None
+    tagger = SpanTagger(ontology, lexicon, folio_release="x")
+    result = tagger.tag("will")
+    assert len(result.spans) == 1
+    span = result.spans[0]
+    assert {a.id for a in span.opengloss if a.pos == "noun"} == {"will:noun:0", "will:noun:1"}
+    assert {a.id for a in span.opengloss} == {s.sense_id for s in lexicon.senses_for("will")}
+    assert [a.id for a in span.folio] == (["will"] if with_folio else [])
+
+
+@pytest.mark.parametrize(
+    ("label", "surface"),
+    [
+        ("½ interest", "1\u20442 interest"),
+        ("1\u20442 interest", "½ interest"),
+        ("㏂ hearing", "a.m. hearing"),
+        ("a.m. hearing", "㏂ hearing"),
+    ],
+)
+def test_nfkc_expanded_punctuation_matches_with_original_offsets(label, surface):
+    tagger = SpanTagger(InMemoryOntology([Concept(iri="x", label=label)]), folio_release="x")
+    text = f"before {surface} after"
+    result = tagger.tag(text)
+    assert len(result.spans) == 1
+    span = result.spans[0]
+    assert span.text == text[span.start : span.end] == surface
+    assert (span.start, span.end) == (7, 7 + len(surface))
+    assert span.folio[0].match_method == "exact"
+
+
+def test_nfkc_fraction_label_does_not_match_space_separated_numbers():
+    tagger = SpanTagger(InMemoryOntology([Concept(iri="x", label="½ interest")]), folio_release="x")
+    assert tagger.tag("1 2 interest").spans == []
 
 
 def test_folio_only_phrase_with_content_word_survives(ontology):

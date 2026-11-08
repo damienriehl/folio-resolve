@@ -2,7 +2,7 @@
 
 ## Protocol
 
-Recorded 2026-11-08T19:36:42.543344+00:00. Built the complete pinned parquet dataset with
+Recorded 2026-11-08T19:52:29.914887+00:00. Built the complete pinned parquet dataset with
 the package's build CLI in a separate process, into a temporary directory outside
 the repository; loaded it with `load_lexicon`. Read the local FOLIO.owl offline
 with stdlib ElementTree into `InMemoryOntology` (folio-python is not installed;
@@ -22,19 +22,19 @@ without emptying OS caches, and are not service-level guarantees.
 
 | Measurement | Result |
 |---|---:|
-| Lexicon build | 6.347 s |
+| Lexicon build | 9.807 s |
 | Compressed artifact | 16,321,447 bytes |
 | Lexicon rows | 300,787 |
-| Verified lexicon load | 3.772 s |
-| SpanTagger construction | 4.742 s |
-| Peak RSS | 737.5 MiB |
+| Verified lexicon load | 5.659 s |
+| SpanTagger construction | 5.672 s |
+| Peak RSS | 730.3 MiB |
 | Corpus characters | 3,015,408 |
-| Tagging time | 17.550 s |
-| Throughput | 171,818.1 characters/s |
-| Mean spans per text | 19.686 |
+| Tagging time | 24.237 s |
+| Throughput | 124,413.0 characters/s |
+| Mean spans per text | 21.260 |
 | Distinct OpenGloss headwords checked against own surface | 160,724 |
-| Headwords matching their own exact anchor | 159,934 |
-| Headwords without their own anchor | 790 |
+| Headwords matching their own exact anchor | 160,198 |
+| Headwords without their own anchor | 526 |
 | Unexpected self-match failures | 0 |
 
 Budget verdict: **pass**. Construction must be strictly below
@@ -45,13 +45,16 @@ Budget verdict: **pass**. Construction must be strictly below
 
 Tagged every distinct OpenGloss headword's own text and checked for an exact
 OpenGloss anchor carrying that same headword. This includes punctuation-bearing
-headwords. The check took 10.926 s, separately from corpus throughput.
-Of 790 unmatched headwords,
-790 are intentionally excluded because every
-token is a committed function word, a ruler stopword, or has only function-word
-parts of speech; 0 have no word tokens.
+headwords. The check took 11.721 s, separately from corpus throughput.
+Of 526 unmatched headwords,
+526 are intentionally excluded because every
+token is a ruler stopword or has only function-word parts of speech in the lexicon;
+0 have no word tokens.
 Unexpected failures: **0**.
 The JSON receipt records counts and up to twenty examples for each reason.
+The lexicon's content senses override the static function-word fallback:
+“will” retains both noun senses, including `will:noun:0` and `will:noun:1`:
+**True**.
 
 ## Phrase ranking and property observation
 
@@ -72,7 +75,19 @@ These are the dataset's senses, with no disambiguation. The spike reported a
 missing legal sense; domain labels alone cannot establish semantic coverage.
 This check asserts presence and records the gap rather than repairing the data.
 
-Crosswalk: not provided; no real crosswalk links were evaluated.
+Crosswalk: **18,684 rows**;
+**89,558 corpus links**.
+
+- FOLIO commit: `4591b7e91108c41b089a6a9469aac344357f953b`.
+- File SHA-256: `9f96a4d7aa8444b3a80c04a17f299729bd8da7241fa8d3bdf0bc7d2b69059fff`.
+- Mapping set: `https://folio.openlegalstandard.org/mappings/opengloss`, version `0.1.0`.
+
+| Predicate | Mapping rows | Corpus links |
+|---|---:|---:|
+| `http://www.w3.org/2004/02/skos/core#broadMatch` | 6,804 | 10,325 |
+| `http://www.w3.org/2004/02/skos/core#closeMatch` | 1,521 | 56,238 |
+| `http://www.w3.org/2004/02/skos/core#exactMatch` | 558 | 12,083 |
+| `http://www.w3.org/2004/02/skos/core#relatedMatch` | 9,801 | 10,912 |
 
 ## Provenance
 
@@ -97,6 +112,8 @@ FOLIO_RESOLVE_OPENGLOSS_LEXICON="$LEXICON_ARTIFACT" \
 ```
 
 Set `LEXICON_ARTIFACT` to the printed temporary artifact path; its manifest sits
-beside it. Optionally set `FOLIO_OPENGLOSS_SSSOM` to a readable SSSOM file before
-the benchmark to measure real crosswalk rows and links. Building requires the
+beside it. Set `FOLIO_OPENGLOSS_SSSOM` to the acquired SSSOM file and
+`FOLIO_OPENGLOSS_SSSOM_COMMIT` to its FOLIO commit before the benchmark to
+record the crosswalk's identity, predicate counts, and corpus links. The file
+path is never recorded in either receipt. Building requires the
 `opengloss` extra; loading and tagging use the core installation.

@@ -12,13 +12,13 @@ import sys
 import tempfile
 import time
 import xml.etree.ElementTree as ET
+from collections import Counter
 from datetime import UTC, datetime
 from pathlib import Path
 
 from folio_resolve import Concept, InMemoryOntology, __version__
 from folio_resolve.entity_ruler import _STOPWORDS
 from folio_resolve.spans import SpanTagger, load_crosswalk, load_lexicon
-from folio_resolve.spans.function_words import FUNCTION_WORDS
 from folio_resolve.spans.lexicon import PINNED_SHA256, OpenGlossLexicon
 from folio_resolve.spans.tokenize import tokenize
 
@@ -116,7 +116,7 @@ def check_headword_self_matches(tagger: SpanTagger, lexicon: OpenGlossLexicon) -
         if not words:
             reason = "no_word_tokens"
         elif all(
-            word in _STOPWORDS or word in FUNCTION_WORDS or not lexicon.is_content_word(word)
+            word in _STOPWORDS or not lexicon.is_content_word(word)
             for word in words
         ):
             reason = "function_word_only"
@@ -147,11 +147,22 @@ def write_receipt(receipt: dict) -> None:
         for sense in receipt["property"]["senses"]
     )
     crosswalk = receipt["crosswalk"]
-    crosswalk_text = (
-        "Crosswalk: not provided; no real crosswalk links were evaluated."
-        if crosswalk == "not provided"
-        else f"Crosswalk: {crosswalk['row_count']:,} rows; {crosswalk['corpus_links']:,} corpus links."
-    )
+    crosswalk_text = "Crosswalk: not provided; no real crosswalk links were evaluated."
+    if crosswalk != "not provided":
+        predicates = "\n".join(
+            f"| `{predicate}` | {count:,} | {crosswalk['corpus_links_by_predicate'][predicate]:,} |"
+            for predicate, count in crosswalk["rows_by_predicate"].items()
+        )
+        crosswalk_text = f"""Crosswalk: **{crosswalk['row_count']:,} rows**;
+**{crosswalk['corpus_links']:,} corpus links**.
+
+- FOLIO commit: `{crosswalk['source_commit'] or '(not supplied)'}`.
+- File SHA-256: `{crosswalk['sha256']}`.
+- Mapping set: `{crosswalk['mapping_set_id']}`, version `{crosswalk['mapping_set_version']}`.
+
+| Predicate | Mapping rows | Corpus links |
+|---|---:|---:|
+{predicates}"""
     text = f"""# OpenGloss + FOLIO span-tagging real-data check
 
 ## Protocol
@@ -202,10 +213,13 @@ OpenGloss anchor carrying that same headword. This includes punctuation-bearing
 headwords. The check took {self_match["check_seconds"]:.3f} s, separately from corpus throughput.
 Of {self_match["unmatched_count"]:,} unmatched headwords,
 {self_match["unmatched_by_reason"]["function_word_only"]:,} are intentionally excluded because every
-token is a committed function word, a ruler stopword, or has only function-word
-parts of speech; {self_match["unmatched_by_reason"]["no_word_tokens"]:,} have no word tokens.
+token is a ruler stopword or has only function-word parts of speech in the lexicon;
+{self_match["unmatched_by_reason"]["no_word_tokens"]:,} have no word tokens.
 Unexpected failures: **{self_match["unexpected_unmatched_count"]:,}**.
 The JSON receipt records counts and up to twenty examples for each reason.
+The lexicon's content senses override the static function-word fallback:
+“will” retains both noun senses, including `will:noun:0` and `will:noun:1`:
+**{receipt["will"]["passed"]}**.
 
 ## Phrase ranking and property observation
 
@@ -249,8 +263,10 @@ FOLIO_RESOLVE_OPENGLOSS_LEXICON="$LEXICON_ARTIFACT" \\
 ```
 
 Set `LEXICON_ARTIFACT` to the printed temporary artifact path; its manifest sits
-beside it. Optionally set `FOLIO_OPENGLOSS_SSSOM` to a readable SSSOM file before
-the benchmark to measure real crosswalk rows and links. Building requires the
+beside it. Set `FOLIO_OPENGLOSS_SSSOM` to the acquired SSSOM file and
+`FOLIO_OPENGLOSS_SSSOM_COMMIT` to its FOLIO commit before the benchmark to
+record the crosswalk's identity, predicate counts, and corpus links. The file
+path is never recorded in either receipt. Building requires the
 `opengloss` extra; loading and tagging use the core installation.
 """
     RECEIPT.with_suffix(".md").write_text(text, encoding="utf-8")
@@ -288,9 +304,16 @@ def main() -> int:
     concepts = load_folio(owl_path)
     ontology = InMemoryOntology(concepts)
     crosswalk_path = os.environ.get("FOLIO_OPENGLOSS_SSSOM")
+    crosswalk_commit = os.environ.get("FOLIO_OPENGLOSS_SSSOM_COMMIT")
     crosswalk = None
-    if crosswalk_path and os.access(Path(crosswalk_path).expanduser(), os.R_OK):
+    crosswalk_digest = None
+    rows_by_predicate: Counter[str] = Counter()
+    if crosswalk_path:
+        crosswalk_digest = sha256(Path(crosswalk_path).expanduser())
         crosswalk = load_crosswalk(Path(crosswalk_path).expanduser())
+        rows_by_predicate.update(
+            row.predicate_id for rows in crosswalk.by_subject.values() for row in rows
+        )
     started = time.perf_counter()
     tagger = SpanTagger(ontology, lexicon, crosswalk, folio_release=folio_release)
     construction_seconds = time.perf_counter() - started
@@ -316,16 +339,25 @@ def main() -> int:
         for span in tagger.tag("property").spans
         for anchor in span.opengloss
     ]
+    will_nouns = sorted(
+        anchor.id
+        for span in tagger.tag("will").spans
+        for anchor in span.opengloss
+        if anchor.pos == "noun"
+    )
+    will_passed = {"will:noun:0", "will:noun:1"}.issubset(will_nouns)
     corpus = [(concept.iri, concept.definition) for concept in concepts if concept.definition]
     if not corpus:
         raise ValueError("FOLIO corpus has no definitions")
     characters = sum(len(text) for _, text in corpus)
     span_count = link_count = 0
+    links_by_predicate: Counter[str] = Counter(dict.fromkeys(rows_by_predicate, 0))
     started = time.perf_counter()
     for _, text in corpus:
         result = tagger.tag(text)
         span_count += len(result.spans)
         link_count += len(result.links)
+        links_by_predicate.update(link.predicate_id for link in result.links)
     tagging_seconds = time.perf_counter() - started
     headword_self_match = check_headword_self_matches(tagger, lexicon)
     runtime_peak = rss_bytes(resource.RUSAGE_SELF)
@@ -376,6 +408,7 @@ def main() -> int:
             ],
         },
         "property": {"present": bool(property_senses), "senses": property_senses},
+        "will": {"passed": will_passed, "noun_sense_ids": will_nouns},
         "determinism": {
             "identical": identical,
             "serialized_sha256": hashlib.sha256(first.to_json().encode()).hexdigest(),
@@ -384,7 +417,13 @@ def main() -> int:
         if crosswalk is None
         else {
             "row_count": sum(len(rows) for rows in crosswalk.by_subject.values()),
+            "rows_by_predicate": dict(sorted(rows_by_predicate.items())),
             "corpus_links": link_count,
+            "corpus_links_by_predicate": dict(sorted(links_by_predicate.items())),
+            "source_commit": crosswalk_commit,
+            "sha256": crosswalk_digest,
+            "mapping_set_id": crosswalk.metadata["mapping_set_id"],
+            "mapping_set_version": crosswalk.metadata["mapping_set_version"],
             "metadata": dict(crosswalk.metadata),
         },
         "provenance": first.provenance.model_dump(mode="json", exclude_none=True),
@@ -409,6 +448,7 @@ def main() -> int:
         and good_faith
         and identical
         and property_senses
+        and will_passed
         and not headword_self_match["unexpected_unmatched_count"]
         else 1
     )

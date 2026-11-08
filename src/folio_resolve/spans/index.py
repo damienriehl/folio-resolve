@@ -4,12 +4,11 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
-from itertools import pairwise
 from typing import Generic, Literal, TypeVar
 
 from ..entity_ruler import _STOPWORDS
 from .function_words import FUNCTION_WORDS
-from .tokenize import normalize, normalize_gap, tokenize
+from .tokenize import normalize, tokenize
 
 Payload = TypeVar("Payload")
 MatchMethod = Literal["exact", "plural"]
@@ -55,7 +54,6 @@ class NGramIndex(Generic[Payload]):
         content_word: Callable[[str], bool] | None = None,
     ) -> list[IndexMatch[Payload]]:
         tokens = tokenize(text)
-        gaps = [normalize_gap(text[a.end : b.start]) for a, b in pairwise(tokens)]
         allowed = None if regions is None else tuple(regions)
         matches: list[IndexMatch[Payload]] = []
         for i, first in enumerate(tokens):
@@ -64,11 +62,14 @@ class NGramIndex(Generic[Payload]):
             for length in range(1, min(self.max_length, len(tokens) - i) + 1):
                 last = tokens[i + length - 1]
                 if length > 1:
-                    key = (*key, gaps[i + length - 2], last.key)
+                    key = (*key, last.gap_before, last.key)
                 has_content = has_content or (
                     last.key not in _STOPWORDS
-                    and last.key not in FUNCTION_WORDS
-                    and (content_word is None or content_word(last.key))
+                    and (
+                        last.key not in FUNCTION_WORDS
+                        if content_word is None
+                        else content_word(last.key)
+                    )
                 )
                 if allowed is not None and not any(
                     start <= first.start and last.end <= end for start, end in allowed

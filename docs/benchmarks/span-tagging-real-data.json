@@ -5,22 +5,55 @@
     "peak_rss_under_3_gib": true,
     "verdict": "pass"
   },
-  "construction_seconds": 4.742039349046536,
+  "construction_seconds": 5.672443844960071,
   "corpus": {
     "characters": 3015408,
-    "characters_per_second": 171818.1355568989,
+    "characters_per_second": 124413.02108174558,
     "concept_count": 18327,
     "selection": "all nonempty concept definitions, sorted by IRI",
     "sha256": "689c5237ff7cce115704453c38cbe5e83129b16ec1efb389b530718d40b4377e",
-    "span_count": 303221,
-    "spans_per_text": 19.685840420697268,
-    "tagging_seconds": 17.549998376052827,
+    "span_count": 327463,
+    "spans_per_text": 21.259689670843343,
+    "tagging_seconds": 24.237077226978727,
     "text_count": 15403
   },
-  "crosswalk": "not provided",
+  "crosswalk": {
+    "corpus_links": 89558,
+    "corpus_links_by_predicate": {
+      "http://www.w3.org/2004/02/skos/core#broadMatch": 10325,
+      "http://www.w3.org/2004/02/skos/core#closeMatch": 56238,
+      "http://www.w3.org/2004/02/skos/core#exactMatch": 12083,
+      "http://www.w3.org/2004/02/skos/core#relatedMatch": 10912
+    },
+    "mapping_set_id": "https://folio.openlegalstandard.org/mappings/opengloss",
+    "mapping_set_version": "0.1.0",
+    "metadata": {
+      "license": "https://creativecommons.org/licenses/by/4.0/",
+      "mapping_date": "2026-11-08",
+      "mapping_set_description": "'These links are lexical-matching claims between FOLIO classes",
+      "mapping_set_id": "https://folio.openlegalstandard.org/mappings/opengloss",
+      "mapping_set_title": "FOLIO\u2013OpenGloss lexical mappings",
+      "mapping_set_version": "0.1.0",
+      "mapping_tool": "https://github.com/alea-institute/FOLIO/blob/main/scripts/build_opengloss_mappings.py",
+      "mapping_tool_version": "opengloss-lexical/0.1",
+      "object_source": "https://huggingface.co/datasets/mjbommar/opengloss-v2.4-senses",
+      "object_source_version": "mjbommar/opengloss-v2.4-senses@c64e480015b8c84f9d08469d4dfd64a7a8fb89bd",
+      "subject_source": "https://folio.openlegalstandard.org/",
+      "subject_source_version": "f9c5152b7224ab3307faf8b3ac423addb8fa9591; sha256:c0f8ca58dad4227e89856d97a0344f45bec37289832837bd11c473dfdc7b44be"
+    },
+    "row_count": 18684,
+    "rows_by_predicate": {
+      "http://www.w3.org/2004/02/skos/core#broadMatch": 6804,
+      "http://www.w3.org/2004/02/skos/core#closeMatch": 1521,
+      "http://www.w3.org/2004/02/skos/core#exactMatch": 558,
+      "http://www.w3.org/2004/02/skos/core#relatedMatch": 9801
+    },
+    "sha256": "9f96a4d7aa8444b3a80c04a17f299729bd8da7241fa8d3bdf0bc7d2b69059fff",
+    "source_commit": "4591b7e91108c41b089a6a9469aac344357f953b"
+  },
   "determinism": {
     "identical": true,
-    "serialized_sha256": "8aaa11c54f3b262b287093db94a2136c500d83367377c561087ba58bfd9a2305"
+    "serialized_sha256": "f8ba6d53b444ddfb5a39f1800685e5c48216ae6456462bece57bebe335aeb677"
   },
   "folio_release": "c0f8ca58dad4227e89856d97a0344f45bec37289832837bd11c473dfdc7b44be",
   "folio_resolve_version": "0.5.0",
@@ -293,38 +326,38 @@
     "text": "The tenant acted in good faith."
   },
   "headword_self_match": {
-    "check_seconds": 10.925686481990851,
+    "check_seconds": 11.720653048017994,
     "headword_count": 160724,
-    "matched_count": 159934,
+    "matched_count": 160198,
     "unexpected_unmatched_count": 0,
     "unmatched_by_reason": {
-      "function_word_only": 790,
+      "function_word_only": 526,
       "no_word_tokens": 0,
       "unexpected": 0
     },
-    "unmatched_count": 790,
+    "unmatched_count": 526,
     "unmatched_examples_by_reason": {
       "function_word_only": [
         "A-one",
-        "As You Like It",
         "He",
-        "I",
         "LE",
         "May Day",
         "Mr",
         "My Way",
         "The Who",
         "a",
-        "a few",
-        "aboard",
-        "about",
-        "above",
-        "above all",
         "aby",
         "achoo",
-        "across",
         "add",
-        "add to"
+        "add to",
+        "add up",
+        "add-in",
+        "add-on",
+        "ah",
+        "aha",
+        "ahem",
+        "ahoy",
+        "aku"
       ],
       "no_word_tokens": [],
       "unexpected": []
@@ -332,11 +365,11 @@
   },
   "lexicon": {
     "artifact_bytes": 16321447,
-    "build_seconds": 6.346635901951231,
+    "build_seconds": 9.807445563026704,
     "content_sha256": "bd5dffc696d2157dd8a305caabf8da6941a7b9a2f564e080bdfff7f8aeecef02",
     "dataset_id": "mjbommar/opengloss-v2.4-senses",
     "headwords": null,
-    "load_seconds": 3.7719916970236227,
+    "load_seconds": 5.658981110085733,
     "revision": "c64e480015b8c84f9d08469d4dfd64a7a8fb89bd",
     "row_count": 300787,
     "source_sha256": {
@@ -345,7 +378,7 @@
       "data/train-00002.parquet": "ddfd0bd844634b605e52189ae8972c2972266772fd9fd1a306e1115f21ab5dec"
     }
   },
-  "peak_rss_bytes": 773296128,
+  "peak_rss_bytes": 765734912,
   "property": {
     "present": true,
     "senses": [
@@ -364,13 +397,17 @@
     ]
   },
   "provenance": {
+    "crosswalk": {
+      "mapping_set_id": "https://folio.openlegalstandard.org/mappings/opengloss",
+      "mapping_set_version": "0.1.0"
+    },
     "folio": {
       "label_index_digest": "563db02d3c55b3227b70e1b05e5e6446adc39963fa457b866b8d918b287304e9",
       "label_source": "all_concepts",
       "release": "c0f8ca58dad4227e89856d97a0344f45bec37289832837bd11c473dfdc7b44be"
     },
     "folio_resolve_version": "0.5.0",
-    "normalization": "nfkc-casefold-apostrophe-gap-v2",
+    "normalization": "nfkc-casefold-apostrophe-gap-v3",
     "opengloss": {
       "dataset_id": "mjbommar/opengloss-v2.4-senses",
       "lexicon_digest": "bd5dffc696d2157dd8a305caabf8da6941a7b9a2f564e080bdfff7f8aeecef02",
@@ -379,10 +416,17 @@
     "tagger_version": "1.0.0"
   },
   "python_version": "3.13.11",
-  "recorded_at": "2026-11-08T19:36:42.543344+00:00",
+  "recorded_at": "2026-11-08T19:52:29.914887+00:00",
   "rss": {
-    "builder_peak_bytes": 738975744,
-    "parent_before_build_bytes": 34320384,
-    "runtime_peak_bytes": 474120192
+    "builder_peak_bytes": 731439104,
+    "parent_before_build_bytes": 34295808,
+    "runtime_peak_bytes": 473677824
+  },
+  "will": {
+    "noun_sense_ids": [
+      "will:noun:0",
+      "will:noun:1"
+    ],
+    "passed": true
   }
 }
