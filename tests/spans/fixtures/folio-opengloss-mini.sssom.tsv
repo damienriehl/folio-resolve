@@ -1,0 +1,16 @@
+# curie_map:
+#   FOLIO: https://folio.openlegalstandard.org/
+#   OGS: tag:folio.openlegalstandard.org,2026:opengloss/sense/
+#   skos: http://www.w3.org/2004/02/skos/core#
+#   semapv: https://w3id.org/semapv/vocab/
+# mapping_set_id: https://folio.openlegalstandard.org/mappings/opengloss-mini
+# mapping_set_version: 0.1.0
+# license: https://creativecommons.org/licenses/by/4.0/
+# mapping_date: 2026-11-08
+# subject_source: https://folio.openlegalstandard.org/
+# subject_source_version: synthetic-folio-1
+# object_source: https://huggingface.co/datasets/mjbommar/opengloss-v2.4-senses
+# object_source_version: c64e480015b8c84f9d08469d4dfd64a7a8fb89bd
+subject_id	subject_label	predicate_id	predicate_modifier	object_id	object_label	mapping_justification	confidence	author_id	mapping_tool	mapping_tool_version	mapping_date	comment
+FOLIO:BreachOfContract	Breach of Contract	skos:broadMatch		OGS:breach:noun:0	breach	semapv:ManualMappingCuration	0.85		fixture	0.1.0	2026-11-08	Synthetic test mapping to a contained word
+FOLIO:BreachOfContract	Breach of Contract	skos:exactMatch		OGS:breach_of_contract:noun:0	breach of contract	semapv:ManualMappingCuration	0.95		fixture	0.1.0	2026-11-08	Synthetic test mapping to the phrase
