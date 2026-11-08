@@ -123,6 +123,10 @@ class InMemoryOntology:
         self._concepts = list(concepts)
         self._by_iri = {c.iri: c for c in self._concepts}
 
+    def all_concepts(self) -> list[Concept]:
+        """All concepts in stable IRI order, preserving shared labels."""
+        return sorted(self._concepts, key=lambda concept: concept.iri)
+
     def all_labels(self) -> dict[str, LabelInfo]:
         out: dict[str, LabelInfo] = {}
         for c in self._concepts:
@@ -229,6 +233,15 @@ class FolioPythonProvider:
 
             self._folio = FOLIO()
         return self._folio
+
+    def all_concepts(self) -> list[Concept]:
+        """All FOLIO classes in stable IRI order, preserving shared labels."""
+        concepts = (
+            _owl_to_concept(owl)
+            for owl in getattr(self._get(), "classes", [])
+            if "folio.openlegalstandard.org" in (getattr(owl, "iri", "") or "")
+        )
+        return sorted(concepts, key=lambda concept: concept.iri)
 
     def all_labels(self) -> dict[str, LabelInfo]:
         folio = self._get()

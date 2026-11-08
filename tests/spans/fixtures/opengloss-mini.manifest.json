@@ -1,0 +1,34 @@
+{
+  "content_sha256": "f4631fd21fdae7d45ca65cc7475939955981dd304919df070f9c85fb6950acdf",
+  "dataset_id": "mjbommar/opengloss-v2.4-senses",
+  "headwords": [
+    "and",
+    "appeal",
+    "breach",
+    "breach of contract",
+    "contract",
+    "faith",
+    "fully indexed",
+    "good",
+    "good faith",
+    "of",
+    "property",
+    "rate",
+    "real property",
+    "tax",
+    "tenant",
+    "the",
+    "they",
+    "this",
+    "three",
+    "will",
+    "with"
+  ],
+  "revision": "c64e480015b8c84f9d08469d4dfd64a7a8fb89bd",
+  "row_count": 72,
+  "source_sha256": {
+    "data/train-00000.parquet": "32f6c69d143082cc23f8a98e7c875a20600cf9ec4de4ca6fd25cb4807c27f719",
+    "data/train-00001.parquet": "bad7ae8f582bec44e97710f94df1dc81869613f6649e376b9f5feefbac2501e1",
+    "data/train-00002.parquet": "ddfd0bd844634b605e52189ae8972c2972266772fd9fd1a306e1115f21ab5dec"
+  }
+}

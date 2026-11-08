@@ -62,3 +62,21 @@ the `pyahocorasick` (BSD-3) C-extension dependency that folio-enrich required.
 FOLIO (Federated Open Legal Information Ontology) — CC-BY-4.0, © SALI Alliance. This package does
 not vendor FOLIO; it is fetched at runtime via `folio-python`. Consumers displaying FOLIO concepts
 should carry the CC-BY attribution.
+
+## OpenGloss span-tagging data and build tooling
+
+| Component | License | Used for |
+|---|---|---|
+| [pyarrow](https://arrow.apache.org/docs/python/) | Apache-2.0 | Optional `opengloss` extra and development tool for compiling parquet; never required to load or tag with a lexicon |
+| [OpenGloss v2.4](https://huggingface.co/datasets/mjbommar/opengloss-v2.4-senses) | CC BY 4.0 | Sense data in compiled lexicons and the small test extract, pinned to revision `c64e480015b8c84f9d08469d4dfd64a7a8fb89bd` |
+| [WordNet 3.0](https://wordnet.princeton.edu/license-and-commercial-use) | Princeton WordNet license | OpenGloss senses whose `source` is `wordnet-3.0`; these retain their source on every annotation |
+
+OpenGloss by Michael J. Bommarito II, from the OpenGloss v2.4 release,
+https://huggingface.co/datasets/mjbommar/opengloss-v2.4-senses, licensed CC BY 4.0.
+The test extract retains the selected senses' original fields; compilation changes their
+storage format only.
+
+WordNet 3.0: Copyright 2006 by Princeton University. All rights reserved.
+WordNet and its associated data are distributed under the Princeton WordNet license;
+the license and disclaimer are available at the link above. OpenGloss-native senses
+and WordNet-derived senses remain distinguishable through the `source` field.
