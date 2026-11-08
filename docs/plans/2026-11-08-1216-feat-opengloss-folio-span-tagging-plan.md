@@ -17,7 +17,7 @@ execution: code
 - **Product authority:** Damien Riehl, through the upstream Product Contract (lexplicit `docs/plans/2026-11-08-1017-feat-opengloss-folio-anchoring-plan.md`, R6, R7, R10). This plan adds no product scope.
 - **Execution profile:** one PR, cut from `main` on branch `feat/opengloss-span-tagging`, released as `v0.5.0`. Additive only: no existing module's behavior changes.
 - **Stop conditions:** stop and report if the real-data index cannot meet the memory or load-time budget in the Verification Contract, or if the FOLIO crosswalk format diverges from the contract in KTD5.
-- **Who finishes:** the executing session reviews (Codex review receipt per `AGENTS.md`), merges, tags `v0.5.0`, and messages the lexplicit session with the tag.
+- **Who finishes:** the executing session reviews (Codex review receipt per the `CLAUDE.md` Review gate section), merges, tags `v0.5.0`, and messages the lexplicit session with the tag.
 
 ---
 
@@ -98,9 +98,9 @@ Carried from the origin Product Contract. The normative text lives on the govern
 
 ### Key Technical Decisions
 
-- KTD1. **Compile OpenGloss into a small stdlib-readable lexicon at build time; never read parquet at tag time.** `pyarrow` enters only as a new optional extra `opengloss` for the build command. The artifact keeps `sense_id`, `headword`, `pos`, `sense_index`, `domain`, `tier`, `source`, and `gloss`, written as sorted, gzip-compressed JSON lines with a zero mtime so the bytes are reproducible, plus a manifest recording the dataset, revision, source-file sha256 values, row count, and artifact sha256. The artifact is not committed; a small extract from the pinned revision serves as the test fixture, with attribution. Rationale: consumers keep a pure-Python runtime and the 640 MB parquet stays out of every process but the build.
-- KTD2. **One token n-gram index serves both layers, replacing nothing.** Labels and headwords are keyed by their normalized token tuples, and tagging looks up every n-gram up to the longest key length. Both layers share the tokenizer, so their spans align exactly, which makes containment links and crosswalk joins exact comparisons. The FOLIO layer reads `OntologyProvider.all_labels()` and reuses `entity_ruler`'s `MIN_PATTERN_LENGTH`, `_STOPWORDS`, and label-type confidences. Rationale: the pure-Python Aho-Corasick trie would hold one node per character across 160k headwords, while an n-gram dict holds one entry per headword. Its overlap resolution also drops partial overlaps, which R2 must keep.
-- KTD3. **Normalization is fixed and recorded per match.** Case-folding and NFKC, hyphens and whitespace treated as token separators (so "fully-indexed" matches "fully indexed"), and curly apostrophes folded. When the exact key misses, one fallback strips a final-token English plural (`ies`→`y`, `es`, `s`) for nouns only; its anchors carry `match_method: "plural"` and lower confidence than `"exact"`. Rationale: OpenGloss headwords are lemmas and statutes say "tenants"; spaCy at tag time is ruled out (Scope Boundaries).
+- KTD1. **Compile OpenGloss into a small stdlib-readable lexicon at build time; never read parquet at tag time.** `pyarrow` enters only as a new optional extra `opengloss` for the build command. The artifact keeps `sense_id`, `headword`, `pos`, `sense_index`, `domain`, `tier`, `source`, and `gloss`, written as sorted, gzip-compressed JSON lines with a zero mtime so the bytes are reproducible, plus a manifest recording the dataset, revision, source-file sha256 values, row count, and a sha256 of the uncompressed JSON-lines content. Hashing content rather than gzip bytes keeps the digest stable across zlib builds, so a toolchain change never reads as an upstream change. The artifact is not committed; a small extract from the pinned revision serves as the test fixture, with attribution. Rationale: consumers keep a pure-Python runtime and the 640 MB parquet stays out of every process but the build.
+- KTD2. **One token n-gram index serves both layers, replacing nothing.** Labels and headwords are keyed by their normalized token tuples, and tagging looks up every n-gram up to the longest key length. Both layers share the tokenizer, so their spans align exactly, which makes containment links and crosswalk joins exact comparisons. The FOLIO layer indexes every label of every concept, so concepts that share a label all tag. `all_labels()` keeps one concept per label, so the built-in providers gain an additive `all_concepts()` method. The tagger uses it when present, falls back to the concepts reachable through `all_labels()` otherwise, and records which source it used in provenance. The FOLIO layer reuses `entity_ruler`'s `MIN_PATTERN_LENGTH`, `_STOPWORDS`, and label-type confidences. Rationale: the pure-Python Aho-Corasick trie would hold one node per character across 160k headwords, while an n-gram dict holds one entry per headword. Its overlap resolution also drops partial overlaps, which R2 must keep.
+- KTD3. **Normalization is fixed and recorded per match.** Case-folding and NFKC, hyphens and whitespace treated as token separators (so "fully-indexed" matches "fully indexed"), and curly apostrophes folded. When the exact key misses in the OpenGloss layer, one fallback strips a final-token English plural, trying `ies`→`y`, then `es`, then `s`, and the first candidate that hits a key with a noun sense wins. Its anchors carry `match_method: "plural"` and lower confidence than `"exact"`. The FOLIO layer gets no plural fallback, because its labels carry no part of speech; FOLIO plural reachability stays with `lemma.augment_labels`, which a caller may apply to the labels first. Rationale: OpenGloss headwords are lemmas and statutes say "tenants"; spaCy at tag time is ruled out (Scope Boundaries).
 - KTD4. **Function-word filtering uses the lexicon's own part-of-speech data plus the ruler stopwords.** An OpenGloss single-token span is dropped when every sense of it is a determiner, pronoun, preposition, conjunction, interjection, or numeral, or when the token is in `_STOPWORDS`. A multi-token span survives when at least one token is a content word. Rationale: R4 needs a deterministic rule, and the data already carries part of speech.
 - KTD5. **Read the SSSOM TSV with the stdlib `csv` module and the `#`-prefixed YAML header with a minimal parser for the keys used.** CURIEs expand through the file's `curie_map`, never a hard-coded namespace; the `OGS:` prefix maps back to the raw `sense_id`. Unknown columns are ignored, and a missing required column fails loudly naming it. Required: `subject_id`, `predicate_id`, `object_id`, `mapping_justification`; `confidence` optional. Rationale: no YAML or SSSOM dependency for a fixed, sorted format; the header keys used are flat scalars plus one flat map.
 - KTD6. **Determinism excludes wall-clock time.** The result carries no timestamp unless the caller passes `tagged_on`, which is recorded verbatim. Spans sort by `(start, -end)`, anchors by id, links by `(span, subject, predicate, object)`. JSON serialization uses sorted keys. Rationale: R1, and a claim's research date belongs to the consumer that makes the claim.
@@ -184,7 +184,8 @@ tests/spans/
 - **Test scenarios:**
   - Building the fixture twice yields byte-identical artifacts and manifests.
   - A parquet file whose sha256 differs from the pin fails before any row is read, naming the file.
-  - Loading an artifact whose bytes differ from its manifest digest fails, naming both digests.
+  - Loading an artifact whose content differs from its manifest digest fails, naming both digests.
+  - Recompressing the same content at a different gzip level leaves the manifest digest unchanged.
   - The loader returns all senses of "good faith" in `sense_index` order, each with `source` and `tier`.
   - Importing `folio_resolve` and `folio_resolve.spans` succeeds without `pyarrow` installed. Only `build` raises the missing-extra error.
 - **Verification:** the fixture builds reproducibly from the real parquet, and the loader passes on it with no `pyarrow`.
@@ -204,6 +205,8 @@ tests/spans/
   - "real property tax" with keys "real property" and "property tax" returns both partially overlapping spans plus "property".
   - "fully-indexed rate" matches the key "fully indexed rate" and the reverse.
   - "Tenants" matches "tenant" with method `plural`. "tenant" matches with method `exact`.
+  - "taxes" with headwords "tax" and "taxe" resolves to "tax" through the `es` step, by the fixed try order.
+  - The FOLIO layer applies no plural fallback: label "Tenant" does not match "tenants".
   - A text with curly apostrophes and mixed case matches its straight-apostrophe, lowercase key, and offsets point into the original text.
   - With a region covering only the second sentence, no span from the first sentence is returned.
   - Covers AE3. "of the" returns nothing.
@@ -234,7 +237,7 @@ tests/spans/
 - **Goal:** assemble both layers, containment, ranking, crosswalk links, and provenance into one deterministic result.
 - **Requirements:** R1-R7, R9; KTD2, KTD4, KTD6, KTD7.
 - **Dependencies:** U1, U2, U3.
-- **Files:** `src/folio_resolve/spans/tagger.py`, `src/folio_resolve/spans/models.py`, `src/folio_resolve/spans/__init__.py`, `tests/spans/test_tagger.py`.
+- **Files:** `src/folio_resolve/spans/tagger.py`, `src/folio_resolve/spans/models.py`, `src/folio_resolve/spans/__init__.py`, `src/folio_resolve/ontology.py` (additive `all_concepts()` on `InMemoryOntology` and `FolioPythonProvider`), `tests/spans/test_tagger.py`.
 - **Approach:**
   1. `SpanTagger` takes an optional `OntologyProvider`, an optional lexicon, an optional crosswalk, and `folio_release`. At least one layer is required. Indexes build once at construction.
   2. `tag(text, regions=None, tagged_on=None)` runs both indexes, unions their spans, computes containment, ranks each layer per R5, joins crosswalk links per R6, and fills provenance per R7.
@@ -249,12 +252,13 @@ tests/spans/
   - Covers AE4. Two runs on the same inputs serialize identically, and provenance names the fixture's revision, the lexicon digest, the label-index digest, and the crosswalk set version.
   - `tagged_on` appears verbatim when passed and is absent otherwise.
   - Constructing with no layer fails with a clear error.
+  - Two in-memory concepts sharing the preferred label "Appeal" both appear as FOLIO hits on the span "appeal", and a provider without `all_concepts()` falls back with the source recorded.
 - **Verification:** the tagger runs on the fixtures with only core dependencies installed.
 
 ### U5. Real-data check, documentation, and release
 
 - **Goal:** prove the tagger on the full pinned lexicon and real FOLIO labels within budget, document it, and release `v0.5.0`.
-- **Requirements:** R1, R7, R8, R9; Success Criteria.
+- **Requirements:** R1, R7, R8, R9; Verification Contract (real-data budget).
 - **Dependencies:** U4.
 - **Files:** `benchmarks/span_tagging_real_data.py`, `docs/benchmarks/span-tagging-real-data.md`, `README.md`, `pyproject.toml` (version), `tests/spans/test_real_data.py` (skipped unless the artifact path is set).
 - **Approach:**
@@ -280,7 +284,7 @@ tests/spans/
 | Types | `uv run mypy` | every unit (strict, `src/folio_resolve`) |
 | No-extra import | install without the `opengloss` extra, then import `folio_resolve.spans` and tag with fixtures | U1, U4 |
 | Real-data budget | U5 script inside `systemd-run --user --scope -p MemoryMax=4G` | U5 |
-| Review | recorded Codex review, prompt and verdict retained as artifacts, receipt line per `AGENTS.md` | PR |
+| Review | recorded Codex review, prompt and verdict retained as artifacts, receipt line per the `CLAUDE.md` Review gate section | PR |
 
 Real-data budget: index construction under 60 s, peak RSS under 3 GiB, and tagging throughput reported. Any budget failure is a stop condition, not a reason to relax the budget.
 
