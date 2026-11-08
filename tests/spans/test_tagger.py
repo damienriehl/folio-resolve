@@ -2,6 +2,7 @@ import hashlib
 import json
 import subprocess
 import sys
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -131,6 +132,7 @@ def test_deterministic_serialization_provenance_and_caller_date(ontology, lexico
         in tagger.tag("breach", tagged_on="caller supplies this verbatim").to_json()
     )
     provenance = result.provenance
+    assert provenance.normalization == "nfkc-casefold-apostrophe-gap-v2"
     assert provenance.opengloss.revision == "c64e480015b8c84f9d08469d4dfd64a7a8fb89bd"
     assert provenance.opengloss.lexicon_digest == lexicon.manifest.content_sha256
     assert provenance.folio.release == "folio-commit"
@@ -261,3 +263,74 @@ print(SpanTagger(ontology, lex, crosswalk, folio_release='x').tag('breach of con
     assert all(r.returncode == 0 for r in results), [r.stderr for r in results]
     assert results[0].stdout == results[1].stdout
     assert json.loads(results[0].stdout)["links"]
+
+
+@pytest.mark.parametrize("label", ["with", "they", "with with"])
+def test_folio_only_function_word_labels_are_filtered(label):
+    tagger = SpanTagger(InMemoryOntology([Concept(iri="x", label=label)]), folio_release="x")
+    assert tagger.tag(label).spans == []
+
+
+def test_folio_only_phrase_with_content_word_survives(ontology):
+    result = SpanTagger(ontology, folio_release="x").tag("breach of contract")
+    assert [span.text for span in result.spans] == ["breach of contract"]
+
+
+def test_containment_and_ranking_match_pairwise_semantics(lexicon):
+    labels = ["real property tax", "real property", "property tax", "property", "tax"]
+    ontology = InMemoryOntology([Concept(iri=label, label=label) for label in labels])
+    result = SpanTagger(ontology, lexicon, folio_release="x").tag(
+        "real property tax. acted in good faith"
+    )
+    for span in result.spans:
+        containers = [
+            other
+            for other in result.spans
+            if other is not span and other.start <= span.start and span.end <= other.end
+        ]
+        assert span.contained_by == [other.id for other in containers]
+        assert span.contains == [
+            other.id
+            for other in result.spans
+            if other is not span and span.start <= other.start and other.end <= span.end
+        ]
+        for layer in ("folio", "opengloss"):
+            anchored = [other for other in containers if getattr(other, layer)]
+            nearest = min(
+                anchored,
+                key=lambda other: (other.end - other.start, other.start, -other.end),
+                default=None,
+            )
+            for anchor in getattr(span, layer):
+                assert anchor.rank == ("fallback" if nearest else "primary")
+                assert anchor.outranked_by == (nearest.id if nearest else None)
+
+
+def test_long_document_with_disjoint_spans_finishes_within_budget():
+    tagger = SpanTagger(
+        InMemoryOntology([Concept(iri="tenant", label="tenant")]), folio_release="x"
+    )
+    started = time.perf_counter()
+    spans = tagger.tag("tenant " * 20_000).spans
+    elapsed = time.perf_counter() - started
+    assert len(spans) == 20_000
+    assert all(not span.contains and not span.contained_by for span in spans)
+    assert all(span.folio[0].rank == "primary" for span in spans)
+    assert elapsed < 10, f"20,000 disjoint matches took {elapsed:.3f}s"
+
+
+def test_curie_mapping_set_id_is_canonical_in_provenance_and_links(tmp_path, ontology, lexicon):
+    path = tmp_path / "curie.tsv"
+    contents = (FIXTURES / "folio-opengloss-mini.sssom.tsv").read_text()
+    contents = contents.replace(
+        "https://folio.openlegalstandard.org/mappings/opengloss-mini",
+        "FOLIO:mappings/opengloss-mini",
+    )
+    path.write_text(contents)
+    crosswalk = load_crosswalk(path)
+    canonical = "https://folio.openlegalstandard.org/mappings/opengloss-mini"
+    assert crosswalk.metadata["mapping_set_id"] == canonical
+    assert all(link.mapping_set_id == canonical for link in crosswalk.for_subject(BREACH))
+    result = SpanTagger(ontology, lexicon, crosswalk, folio_release="x").tag("breach of contract")
+    assert result.provenance.crosswalk.mapping_set_id == canonical
+    assert result.links and all(link.mapping_set_id == canonical for link in result.links)

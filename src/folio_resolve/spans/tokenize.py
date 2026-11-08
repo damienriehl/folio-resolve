@@ -65,10 +65,19 @@ def _word_start(char: str) -> bool:
 
 
 def normalize(text: str) -> tuple[str, ...]:
-    """Return the token-tuple lookup key."""
-    return tuple(token.key for token in tokenize(text))
+    """Interleave normalized words with their normalized internal gaps."""
+    tokens = tokenize(text)
+    key: list[str] = []
+    for i, token in enumerate(tokens):
+        if i:
+            key.append(normalize_gap(text[tokens[i - 1].end : token.start]))
+        key.append(token.key)
+    return tuple(key)
 
 
-def is_separator(text: str) -> bool:
-    """Only whitespace and hyphens may connect the words of a phrase."""
-    return _SEPARATORS.fullmatch(unicodedata.normalize("NFKC", text)) is not None
+def normalize_gap(text: str) -> str:
+    """Fold whitespace/hyphen gaps to a space; preserve other punctuation."""
+    folded = unicodedata.normalize("NFKC", text).translate(_APOSTROPHES)
+    if _SEPARATORS.fullmatch(folded) is not None:
+        return " "
+    return "".join(char for char in folded if not char.isspace())

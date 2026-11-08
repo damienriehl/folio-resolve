@@ -1,3 +1,5 @@
+import pytest
+
 from folio_resolve.spans.index import NGramIndex
 
 
@@ -61,3 +63,31 @@ def test_function_words_empty_and_nonmatches():
     assert idx.lookup("") == []
     assert idx.lookup("other text") == []
     assert idx.lookup("good. faith") == []
+
+
+@pytest.mark.parametrize(
+    "label", ["AT&T", "attorney/client privilege", "U.S. citizen", "Wills, Trusts and Estates"]
+)
+def test_internal_punctuation_matches_its_own_surface(label):
+    hits = index(label).lookup(label)
+    assert [(hit.start, hit.end, hit.payloads) for hit in hits] == [(0, len(label), (label,))]
+
+
+@pytest.mark.parametrize("gap", ["&", "/", ".", ","])
+def test_punctuation_gaps_remain_distinct_from_spaces_and_each_other(gap):
+    idx = index(f"tenant{gap}rent")
+    assert idx.lookup(f"tenant {gap} rent")[0].payloads == (f"tenant{gap}rent",)
+    assert idx.lookup("tenant rent") == []
+    assert index("tenant rent").lookup(f"tenant{gap}rent") == []
+
+
+def test_sentence_boundary_does_not_join_a_phrase():
+    assert index("tenant rent").lookup("the tenant. Rent is due") == []
+
+
+def test_punctuation_walk_is_bounded_by_longest_indexed_key():
+    idx = index("tenant/rent/tax")
+    assert idx.max_length == 3
+    hits = idx.lookup("tenant/rent/tax/tenant/rent/tax")
+    assert [(hit.start, hit.end) for hit in hits] == [(0, 15), (16, 31)]
+    assert index("tenant/rent/tax").lookup("tenant/rent.tax") == []

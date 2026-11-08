@@ -4,10 +4,12 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
+from itertools import pairwise
 from typing import Generic, Literal, TypeVar
 
 from ..entity_ruler import _STOPWORDS
-from .tokenize import is_separator, normalize, tokenize
+from .function_words import FUNCTION_WORDS
+from .tokenize import normalize, normalize_gap, tokenize
 
 Payload = TypeVar("Payload")
 MatchMethod = Literal["exact", "plural"]
@@ -42,7 +44,7 @@ class NGramIndex(Generic[Payload]):
         key = normalize(label)
         if key:
             self.entries.setdefault(key, []).append(payload)
-            self.max_length = max(self.max_length, len(key))
+            self.max_length = max(self.max_length, (len(key) + 1) // 2)
 
     def lookup(
         self,
@@ -53,22 +55,26 @@ class NGramIndex(Generic[Payload]):
         content_word: Callable[[str], bool] | None = None,
     ) -> list[IndexMatch[Payload]]:
         tokens = tokenize(text)
+        gaps = [normalize_gap(text[a.end : b.start]) for a, b in pairwise(tokens)]
         allowed = None if regions is None else tuple(regions)
         matches: list[IndexMatch[Payload]] = []
         for i, first in enumerate(tokens):
+            key: tuple[str, ...] = (first.key,)
+            has_content = False
             for length in range(1, min(self.max_length, len(tokens) - i) + 1):
                 last = tokens[i + length - 1]
-                if length > 1 and not is_separator(text[tokens[i + length - 2].end : last.start]):
-                    break
+                if length > 1:
+                    key = (*key, gaps[i + length - 2], last.key)
+                has_content = has_content or (
+                    last.key not in _STOPWORDS
+                    and last.key not in FUNCTION_WORDS
+                    and (content_word is None or content_word(last.key))
+                )
                 if allowed is not None and not any(
                     start <= first.start and last.end <= end for start, end in allowed
                 ):
                     continue
-                key = tuple(token.key for token in tokens[i : i + length])
-                if not any(
-                    word not in _STOPWORDS and (content_word is None or content_word(word))
-                    for word in key
-                ):
+                if not has_content:
                     continue
                 payloads = tuple(self.entries.get(key, ()))
                 method: MatchMethod = "exact"

@@ -16,8 +16,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from folio_resolve import Concept, InMemoryOntology, __version__
+from folio_resolve.entity_ruler import _STOPWORDS
 from folio_resolve.spans import SpanTagger, load_crosswalk, load_lexicon
-from folio_resolve.spans.lexicon import PINNED_SHA256
+from folio_resolve.spans.function_words import FUNCTION_WORDS
+from folio_resolve.spans.lexicon import PINNED_SHA256, OpenGlossLexicon
+from folio_resolve.spans.tokenize import tokenize
 
 ROOT = Path(__file__).resolve().parents[1]
 RECEIPT = ROOT / "docs/benchmarks/span-tagging-real-data.json"
@@ -90,12 +93,55 @@ def rss_bytes(who: int) -> int:
     return int(resource.getrusage(who).ru_maxrss * scale)
 
 
+def check_headword_self_matches(tagger: SpanTagger, lexicon: OpenGlossLexicon) -> dict:
+    """Exercise every distinct surface through the tagger, explaining filtered cases."""
+    headwords = sorted(
+        {sense.headword for senses in lexicon.by_headword.values() for sense in senses}
+    )
+    unmatched: dict[str, list[str]] = {
+        "function_word_only": [],
+        "no_word_tokens": [],
+        "unexpected": [],
+    }
+    started = time.perf_counter()
+    for headword in headwords:
+        result = tagger.tag(headword)
+        if any(
+            anchor.headword == headword and anchor.match_method == "exact"
+            for span in result.spans
+            for anchor in span.opengloss
+        ):
+            continue
+        words = [token.key for token in tokenize(headword)]
+        if not words:
+            reason = "no_word_tokens"
+        elif all(
+            word in _STOPWORDS or word in FUNCTION_WORDS or not lexicon.is_content_word(word)
+            for word in words
+        ):
+            reason = "function_word_only"
+        else:
+            reason = "unexpected"
+        unmatched[reason].append(headword)
+    unmatched_count = sum(len(words) for words in unmatched.values())
+    return {
+        "headword_count": len(headwords),
+        "matched_count": len(headwords) - unmatched_count,
+        "unmatched_count": unmatched_count,
+        "unexpected_unmatched_count": len(unmatched["unexpected"]),
+        "unmatched_by_reason": {reason: len(words) for reason, words in unmatched.items()},
+        "unmatched_examples_by_reason": {reason: words[:20] for reason, words in unmatched.items()},
+        "check_seconds": time.perf_counter() - started,
+    }
+
+
 def write_receipt(receipt: dict) -> None:
     RECEIPT.parent.mkdir(parents=True, exist_ok=True)
     RECEIPT.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     lexicon = receipt["lexicon"]
     corpus = receipt["corpus"]
     budget = receipt["budget"]
+    self_match = receipt["headword_self_match"]
     properties = "\n".join(
         f"| `{sense['id']}` | {sense['domain'] or '(none)'} |"
         for sense in receipt["property"]["senses"]
@@ -140,10 +186,26 @@ without emptying OS caches, and are not service-level guarantees.
 | Tagging time | {corpus["tagging_seconds"]:.3f} s |
 | Throughput | {corpus["characters_per_second"]:,.1f} characters/s |
 | Mean spans per text | {corpus["spans_per_text"]:.3f} |
+| Distinct OpenGloss headwords checked against own surface | {self_match["headword_count"]:,} |
+| Headwords matching their own exact anchor | {self_match["matched_count"]:,} |
+| Headwords without their own anchor | {self_match["unmatched_count"]:,} |
+| Unexpected self-match failures | {self_match["unexpected_unmatched_count"]:,} |
 
 Budget verdict: **{budget["verdict"]}**. Construction must be strictly below
 60 s ({budget["construction_under_60_seconds"]}); peak RSS strictly below
 3 GiB ({budget["peak_rss_under_3_gib"]}). Failed lines: {", ".join(budget["failed_lines"]) or "none"}.
+
+## Headword self-match
+
+Tagged every distinct OpenGloss headword's own text and checked for an exact
+OpenGloss anchor carrying that same headword. This includes punctuation-bearing
+headwords. The check took {self_match["check_seconds"]:.3f} s, separately from corpus throughput.
+Of {self_match["unmatched_count"]:,} unmatched headwords,
+{self_match["unmatched_by_reason"]["function_word_only"]:,} are intentionally excluded because every
+token is a committed function word, a ruler stopword, or has only function-word
+parts of speech; {self_match["unmatched_by_reason"]["no_word_tokens"]:,} have no word tokens.
+Unexpected failures: **{self_match["unexpected_unmatched_count"]:,}**.
+The JSON receipt records counts and up to twenty examples for each reason.
 
 ## Phrase ranking and property observation
 
@@ -265,6 +327,7 @@ def main() -> int:
         span_count += len(result.spans)
         link_count += len(result.links)
     tagging_seconds = time.perf_counter() - started
+    headword_self_match = check_headword_self_matches(tagger, lexicon)
     runtime_peak = rss_bytes(resource.RUSAGE_SELF)
     peak = max(runtime_peak, builder_peak + parent_before_build)
     failed = []
@@ -285,6 +348,7 @@ def main() -> int:
             "load_seconds": load_seconds,
         },
         "construction_seconds": construction_seconds,
+        "headword_self_match": headword_self_match,
         "peak_rss_bytes": peak,
         "rss": {
             "builder_peak_bytes": builder_peak,
@@ -339,7 +403,15 @@ def main() -> int:
     print(
         f"Budget: {receipt['budget']['verdict']}; phrase ranking: {good_faith}; deterministic: {identical}"
     )
-    return 0 if not failed and good_faith and identical and property_senses else 1
+    return (
+        0
+        if not failed
+        and good_faith
+        and identical
+        and property_senses
+        and not headword_self_match["unexpected_unmatched_count"]
+        else 1
+    )
 
 
 if __name__ == "__main__":

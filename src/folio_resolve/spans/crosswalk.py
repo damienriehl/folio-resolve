@@ -101,6 +101,7 @@ def load_crosswalk(path: str | Path) -> Crosswalk:
             raise ValueError(f"Missing required SSSOM header: {key}")
     if not curies.get("OGS"):
         raise ValueError("Missing required SSSOM curie_map prefix: OGS")
+    metadata["mapping_set_id"] = _expand(metadata["mapping_set_id"], curies)
     grouped: dict[str, list[MappingLink]] = {}
     mapping_iris = {curies.get("skos", "") + name for name in _MAPPING_PROPERTIES}
     for number, row in enumerate(reader, 1):
@@ -119,7 +120,7 @@ def load_crosswalk(path: str | Path) -> Crosswalk:
             object_id=obj[len(curies["OGS"]) :],
             confidence=float(confidence) if confidence else None,
             mapping_justification=_expand(row["mapping_justification"], curies),
-            mapping_set_id=_expand(metadata["mapping_set_id"], curies),
+            mapping_set_id=metadata["mapping_set_id"],
             mapping_set_version=metadata["mapping_set_version"],
         )
         grouped.setdefault(subject, []).append(link)

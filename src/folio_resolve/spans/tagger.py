@@ -217,29 +217,34 @@ class SpanTagger:
                 key=lambda anchor: anchor.id,
             )
         ordered = sorted(spans.values(), key=lambda span: (span.start, -span.end))
-        # Retain every strict containment, not just immediate parent/child relationships.
+        # Earlier spans can contain this span only while their intervals remain open.
+        # Appending in sweep order preserves both relationship lists' stable ordering.
+        active: list[TaggedSpan] = []
         for span in ordered:
-            containers = [
-                other
-                for other in ordered
-                if other is not span and other.start <= span.start and span.end <= other.end
-            ]
-            span.contained_by = [other.id for other in containers]
-            span.contains = [
-                other.id
-                for other in ordered
-                if other is not span and span.start <= other.start and other.end <= span.end
-            ]
+            active = [other for other in active if other.end > span.start]
+            nearest: dict[str, TaggedSpan] = {}
+            for other in active:
+                if other.end < span.end:
+                    continue
+                span.contained_by.append(other.id)
+                other.contains.append(span.id)
+                for layer in ("folio", "opengloss"):
+                    if getattr(other, layer) and (
+                        layer not in nearest
+                        or (other.end - other.start, other.start, -other.end)
+                        < (
+                            nearest[layer].end - nearest[layer].start,
+                            nearest[layer].start,
+                            -nearest[layer].end,
+                        )
+                    ):
+                        nearest[layer] = other
             for layer in ("folio", "opengloss"):
-                anchored = [other for other in containers if getattr(other, layer)]
-                if anchored:
-                    nearest = min(
-                        anchored,
-                        key=lambda other: (other.end - other.start, other.start, -other.end),
-                    )
+                if layer in nearest:
                     for anchor in getattr(span, layer):
                         anchor.rank = "fallback"
-                        anchor.outranked_by = nearest.id
+                        anchor.outranked_by = nearest[layer].id
+            active.append(span)
         links = self._join(ordered)
         return TagResult(
             spans=ordered,
