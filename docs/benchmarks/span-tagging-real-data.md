@@ -2,7 +2,7 @@
 
 ## Protocol
 
-Recorded 2026-11-08T19:52:29.914887+00:00. Built the complete pinned parquet dataset with
+Recorded 2026-11-08T20:06:11.702703+00:00. Built the complete pinned parquet dataset with
 the package's build CLI in a separate process, into a temporary directory outside
 the repository; loaded it with `load_lexicon`. Read the local FOLIO.owl offline
 with stdlib ElementTree into `InMemoryOntology` (folio-python is not installed;
@@ -22,15 +22,15 @@ without emptying OS caches, and are not service-level guarantees.
 
 | Measurement | Result |
 |---|---:|
-| Lexicon build | 9.807 s |
+| Lexicon build | 6.141 s |
 | Compressed artifact | 16,321,447 bytes |
 | Lexicon rows | 300,787 |
-| Verified lexicon load | 5.659 s |
-| SpanTagger construction | 5.672 s |
-| Peak RSS | 730.3 MiB |
+| Verified lexicon load | 4.593 s |
+| SpanTagger construction | 5.815 s |
+| Peak RSS | 734.7 MiB |
 | Corpus characters | 3,015,408 |
-| Tagging time | 24.237 s |
-| Throughput | 124,413.0 characters/s |
+| Tagging time | 18.422 s |
+| Throughput | 163,682.7 characters/s |
 | Mean spans per text | 21.260 |
 | Distinct OpenGloss headwords checked against own surface | 160,724 |
 | Headwords matching their own exact anchor | 160,198 |
@@ -45,7 +45,7 @@ Budget verdict: **pass**. Construction must be strictly below
 
 Tagged every distinct OpenGloss headword's own text and checked for an exact
 OpenGloss anchor carrying that same headword. This includes punctuation-bearing
-headwords. The check took 11.721 s, separately from corpus throughput.
+headwords. The check took 9.074 s, separately from corpus throughput.
 Of 526 unmatched headwords,
 526 are intentionally excluded because every
 token is a ruler stopword or has only function-word parts of speech in the lexicon;

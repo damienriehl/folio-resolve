@@ -45,3 +45,12 @@ def test_property_senses_are_present(real_tagger):
     assert len(spans) == 1
     assert spans[0].opengloss
     assert all(a.id and a.headword == "property" for a in spans[0].opengloss)
+
+
+@pytest.mark.parametrize(("surface", "headwords"), [("½", {"1", "2"}), ("㏂", {"a", "m"})])
+def test_partial_unicode_expansions_have_no_word_anchors(real_tagger, surface, headwords):
+    assert not any(
+        anchor.headword in headwords
+        for span in real_tagger.tag(surface).spans
+        for anchor in span.opengloss
+    )

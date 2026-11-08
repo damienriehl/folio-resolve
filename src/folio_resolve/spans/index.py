@@ -57,6 +57,8 @@ class NGramIndex(Generic[Payload]):
         allowed = None if regions is None else tuple(regions)
         matches: list[IndexMatch[Payload]] = []
         for i, first in enumerate(tokens):
+            if not first.expansion_start:
+                continue
             key: tuple[str, ...] = (first.key,)
             has_content = False
             for length in range(1, min(self.max_length, len(tokens) - i) + 1):
@@ -76,6 +78,8 @@ class NGramIndex(Generic[Payload]):
                 ):
                     continue
                 if not has_content:
+                    continue
+                if not last.expansion_end:
                     continue
                 payloads = tuple(self.entries.get(key, ()))
                 method: MatchMethod = "exact"

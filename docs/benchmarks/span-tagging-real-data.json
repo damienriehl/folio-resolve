@@ -5,16 +5,16 @@
     "peak_rss_under_3_gib": true,
     "verdict": "pass"
   },
-  "construction_seconds": 5.672443844960071,
+  "construction_seconds": 5.8148393529700115,
   "corpus": {
     "characters": 3015408,
-    "characters_per_second": 124413.02108174558,
+    "characters_per_second": 163682.72612818776,
     "concept_count": 18327,
     "selection": "all nonempty concept definitions, sorted by IRI",
     "sha256": "689c5237ff7cce115704453c38cbe5e83129b16ec1efb389b530718d40b4377e",
     "span_count": 327463,
     "spans_per_text": 21.259689670843343,
-    "tagging_seconds": 24.237077226978727,
+    "tagging_seconds": 18.42227381793782,
     "text_count": 15403
   },
   "crosswalk": {
@@ -53,7 +53,7 @@
   },
   "determinism": {
     "identical": true,
-    "serialized_sha256": "f8ba6d53b444ddfb5a39f1800685e5c48216ae6456462bece57bebe335aeb677"
+    "serialized_sha256": "573bf82b7e95bf466d361ccfbb3b8ef0b5b9bd5e264a6f479e36570a211b64e6"
   },
   "folio_release": "c0f8ca58dad4227e89856d97a0344f45bec37289832837bd11c473dfdc7b44be",
   "folio_resolve_version": "0.5.0",
@@ -326,7 +326,7 @@
     "text": "The tenant acted in good faith."
   },
   "headword_self_match": {
-    "check_seconds": 11.720653048017994,
+    "check_seconds": 9.073749528033659,
     "headword_count": 160724,
     "matched_count": 160198,
     "unexpected_unmatched_count": 0,
@@ -365,11 +365,11 @@
   },
   "lexicon": {
     "artifact_bytes": 16321447,
-    "build_seconds": 9.807445563026704,
+    "build_seconds": 6.141039376030676,
     "content_sha256": "bd5dffc696d2157dd8a305caabf8da6941a7b9a2f564e080bdfff7f8aeecef02",
     "dataset_id": "mjbommar/opengloss-v2.4-senses",
     "headwords": null,
-    "load_seconds": 5.658981110085733,
+    "load_seconds": 4.593315354082733,
     "revision": "c64e480015b8c84f9d08469d4dfd64a7a8fb89bd",
     "row_count": 300787,
     "source_sha256": {
@@ -378,7 +378,7 @@
       "data/train-00002.parquet": "ddfd0bd844634b605e52189ae8972c2972266772fd9fd1a306e1115f21ab5dec"
     }
   },
-  "peak_rss_bytes": 765734912,
+  "peak_rss_bytes": 770338816,
   "property": {
     "present": true,
     "senses": [
@@ -407,7 +407,7 @@
       "release": "c0f8ca58dad4227e89856d97a0344f45bec37289832837bd11c473dfdc7b44be"
     },
     "folio_resolve_version": "0.5.0",
-    "normalization": "nfkc-casefold-apostrophe-gap-v3",
+    "normalization": "nfkc-casefold-apostrophe-gap-v4",
     "opengloss": {
       "dataset_id": "mjbommar/opengloss-v2.4-senses",
       "lexicon_digest": "bd5dffc696d2157dd8a305caabf8da6941a7b9a2f564e080bdfff7f8aeecef02",
@@ -416,11 +416,11 @@
     "tagger_version": "1.0.0"
   },
   "python_version": "3.13.11",
-  "recorded_at": "2026-11-08T19:52:29.914887+00:00",
+  "recorded_at": "2026-11-08T20:06:11.702703+00:00",
   "rss": {
-    "builder_peak_bytes": 731439104,
-    "parent_before_build_bytes": 34295808,
-    "runtime_peak_bytes": 473677824
+    "builder_peak_bytes": 735703040,
+    "parent_before_build_bytes": 34635776,
+    "runtime_peak_bytes": 474402816
   },
   "will": {
     "noun_sense_ids": [

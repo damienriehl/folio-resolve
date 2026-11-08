@@ -6,7 +6,7 @@ import hashlib
 import json
 from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, TypeVar
 
 from .. import __version__
 from ..entity_ruler import (
@@ -28,6 +28,7 @@ from .models import (
     OpenGlossAnchor,
     OpenGlossProvenance,
     Provenance,
+    RankedAnchor,
     TaggedSpan,
     TagResult,
 )
@@ -36,6 +37,24 @@ from .tokenize import normalize
 TAGGER_VERSION = "1.0.0"
 _EXACT_CONFIDENCE = 1.0
 _PLURAL_CONFIDENCE = 0.9
+Anchor = TypeVar("Anchor", bound=RankedAnchor)
+
+
+def _merge_anchors(anchors: Iterable[Anchor]) -> list[Anchor]:
+    """Keep the strongest evidence per ID, with stable ties and output order."""
+    by_id: dict[str, Anchor] = {}
+    for anchor in anchors:
+        previous = by_id.get(anchor.id)
+        if (
+            previous is None
+            or anchor.confidence > previous.confidence
+            or (
+                anchor.confidence == previous.confidence
+                and anchor.model_dump_json() < previous.model_dump_json()
+            )
+        ):
+            by_id[anchor.id] = anchor
+    return [by_id[key] for key in sorted(by_id)]
 
 
 @dataclass(frozen=True)
@@ -174,19 +193,22 @@ class SpanTagger:
             return spans[key]
 
         for hit in self._folio.lookup(text, regions=allowed, content_word=content_word):
-            span_at(hit.start, hit.end).folio = sorted(
+            span = span_at(hit.start, hit.end)
+            span.folio = _merge_anchors(
                 [
-                    FolioAnchor(
-                        id=label.concept.iri,
-                        label=label.concept.preferred_label or label.concept.label,
-                        matched_label=label.text,
-                        label_type=label.label_type,
-                        confidence=label.confidence,
-                        match_method=hit.match_method,
-                    )
-                    for label in hit.payloads
+                    *span.folio,
+                    *(
+                        FolioAnchor(
+                            id=label.concept.iri,
+                            label=label.concept.preferred_label or label.concept.label,
+                            matched_label=label.text,
+                            label_type=label.label_type,
+                            confidence=label.confidence,
+                            match_method=hit.match_method,
+                        )
+                        for label in hit.payloads
+                    ),
                 ],
-                key=lambda anchor: anchor.id,
             )
         for og_hit in self._opengloss.lookup(
             text,
@@ -194,27 +216,30 @@ class SpanTagger:
             noun=lambda sense: sense.pos.casefold() == "noun",
             content_word=content_word,
         ):
-            span_at(og_hit.start, og_hit.end).opengloss = sorted(
+            span = span_at(og_hit.start, og_hit.end)
+            span.opengloss = _merge_anchors(
                 [
-                    OpenGlossAnchor(
-                        id=sense.sense_id,
-                        headword=sense.headword,
-                        pos=sense.pos,
-                        sense_index=sense.sense_index,
-                        domain=sense.domain,
-                        tier=sense.tier,
-                        source=sense.source,
-                        gloss=sense.gloss,
-                        match_method=og_hit.match_method,
-                        confidence=(
-                            _EXACT_CONFIDENCE
-                            if og_hit.match_method == "exact"
-                            else _PLURAL_CONFIDENCE
-                        ),
-                    )
-                    for sense in og_hit.payloads
+                    *span.opengloss,
+                    *(
+                        OpenGlossAnchor(
+                            id=sense.sense_id,
+                            headword=sense.headword,
+                            pos=sense.pos,
+                            sense_index=sense.sense_index,
+                            domain=sense.domain,
+                            tier=sense.tier,
+                            source=sense.source,
+                            gloss=sense.gloss,
+                            match_method=og_hit.match_method,
+                            confidence=(
+                                _EXACT_CONFIDENCE
+                                if og_hit.match_method == "exact"
+                                else _PLURAL_CONFIDENCE
+                            ),
+                        )
+                        for sense in og_hit.payloads
+                    ),
                 ],
-                key=lambda anchor: anchor.id,
             )
         ordered = sorted(spans.values(), key=lambda span: (span.start, -span.end))
         # Earlier spans can contain this span only while their intervals remain open.

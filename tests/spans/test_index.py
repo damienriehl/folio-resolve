@@ -96,3 +96,13 @@ def test_punctuation_walk_is_bounded_by_longest_indexed_key():
     hits = idx.lookup("tenant/rent/tax/tenant/rent/tax")
     assert [(hit.start, hit.end) for hit in hits] == [(0, 15), (16, 31)]
     assert index("tenant/rent/tax").lookup("tenant/rent.tax") == []
+
+
+@pytest.mark.parametrize(("surface", "labels"), [("½", ("1", "2")), ("㏂", ("a", "m"))])
+def test_partial_source_expansions_are_not_matches(surface, labels):
+    assert index(*labels).lookup(surface, content_word=lambda word: True) == []
+
+
+def test_complete_fraction_expansion_survives_competing_partial_keys():
+    idx = index("½", "1", "2", "½ interest", "1 interest", "2 interest")
+    assert [hit.payloads for hit in idx.lookup("½ interest")] == [("½ interest",), ("½",)]

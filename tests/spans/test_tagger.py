@@ -10,6 +10,8 @@ import pytest
 
 from folio_resolve.ontology import Concept, FolioPythonProvider, InMemoryOntology
 from folio_resolve.spans import SpanTagger, TagResult, load_crosswalk, load_lexicon
+from folio_resolve.spans.index import IndexMatch
+from folio_resolve.spans.tokenize import normalize
 
 FIXTURES = Path(__file__).parent / "fixtures"
 BREACH = "https://folio.openlegalstandard.org/BreachOfContract"
@@ -132,7 +134,7 @@ def test_deterministic_serialization_provenance_and_caller_date(ontology, lexico
         in tagger.tag("breach", tagged_on="caller supplies this verbatim").to_json()
     )
     provenance = result.provenance
-    assert provenance.normalization == "nfkc-casefold-apostrophe-gap-v3"
+    assert provenance.normalization == "nfkc-casefold-apostrophe-gap-v4"
     assert provenance.opengloss.revision == "c64e480015b8c84f9d08469d4dfd64a7a8fb89bd"
     assert provenance.opengloss.lexicon_digest == lexicon.manifest.content_sha256
     assert provenance.folio.release == "folio-commit"
@@ -306,6 +308,56 @@ def test_nfkc_expanded_punctuation_matches_with_original_offsets(label, surface)
 def test_nfkc_fraction_label_does_not_match_space_separated_numbers():
     tagger = SpanTagger(InMemoryOntology([Concept(iri="x", label="½ interest")]), folio_release="x")
     assert tagger.tag("1 2 interest").spans == []
+
+
+def test_competing_fraction_labels_anchor_only_the_complete_expansion():
+    tagger = SpanTagger(
+        InMemoryOntology(
+            [Concept(iri="fraction", label="½ interest"), Concept(iri="suffix", label="2 interest")]
+        ),
+        folio_release="x",
+    )
+    result = tagger.tag("½ interest")
+    assert len(result.spans) == 1
+    assert result.spans[0].text == "½ interest"
+    assert [anchor.id for anchor in result.spans[0].folio] == ["fraction"]
+
+
+@pytest.mark.parametrize("layer", ["folio", "opengloss"])
+def test_same_span_hits_merge_anchors_and_keep_stronger_confidence(lexicon, monkeypatch, layer):
+    tagger = SpanTagger(
+        InMemoryOntology(
+            [
+                Concept(iri="z", label="Tenant", alternative_labels=("Renter",)),
+                Concept(iri="a", label="Occupier"),
+                Concept(iri="b", label="Lessee"),
+            ]
+        ),
+        lexicon,
+        folio_release="x",
+    )
+    if layer == "folio":
+        idx = tagger._folio
+        strong = tuple(idx.entries[normalize("Tenant")] + idx.entries[normalize("Lessee")])
+        other = tuple(idx.entries[normalize("Occupier")] + idx.entries[normalize("Renter")])
+        expected = ["a", "b", "z"]
+    else:
+        idx = tagger._opengloss
+        strong = tuple(idx.entries[normalize("tenant")] + idx.entries[normalize("faith")])
+        other = tuple(idx.entries[normalize("property")] + idx.entries[normalize("tenant")])
+        expected = sorted({sense.sense_id for sense in (*strong, *other)})
+    hits = [IndexMatch(0, 6, strong, "exact"), IndexMatch(0, 6, other, "plural")]
+    monkeypatch.setattr(idx, "lookup", lambda *args, **kwargs: hits)
+    forward = tagger.tag("Tenant")
+    anchors = getattr(forward.spans[0], layer)
+    assert [anchor.id for anchor in anchors] == expected
+    tenant = next(
+        anchor for anchor in anchors if anchor.id == ("z" if layer == "folio" else "tenant:noun:0")
+    )
+    assert tenant.confidence == (0.72 if layer == "folio" else 1.0)
+    assert tenant.match_method == "exact"
+    hits.reverse()
+    assert tagger.tag("Tenant").to_json() == forward.to_json()
 
 
 def test_folio_only_phrase_with_content_word_survives(ontology):

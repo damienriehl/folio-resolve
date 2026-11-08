@@ -44,6 +44,20 @@ def test_nfkc_expansions_preserve_normalized_gaps():
     assert normalize("㏂ hearing") == normalize("a.m. hearing") == ("a", ".", "m", ".", "hearing")
 
 
+def test_tokens_record_source_expansion_boundaries():
+    assert [(t.key, t.expansion_start, t.expansion_end) for t in tokenize("½ interest")] == [
+        ("1", True, False),
+        ("2", False, True),
+        ("interest", True, True),
+    ]
+    assert [(t.key, t.expansion_start, t.expansion_end) for t in tokenize("㏂ hearing")] == [
+        ("a", True, False),
+        ("m", False, False),
+        ("hearing", True, True),
+    ]
+    assert all(t.expansion_start and t.expansion_end for t in tokenize("Straße cafe\u0301"))
+
+
 def test_nfkc_composes_across_characters_with_original_offsets():
     # Hangul Jamo and Bengali vowel signs compose even though their combining class is zero.
     text = "\u1100\u1161 \u0995\u09c7\u09be"
