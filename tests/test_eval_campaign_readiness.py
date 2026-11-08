@@ -18,7 +18,6 @@ import folio_eval.campaign_readiness as readiness
 import pytest
 from folio_eval.campaign_readiness import SnapshotError, parse_snapshot, summarize_snapshot
 
-
 # Deliberately independent of the production inventory: a removed check must fail tests.
 U10_BINDINGS = (
     "candidate_source_runtime", "corpus_config", "leak_manifest",
@@ -152,7 +151,7 @@ def test_campaign_controller_assignment_requires_controller_role(role):
 def test_invalid_receipt_fields_fail_without_values(patch):
     snapshot = favorable()
     snapshot["checks"][6].update(patch)
-    with pytest.raises(SnapshotError, match="^invalid_snapshot$"):
+    with pytest.raises(SnapshotError, match=r"^invalid_snapshot$"):
         summarize_snapshot(snapshot)
 
 
@@ -168,7 +167,7 @@ def test_invalid_receipt_fields_fail_without_values(patch):
     {"schema_version": 1, "campaign": "u10", "checks": [{"check": "controller_assignment", "presence": "present"}]},
 ])
 def test_strict_snapshot_schema(snapshot):
-    with pytest.raises(SnapshotError, match="^invalid_snapshot$"):
+    with pytest.raises(SnapshotError, match=r"^invalid_snapshot$"):
         summarize_snapshot(snapshot)
 
 
@@ -180,7 +179,7 @@ def test_strict_snapshot_schema(snapshot):
     '{private-sentinel', '[' * 2000,
 ])
 def test_json_errors_are_fixed_and_duplicate_keys_are_rejected(raw):
-    with pytest.raises(SnapshotError, match="^invalid_snapshot$"):
+    with pytest.raises(SnapshotError, match=r"^invalid_snapshot$"):
         parse_snapshot(raw)
 
 
@@ -414,7 +413,15 @@ def test_launcher_broken_pipe_preserves_exit_one(tmp_path, stream):
         assert result.stdout == b""
 
 
-def test_launcher_leaves_no_bytecode_or_other_artifacts(tmp_path):
+@pytest.mark.parametrize(
+    ("args", "expected"),
+    [
+        (["--snapshot", "snapshot.json"], b'"campaign": "u10"'),
+        (["--snapshot", "snapshot.json", "--format", "markdown"], b"campaign: u10"),
+        (["--help"], b"--snapshot"),
+    ],
+)
+def test_launcher_leaves_no_bytecode_or_other_artifacts(tmp_path, args, expected):
     source = Path(__file__).resolve().parents[1] / "eval"
     package = tmp_path / "folio_eval"
     package.mkdir()
@@ -426,9 +433,12 @@ def test_launcher_leaves_no_bytecode_or_other_artifacts(tmp_path):
     snapshot.write_text('{"schema_version":1,"campaign":"u10"}', encoding="utf-8")
     before = {p.relative_to(tmp_path): p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
     result = subprocess.run(
-        [sys.executable, "-I", str(tmp_path / "check_campaign_readiness.py"), "--snapshot", str(snapshot)],
+        [sys.executable, "-I", str(tmp_path / "check_campaign_readiness.py"), *args],
+        cwd=tmp_path,
         check=False, capture_output=True,
     )
     assert result.returncode == 0
+    assert result.stderr == b""
+    assert expected in result.stdout
     after = {p.relative_to(tmp_path): p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
     assert after == before
