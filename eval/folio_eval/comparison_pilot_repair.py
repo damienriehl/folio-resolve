@@ -44,6 +44,7 @@ def _repair_identity(root: Path = REPAIR_REPOSITORY_ROOT) -> dict[str, str]:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--candidate-root", type=Path, required=True)
+    parser.add_argument("--verify-replay-dir", type=Path)
     return parser
 
 
@@ -78,6 +79,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     if output_path not in {candidate_root / path for path in FINALIZATION_REPORT_PATHS}:
         raise PilotCheckpointError("finalization repair requires the canonical report path")
     identity = _repair_identity(repair_root)
+    if candidate_args.verify_replay_dir is not None:
+        try:
+            return pilot_main(
+                pilot_argv, candidate_root=candidate_root, repair_identity=identity,
+                verify_replay_dir=candidate_args.verify_replay_dir,
+                repair_identity_check=lambda: _repair_identity(repair_root),
+                repair_root=repair_root,
+            )
+        except Exception:
+            raise PilotCheckpointError("replay verification refused or unequal") from None
     return pilot_main(
         pilot_argv,
         candidate_root=candidate_root,
